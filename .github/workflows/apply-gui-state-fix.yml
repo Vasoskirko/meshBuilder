@@ -1,0 +1,94 @@
+name: Apply guarded GUI state fix
+on:
+  push:
+    branches: [test/gui-state-contracts]
+    paths: [.github/workflows/apply-gui-state-fix.yml]
+permissions:
+  contents: write
+concurrency:
+  group: apply-gui-state-fix
+  cancel-in-progress: false
+jobs:
+  apply:
+    if: github.repository == 'Vasoskirko/meshBuilder' && github.ref == 'refs/heads/test/gui-state-contracts'
+    runs-on: ubuntu-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+      QT_API: pyside6
+      MPLBACKEND: QtAgg
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: sudo apt-get update && sudo apt-get install -y libegl1 libopengl0 libxkbcommon0
+      - run: python -m pip install -r requirements.txt
+      - name: Apply exact guarded edits
+        run: |
+          python - <<'PY'
+          import ast
+          import hashlib
+          from pathlib import Path
+          expected = {'bundle_subchannel_builder.py': 'c9870e8176be409fc0e034cb6102ea0b193d4130', 'starccm_export_dialog.py': 'd6fdf712e5482da18471484820ed92ef7905927c'}
+          sources = {}
+          for name, sha in expected.items():
+              data = Path(name).read_bytes()
+              actual = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+              if actual != sha:
+                  raise SystemExit('Source changed; refusing to patch ' + name)
+              sources[name] = data.decode('utf-8')
+          name = 'bundle_subchannel_builder.py'
+          marker = '    def on_check_quality(self):\n'
+          method = '\n'.join([
+              '    def save_quality_report(self, report):',
+              '        name, _ = QFileDialog.getSaveFileName(',
+              '            self, "Сохранить отчёт качества", "bundle_quality_report.json", "JSON (*.json)"',
+              '        )',
+              '        if not name:',
+              '            return None',
+              '        try:',
+              '            saved = mq.save_report(report, name)',
+              '        except Exception as exc:',
+              '            QMessageBox.critical(self, "Ошибка сохранения отчёта", "Не удалось сохранить отчёт качества: " + str(exc))',
+              '            return None',
+              '        QMessageBox.information(self, "Отчёт сохранён", f"Отчёт качества сохранён в: {saved}")',
+              '        return saved',
+          ]) + '\n\n'
+          if sources[name].count(marker) != 1 or '    def save_quality_report(' in sources[name]:
+              raise SystemExit('Unexpected callback layout')
+          sources[name] = sources[name].replace(marker, method + marker, 1)
+          name = 'starccm_export_dialog.py'
+          start = sources[name].index('        # Точная актуальная высота модели L_z')
+          end = sources[name].index('        # Количество подканалов:', start)
+          block = '\n'.join([
+              '        # Высота готовой сетки важнее ещё не применённых значений UI.',
+              '        self.lz_m = 0.050',
+              '        p = getattr(mesh_result, "params", None)',
+              '        mesh_height = getattr(p, "z_len", None)',
+              '        if mesh_height is None:',
+              '            mesh_height = getattr(p, "L", None)',
+              '        if mesh_height is not None:',
+              '            self.lz_m = float(mesh_height)',
+              '        elif parent and hasattr(parent, "mesh_subpanel") and "z_len" in parent.mesh_subpanel.fields:',
+              '            self.lz_m = float(parent.mesh_subpanel.fields["z_len"].value())',
+          ]) + '\n\n'
+          sources[name] = sources[name][:start] + block + sources[name][end:]
+          for name, text in sources.items():
+              ast.parse(text, filename=name)
+          for name, text in sources.items():
+              Path(name).write_text(text, encoding='utf-8')
+          PY
+      - run: git diff --check
+      - name: Validate all tests before commit
+        run: python -m unittest discover -s tests -v
+      - name: Commit only approved sources and remove this workflow
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- bundle_subchannel_builder.py starccm_export_dialog.py
+          git rm -- .github/workflows/apply-gui-state-fix.yml
+          git commit -m 'Fix built-mesh height precedence and bundle quality report saving'
+          git push origin HEAD:refs/heads/test/gui-state-contracts
