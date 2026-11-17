@@ -1,0 +1,218 @@
+name: Extract bundle geometry handlers
+on:
+  push:
+    branches: [refactor/bundle-builder-ui]
+    paths: [.github/workflows/extract-bundle-geometry.yml]
+permissions:
+  contents: write
+concurrency:
+  group: extract-bundle-builder-geometry
+  cancel-in-progress: false
+jobs:
+  extract:
+    if: github.repository == 'Vasoskirko/meshBuilder' && github.ref == 'refs/heads/refactor/bundle-builder-ui'
+    runs-on: ubuntu-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+      QT_API: pyside6
+      MPLBACKEND: QtAgg
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Extract unchanged methods and update structural tests
+        run: |
+          python - <<'PY'
+          import ast
+          import builtins
+          import copy
+          from pathlib import Path
+          import subprocess
+          import symtable
+          baseline = '4ec461fdb9d1e4f71f908604210bad1f71b86bb4'
+          source = Path('bundle_subchannel_builder.py')
+          test = Path('tests/test_bundle_ui_extraction.py')
+          for path in (source, test, Path('bundle_builder_ui.py')):
+              assert path.read_bytes() == subprocess.check_output(['git', 'show', baseline + ':' + str(path)]), 'Baseline changed: ' + str(path)
+          groups = [
+              ('bundle_builder_geometry', 'BundleBuilderGeometryMixin', ('on_canvas_resize', 'on_fit_view', 'on_mouse_scroll', 'on_mouse_press', 'on_mouse_motion', 'on_mouse_release', 'handle_unified_click', 'on_deselect_rod', 'on_rebuild_geometry', 'on_select_all_subchannels', 'on_clear_selection', 'on_delete_rod_manually', 'on_restore_deleted_rods', 'on_rod_type_changed', 'apply_custom_rod_diameter', 'update_inspector')),
+              ('bundle_builder_geometry_view', 'BundleBuilderGeometryViewMixin', ('rebuild_view', 'open_hydraulics_table')),
+          ]
+          text = source.read_text(encoding='utf-8')
+          tree = ast.parse(text)
+          classes = [n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'BundleBuilderWindow']
+          assert len(classes) == 1
+          cls = classes[0]
+          symbols = symtable.symtable(text, str(source), 'exec')
+          tables = [t for t in symbols.get_children() if t.get_name() == cls.name]
+          assert len(tables) == 1
+          lines = text.splitlines(keepends=True)
+          spans, pending, removed = [], {}, set()
+          def collect_globals(table, found):
+              found.update(s.get_name() for s in table.get_symbols() if s.is_global() and s.is_referenced())
+              for child in table.get_children():
+                  collect_globals(child, found)
+          for module, classname, names in groups:
+              path = Path(module + '.py')
+              assert not path.exists(), 'Target already exists: ' + str(path)
+              names = set(names)
+              moved = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name in names]
+              assert len(moved) == len(names) and {n.name for n in moved} == names
+              assert not removed.intersection(names)
+              removed.update(names)
+              globals_used = set()
+              for table in tables[0].get_children():
+                  if table.get_name() in names:
+                      collect_globals(table, globals_used)
+              imports, provided = [], set()
+              for node in tree.body:
+                  if isinstance(node, (ast.Import, ast.ImportFrom)):
+                      assert all(a.name != '*' for a in node.names)
+                      aliases = []
+                      for alias in node.names:
+                          bound = alias.asname or (alias.name.split('.')[0] if isinstance(node, ast.Import) else alias.name)
+                          if bound in globals_used:
+                              aliases.append(copy.deepcopy(alias))
+                              provided.add(bound)
+                      if aliases:
+                          item = copy.deepcopy(node)
+                          item.names = aliases
+                          imports.append(ast.unparse(item))
+              assert not (globals_used - provided - set(dir(builtins))), 'Unresolved globals: ' + repr(sorted(globals_used - provided - set(dir(builtins))))
+              assert all('bundle_subchannel_builder' not in line for line in imports)
+              chunks = []
+              for node in moved:
+                  assert not any(isinstance(n, ast.Name) and n.id in ('super', '__class__') for n in ast.walk(node)), 'Class-sensitive method: ' + node.name
+                  start = min([node.lineno] + [d.lineno for d in node.decorator_list]) - 1
+                  spans.append((start, node.end_lineno))
+                  chunks.append(''.join(lines[start:node.end_lineno]).rstrip('\r\n'))
+              content = '# -*- coding: utf-8 -*-\n' + '"""Mechanically extracted bundle geometry methods."""\n' + '\n'.join(imports) + '\n\n\nclass ' + classname + ':\n' + '\n\n'.join(chunks) + '\n'
+              assert len(content.encode('utf-8')) <= 28000, 'Extracted module exceeds readable size bound'
+              extracted = ast.parse(content)
+              new_class = next(n for n in extracted.body if isinstance(n, ast.ClassDef))
+              new_methods = {n.name: n for n in new_class.body if isinstance(n, ast.FunctionDef)}
+              for node in moved:
+                  assert ast.dump(node, include_attributes=False) == ast.dump(new_methods[node.name], include_attributes=False)
+              compile(content, str(path), 'exec')
+              pending[path] = content
+          for start, end in sorted(spans, reverse=True):
+              del lines[start:end]
+          remainder = ''.join(lines)
+          marker = 'class BundleBuilderWindow(BundleBuilderUiMixin, QMainWindow):'
+          added_imports = '\n'.join('from ' + m + ' import ' + c for m, c, _ in groups)
+          bases = ', '.join(['BundleBuilderUiMixin'] + [c for _, c, _ in groups] + ['QMainWindow'])
+          assert remainder.count(marker) == 1
+          remainder = remainder.replace(marker, added_imports + '\n\n\nclass BundleBuilderWindow(' + bases + '):', 1)
+          assert len(remainder.encode('utf-8')) <= 28000, 'Remaining builder exceeds readable size bound'
+          expected = copy.deepcopy(tree)
+          expected_class = next(n for n in expected.body if isinstance(n, ast.ClassDef) and n.name == cls.name)
+          expected_class.body = [n for n in expected_class.body if not (isinstance(n, ast.FunctionDef) and n.name in removed)]
+          expected_class.bases[1:1] = [ast.Name(id=c, ctx=ast.Load()) for _, c, _ in groups]
+          idx = expected.body.index(expected_class)
+          expected.body[idx:idx] = ast.parse(added_imports).body
+          assert ast.dump(expected, include_attributes=False) == ast.dump(ast.parse(remainder), include_attributes=False), 'Unrelated source AST changed'
+          compile(remainder, str(source), 'exec')
+          all_groups = [('bundle_builder_ui', 'BundleBuilderUiMixin', ('init_ui', 'add_double_spin'))] + groups
+          test_code = r'''# Structural and offscreen checks for the split bundle builder.
+          import ast
+          import copy
+          import importlib
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+          import unittest
+          os.environ['QT_QPA_PLATFORM'] = 'offscreen'
+          os.environ['QT_API'] = 'pyside6'
+          ROOT = Path(__file__).resolve().parents[1]
+          sys.path.insert(0, str(ROOT))
+          BASE = '5f957d88cf1e416ce488ecf849041d29a3ff1f14'
+          MODULES = __GROUPS__
+          def find_class(tree, name):
+              matches = [n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == name]
+              if len(matches) != 1:
+                  raise AssertionError('Expected one class: ' + name)
+              return matches[0]
+          class BundleUiExtractionTests(unittest.TestCase):
+              @classmethod
+              def setUpClass(cls):
+                  cls.original = ast.parse(subprocess.check_output(['git', 'show', BASE + ':bundle_subchannel_builder.py'], cwd=ROOT).decode('utf-8'))
+              def test_moved_method_bodies_are_unchanged(self):
+                  original = find_class(self.original, 'BundleBuilderWindow')
+                  before = {n.name: n for n in original.body if isinstance(n, ast.FunctionDef)}
+                  for module, classname, names in MODULES:
+                      extracted = find_class(ast.parse((ROOT / (module + '.py')).read_text(encoding='utf-8')), classname)
+                      after = {n.name: n for n in extracted.body if isinstance(n, ast.FunctionDef)}
+                      self.assertEqual(set(after), set(names))
+                      for name in names:
+                          with self.subTest(module=module, method=name):
+                              self.assertEqual(ast.dump(before[name], include_attributes=False), ast.dump(after[name], include_attributes=False))
+              def test_remaining_source_ast_is_unchanged_except_wiring(self):
+                  expected = copy.deepcopy(self.original)
+                  cls = find_class(expected, 'BundleBuilderWindow')
+                  moved = {name for _, _, names in MODULES for name in names}
+                  cls.body = [n for n in cls.body if not (isinstance(n, ast.FunctionDef) and n.name in moved)]
+                  cls.bases[0:0] = [ast.Name(id=name, ctx=ast.Load()) for _, name, _ in MODULES]
+                  index = expected.body.index(cls)
+                  expected.body[index:index] = [ast.parse('from ' + module + ' import ' + name).body[0] for module, name, _ in MODULES]
+                  actual = ast.parse((ROOT / 'bundle_subchannel_builder.py').read_text(encoding='utf-8'))
+                  self.assertEqual(ast.dump(expected, include_attributes=False), ast.dump(actual, include_attributes=False))
+              def test_legacy_import_exposes_inherited_methods(self):
+                  from bundle_subchannel_builder import BundleBuilderWindow
+                  for module, classname, names in MODULES:
+                      mixin = getattr(importlib.import_module(module), classname)
+                      self.assertTrue(issubclass(BundleBuilderWindow, mixin))
+                      for name in names:
+                          self.assertIs(getattr(BundleBuilderWindow, name), getattr(mixin, name))
+              def test_split_files_remain_readable(self):
+                  for filename in ['bundle_subchannel_builder.py'] + [m + '.py' for m, _, _ in MODULES]:
+                      with self.subTest(filename=filename):
+                          self.assertLessEqual((ROOT / filename).stat().st_size, 28000)
+              def test_window_constructs_and_geometry_actions_work_offscreen(self):
+                  from PySide6.QtWidgets import QApplication
+                  from bundle_subchannel_builder import BundleBuilderWindow
+                  app = QApplication.instance() or QApplication([])
+                  window = BundleBuilderWindow()
+                  try:
+                      self.assertIsNotNone(window.centralWidget())
+                      self.assertEqual(window.tabs.count(), 3)
+                      self.assertIs(window.mesh_subpanel.parent_window, window)
+                      self.assertIn('z_len', window.mesh_subpanel.fields)
+                      self.assertFalse(window.mesh_subpanel.btn_export.isEnabled())
+                      window.on_select_all_subchannels()
+                      self.assertGreater(len(window.model.selected_subchannels), 0)
+                      window.on_clear_selection()
+                      self.assertEqual(len(window.model.selected_subchannels), 0)
+                      window.on_fit_view()
+                      app.processEvents()
+                  finally:
+                      window.deleteLater()
+          if __name__ == '__main__':
+              unittest.main()
+          '''
+          import textwrap
+          test_code = test_code.splitlines()[0] + '\n' + textwrap.dedent('\n'.join(test_code.splitlines()[1:]))
+          test_code = test_code.replace('__GROUPS__', repr(all_groups)) + '\n'
+          compile(test_code, str(test), 'exec')
+          pending[source] = remainder
+          pending[test] = test_code
+          for path, content in pending.items():
+              path.write_text(content, encoding='utf-8')
+          PY
+      - run: sudo apt-get update && sudo apt-get install -y libegl1 libopengl0 libxkbcommon0
+      - run: python -m pip install -r requirements.txt
+      - name: Run regression, structural and offscreen tests
+        run: python -m unittest discover -s tests -v
+      - name: Commit all verified changes together and remove workflow
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- bundle_subchannel_builder.py bundle_builder_geometry.py bundle_builder_geometry_view.py tests/test_bundle_ui_extraction.py
+          git rm -- .github/workflows/extract-bundle-geometry.yml
+          git diff --cached --check
+          git commit -m 'Extract unchanged bundle geometry handlers and rendering'
+          git push origin HEAD:refs/heads/refactor/bundle-builder-ui
