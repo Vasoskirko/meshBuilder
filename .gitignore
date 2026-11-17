@@ -1,0 +1,5 @@
+*.xyz
+*.sim
+*.vtk
+__pycache__/
+*.pyc
