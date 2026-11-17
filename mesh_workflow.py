@@ -61,6 +61,8 @@ class WallLayerParams:
         return MeshParams(law="wall_core", **asdict(geometry), **asdict(self))
 
     def active_values(self):
+        if self.mode == "layer_first_growth":
+            return self.mode, self.wall_layers, self.h1, self.layer_growth
         value = self.h1 if self.mode == "layer_thickness" else self.layer_growth
         return self.mode, self.wall_layers, self.layer_thickness, value
 
