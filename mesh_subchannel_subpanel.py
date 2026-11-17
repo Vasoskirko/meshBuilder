@@ -31,6 +31,7 @@ from yplus_calculator import calculate_yplus_and_step, FLUID_MODES
 from fluid_properties import water_iapws97, gas_properties, GAS_PRESETS
 from starccm_export_dialog import StarCcmExportDialog
 from yplus_dialog import YPlusDialog
+from number_field import NumberField
 
 FILTERED_UI_LAWS = {
     "geometric": "Геометрическое",
@@ -39,61 +40,6 @@ FILTERED_UI_LAWS = {
     "uniform": "Равномерное",
     "wall_core": "Пристеночный слой"
 }
-
-class NumberField(QLineEdit if HAS_QT else object):
-    if HAS_QT:
-        edited = Signal()
-    def __init__(self, value, factor=1., minimum=0., maximum=1e12):
-        self.model = NumberValue(value, factor, minimum, maximum)
-        if not HAS_QT:
-            self._mock_text = self.model.display()
-            self.setText = lambda t: setattr(self, '_mock_text', t)
-            self.text = lambda: getattr(self, '_mock_text', '')
-            self.setStyleSheet = lambda s: None
-            return
-        super().__init__()
-        self.setText(self.model.display())
-        self.textEdited.connect(self._edited)
-        self.editingFinished.connect(self._finish)
-        self.setToolTip("Разделитель целой и дробной части — точка (например 1.2; 5.7e-6).")
-
-    def _edited(self, *_):
-        if HAS_QT:
-            self.setStyleSheet("")
-            self.edited.emit()
-
-    def _finish(self):
-        try:
-            self.value()
-            self.setText(self.model.display())
-            self.setStyleSheet("")
-        except ValueError:
-            self.setStyleSheet("border:1px solid #c33;")
-
-    def value(self):
-        text = self.text().strip()
-        clean_text = text.rstrip(',.').replace(',', '.')
-        if not clean_text:
-            return self.model.raw
-        try:
-            raw_val = float(clean_text) * self.model.factor
-            if math.isfinite(raw_val):
-                self.model.raw = raw_val
-                return raw_val
-        except ValueError:
-            pass
-        return self.model.raw
-
-    def setValue(self, value):
-        self.setText(self.model.set_value(value))
-        self.setStyleSheet("")
-
-    def setFactor(self, factor):
-        self.value()
-        self.setText(self.model.change_factor(factor))
-
-    def setLimits(self, minimum, maximum):
-        self.model.minimum, self.model.maximum = minimum, maximum
 
 
 class MeshSubpanel(QWidget if HAS_QT else object):
@@ -501,8 +447,6 @@ class MeshSubpanel(QWidget if HAS_QT else object):
             cmode = self.combo_core_mode.currentData()
             p_curr = self.read_params()
 
-            # h_prism_last всегда берётся из ТЕКУЩИХ настроек Блока 3 —
-            # тем же расчётом, что и само построение слоя.
             if p_curr.law == "wall_core":
                 w_wall, _ = mc.layer_distribution(p_curr)
                 h_last = float(w_wall[-1])
@@ -515,9 +459,8 @@ class MeshSubpanel(QWidget if HAS_QT else object):
             vol_change = max(q_trans, 1.0 / max(q_trans, 1e-9))
             unit_lbl = self.cell_unit
             scale = 1.0 / UNITS[unit_lbl]
+            nd = {"мкм": 2, "мм": 4, "м": 6}.get(unit_lbl, 3)
 
-            # Оценка по реальной геометрии: если слой уже построен,
-            # пересчитываем N и фактический размер ячеек в центре.
             est_lines = []
             warn = None
             pw = self.parent_window
@@ -532,8 +475,6 @@ class MeshSubpanel(QWidget if HAS_QT else object):
                     for g in layer_res.geom_data:
                         rems.append(g["lengths"] - g["layer_thickness"])
                     rem = np.concatenate(rems)
-                    # призма могла быть перестроена: корректируем длины под
-                    # текущую толщину слоя из Блока 3
                     delta_built = float(np.sum(layer_res.layer_widths[0])) if getattr(layer_res, "layer_widths", None) is not None else delta_new
                     rem = rem + (delta_built - delta_new)
                     h0v = np.full(rem.shape, h_last, dtype=float)
@@ -550,8 +491,6 @@ class MeshSubpanel(QWidget if HAS_QT else object):
                     est_lines.append(f"последняя ячейка: зазор ≈ {plat_min*scale:.{nd}f} … центр ≈ {plat_max*scale:.{nd}f} {unit_lbl}")
                     if q_core <= 1.0 + 1e-12:
                         est_lines.append("режим: равномерное ядро (все ячейки ≈ h₁)")
-                    # аспект в центре: радиальный шаг у противоположной границы
-                    # сравниваем с азимутальным шагом на линии O–M
                     opp_steps = [float(g["ds_opp"]) for g in layer_res.geom_data if "ds_opp" in g]
                     if opp_steps:
                         ds_min = min(opp_steps)
@@ -565,7 +504,6 @@ class MeshSubpanel(QWidget if HAS_QT else object):
                 except Exception:
                     pass
 
-            nd = {"мкм": 2, "мм": 4, "м": 6}.get(unit_lbl, 3)
             hl = h_last * scale
             hc = h_core1 * scale
             ht = h_target * scale
