@@ -276,16 +276,16 @@ class MeshSubpanel(QWidget if HAS_QT else object):
 
         self.core_transition_row = self.row(
             b_core, "Коэф. перехода (ядро / призма):",
-            self.number("core_transition", 1.1, minimum=0.1, maximum=10.0, onchange=self.on_field_changed)
+            self.number("core_transition", 1.1, minimum=0.1, maximum=10.0, onchange=self.on_core_field_changed)
         )
         self.core_growth_row = self.row(
             b_core, "Коэф. роста в ядре (q):",
-            self.number("core_growth", 1.1, minimum=1.0, maximum=100.0, onchange=self.on_field_changed)
+            self.number("core_growth", 1.1, minimum=1.0, maximum=100.0, onchange=self.on_core_field_changed)
         )
 
         core_size_w = QWidget(self)
         core_size_l = QHBoxLayout(core_size_w); core_size_l.setContentsMargins(0, 0, 0, 0)
-        self.w_core_max_size = self.number("core_max_size", 120e-6, 1e-6, 1e-18, 1000.0, onchange=self.on_field_changed)
+        self.w_core_max_size = self.number("core_max_size", 120e-6, 1e-6, 1e-18, 1000.0, onchange=self.on_core_field_changed)
         self.lbl_core_size_unit = QLabel(self.cell_unit, self)
         self.lbl_core_size_unit.setStyleSheet("color: #37474f; font-weight: bold;")
         core_size_l.addWidget(self.w_core_max_size, 1)
@@ -294,9 +294,9 @@ class MeshSubpanel(QWidget if HAS_QT else object):
 
         self.core_layers_row = self.row(
             b_core, "Число слоёв ядра (слои):",
-            self.integer("core_layers", 20, 1, 500, onchange=self.on_field_changed)
+            self.integer("core_layers", 20, 1, 500, onchange=self.on_core_field_changed)
         )
-        self.integer("core_max_cells", 5000, 1, 100000, onchange=self.on_field_changed).setVisible(False)
+        self.integer("core_max_cells", 5000, 1, 100000, onchange=self.on_core_field_changed).setVisible(False)
 
         self.lbl_core_preview = QLabel(self)
         self.lbl_core_preview.setWordWrap(True)
@@ -434,7 +434,14 @@ class MeshSubpanel(QWidget if HAS_QT else object):
     def on_core_mode_changed(self):
         if not self.updating:
             self.refresh_controls()
-            self.on_field_changed()
+            self.on_core_field_changed()
+
+    def on_core_field_changed(self):
+        if self.updating:
+            return
+        # Core controls are global; editing them must not create a wall override.
+        self.parent_window.validate_mesh_inputs()
+        self.update_core_preview()
 
     def update_core_preview(self):
         if not hasattr(self, "lbl_core_preview"): return
@@ -542,6 +549,7 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         self.update_live_advisor_hint()
         self.update_core_preview()
         self.save_current_ui_to_active_scope()
+        self.parent_window.validate_mesh_inputs()
         self.update_tree_status()
 
     def update_live_advisor_hint(self):
@@ -695,6 +703,9 @@ class MeshSubpanel(QWidget if HAS_QT else object):
             self.fields["z_len"].setValue(p.z_len)
             self.fields["ni"].setValue(p.ni)
             self.fields["nz"].setValue(p.nz)
+            self.fields["layer_cells"].setValue(p.wall_layers)
+            self.fields["layer_thickness"].setValue(p.layer_thickness)
+            self.fields["layer_growth"].setValue(p.layer_growth)
             if "layers" in self.fields:
                 self.fields["layers"].setValue(p.nj - 1)
             self.law.setCurrentIndex(max(0, self.law.findData("hyperbolic" if p.law in ("tanh", "sinh") else p.law)))
@@ -768,6 +779,7 @@ class MeshSubpanel(QWidget if HAS_QT else object):
             gid = self.combo_blocks.currentData()
             self.parent_window.block_custom_configs.pop(gid, None)
         self.load_active_scope_to_ui()
+        self.parent_window.validate_mesh_inputs()
         self.update_tree_status()
         self.parent_window.redraw_mesh_views()
 
