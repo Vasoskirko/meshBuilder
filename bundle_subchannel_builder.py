@@ -1486,6 +1486,20 @@ class BundleBuilderWindow(QMainWindow):
         self.highlighted_block_id = global_block_id
         self.redraw_mesh_views()
 
+    def save_quality_report(self, report):
+        name, _ = QFileDialog.getSaveFileName(
+            self, "Сохранить отчёт качества", "bundle_quality_report.json", "JSON (*.json)"
+        )
+        if not name:
+            return None
+        try:
+            saved = mq.save_report(report, name)
+        except Exception as exc:
+            QMessageBox.critical(self, "Ошибка сохранения отчёта", "Не удалось сохранить отчёт качества: " + str(exc))
+            return None
+        QMessageBox.information(self, "Отчёт сохранён", f"Отчёт качества сохранён в: {saved}")
+        return saved
+
     def on_check_quality(self):
         if self.current_quality_report is None:
             return
