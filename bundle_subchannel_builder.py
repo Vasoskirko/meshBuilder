@@ -8,251 +8,54 @@
 4. Кнопка «Сбросить выбор» очищает как выбранные подканалы, так и стержень.
 """
 import os
+
 os.environ["QT_API"] = "pyside6"
-import sys, math, json, csv
+
+import json
+import math
+import sys
 from pathlib import Path
+
 import numpy as np
-
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QDialog, QWidget, QVBoxLayout, QHBoxLayout,
-    QGroupBox, QDoubleSpinBox, QComboBox, QPushButton, QLabel,
-    QFileDialog, QMessageBox, QSplitter, QScrollArea,
-    QTableWidget, QTableWidgetItem, QHeaderView
-)
-from matplotlib.figure import Figure
-from matplotlib.patches import Polygon, Circle
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
-
-from bundle_geometry import RodData, Subchannel, BundleModel
-from PySide6.QtWidgets import (
-    QStackedWidget, QTabWidget, QTreeWidget, QTreeWidgetItem, QRadioButton,
-    QPlainTextEdit, QTableWidget, QTableWidgetItem, QHeaderView
-)
-from PySide6.QtGui import QColor, QBrush
 from matplotlib.collections import LineCollection
-from mesh_subchannel_subpanel import MeshSubpanel
-from block_classifier import classify_subchannel_blocks
-from mesh_advisor import format_friendly_error
-from mesh_gui import QualityDialog
-from mesh_quality import DEFAULT_PROFILE
+from matplotlib.figure import Figure
+from matplotlib.patches import Circle, Polygon
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QBrush, QColor
+from PySide6.QtWidgets import (
+    QApplication,
+    QComboBox,
+    QDoubleSpinBox,
+    QFileDialog,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QSplitter,
+    QStackedWidget,
+    QTableWidget,
+    QTableWidgetItem,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
+
 import mesh_core as mc
 import mesh_quality as mq
 import mesh_subchannel as ms
-
-
-SCIENTIFIC_QSS = """
-QWidget {
-    font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, "Roboto", "Helvetica Neue", sans-serif;
-    font-size: 12px;
-    color: #1e293b;
-    background-color: #f8fafc;
-}
-QGroupBox {
-    font-weight: 600;
-    font-size: 12px;
-    color: #0f172a;
-    border: 1px solid #cbd5e1;
-    border-radius: 4px;
-    margin-top: 10px;
-    padding-top: 12px;
-    background-color: #ffffff;
-}
-QGroupBox::title {
-    subcontrol-origin: margin;
-    subcontrol-position: top left;
-    left: 8px;
-    padding: 0 4px;
-    background-color: #ffffff;
-}
-QPushButton {
-    background-color: #ffffff;
-    color: #1e293b;
-    border: 1px solid #94a3b8;
-    border-radius: 3px;
-    padding: 5px 12px;
-    font-weight: 500;
-    min-height: 22px;
-}
-QPushButton:hover {
-    background-color: #f1f5f9;
-    border-color: #64748b;
-}
-QPushButton:pressed {
-    background-color: #e2e8f0;
-    border-color: #475569;
-}
-QPushButton:disabled {
-    background-color: #f1f5f9;
-    color: #94a3b8;
-    border-color: #cbd5e1;
-}
-QPushButton[btnClass="primary"] {
-    background-color: #1e3a5f;
-    color: #ffffff;
-    border: 1px solid #142841;
-    font-weight: 600;
-}
-QPushButton[btnClass="primary"]:hover {
-    background-color: #2a4d7d;
-    border-color: #1e3a5f;
-}
-QPushButton[btnClass="export"] {
-    background-color: #2b4c7e;
-    color: #ffffff;
-    border: 1px solid #1d3557;
-    font-weight: 600;
-}
-QPushButton[btnClass="export"]:hover {
-    background-color: #3b629b;
-    border-color: #2b4c7e;
-}
-QPushButton[btnClass="danger"] {
-    background-color: #ffffff;
-    color: #991b1b;
-    border: 1px solid #f87171;
-}
-QLineEdit, QDoubleSpinBox, QSpinBox, QComboBox {
-    background-color: #ffffff;
-    border: 1px solid #cbd5e1;
-    border-radius: 3px;
-    padding: 3px 6px;
-    color: #0f172a;
-    min-height: 22px;
-}
-QTabWidget::pane {
-    border: 1px solid #cbd5e1;
-    background-color: #ffffff;
-    border-radius: 3px;
-}
-QTabBar::tab {
-    background-color: #f1f5f9;
-    border: 1px solid #cbd5e1;
-    padding: 6px 12px;
-    margin-right: 2px;
-    border-top-left-radius: 3px;
-    border-top-right-radius: 3px;
-    font-weight: 500;
-}
-QTabBar::tab:selected {
-    background-color: #ffffff;
-    border-bottom-color: #ffffff;
-    font-weight: 600;
-    color: #1e3a5f;
-}
-QTableWidget, QTreeWidget {
-    background-color: #ffffff;
-    border: 1px solid #cbd5e1;
-    gridline-color: #f1f5f9;
-    alternate-background-color: #f8fafc;
-    font-size: 11px;
-}
-QHeaderView::section {
-    background-color: #f1f5f9;
-    color: #334155;
-    font-weight: 600;
-    padding: 4px 6px;
-    border: none;
-    border-right: 1px solid #e2e8f0;
-    border-bottom: 1px solid #cbd5e1;
-}
-"""
-
-class HydraulicsTableDialog(QDialog):
-    def __init__(self, parent, model):
-        super().__init__(parent)
-        self.model = model
-        self.setWindowTitle("Гидравлические характеристики подканалов ТВС")
-        self.resize(960, 640)
-
-        layout = QVBoxLayout(self)
-
-        summary_group = QGroupBox("Сводные характеристики сборки ТВС")
-        s_layout = QVBoxLayout(summary_group)
-        self.summary_label = QLabel()
-        self.summary_label.setTextFormat(Qt.RichText)
-        self.summary_label.setWordWrap(True)
-        s_layout.addWidget(self.summary_label)
-        layout.addWidget(summary_group)
-
-        self.table = QTableWidget()
-        self.table.setColumnCount(7)
-        self.table.setHorizontalHeaderLabels([
-            "ID подканала", "Тип", "Стержни", "Площадь A (мм²)",
-            "Периметр P (мм)", "D_h (мм)", "Входит в расчёт"
-        ])
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        layout.addWidget(self.table, 1)
-
-        btn_layout = QHBoxLayout()
-        btn_export = QPushButton("Экспорт таблицы в CSV…")
-        btn_export.clicked.connect(self.export_csv)
-        btn_close = QPushButton("Закрыть")
-        btn_close.clicked.connect(self.close)
-        btn_layout.addWidget(btn_export)
-        btn_layout.addStretch()
-        btn_layout.addWidget(btn_close)
-        layout.addLayout(btn_layout)
-
-        self.populate_data()
-
-    def populate_data(self):
-        types_ru = {
-            "interior": "Регулярные (ТВЭЛ)",
-            "guide_sub": "С Направляющим Каналом (НК)",
-            "instrument_sub": "С Инструментальным Каналом (ИК)",
-            "peripheral": "Периферийные",
-            "corner": "Угловые"
-        }
-
-        all_summary = self.model.get_total_assembly_summary()
-        lines = ["<table border='0' cellpadding='4'><tr><th>Категория подканалов</th><th>Число</th><th>Ср. площадь A (мм²)</th><th>Ср. периметр P (мм)</th><th>Ср. D_h (мм)</th></tr>"]
-
-        if all_summary:
-            for st, data in all_summary["by_type"].items():
-                cnt = data["count"]
-                mean_a = data["a_fluid"] / cnt
-                mean_p = data["p_wet"] / cnt
-                dh = (4.0 * mean_a / mean_p) if mean_p > 0 else 0.0
-                name = types_ru.get(st, st)
-                lines.append(f"<tr><td><b>{name}</b></td><td>{cnt}</td><td>{mean_a:.2f}</td><td>{mean_p:.2f}</td><td><b>{dh:.2f}</b></td></tr>")
-
-            lines.append(f"<tr style='background-color:#eaf2f8;'><td><b>ВСЯ СБОРКА ТВС (суммарно)</b></td><td><b>{all_summary['total_subchannels']}</b></td><td><b>{all_summary['total_a_fluid_mm2']:.2f}</b></td><td><b>{all_summary['total_p_wet_mm']:.2f}</b></td><td><b>{all_summary['total_d_h_mm']:.2f}</b></td></tr>")
-
-        sel_summary = self.model.get_selection_summary()
-        if sel_summary and sel_summary["total_subchannels"] != len(self.model.subchannels):
-            lines.append(f"<tr style='background-color:#e8f8f5;'><td><b>ВЫБРАННАЯ ОБЛАСТЬ (суммарно)</b></td><td><b>{sel_summary['total_subchannels']}</b></td><td><b>{sel_summary['total_a_fluid_mm2']:.2f}</b></td><td><b>{sel_summary['total_p_wet_mm']:.2f}</b></td><td><b>{sel_summary['total_d_h_mm']:.2f}</b></td></tr>")
-
-        lines.append("</table>")
-        self.summary_label.setText("".join(lines))
-
-        subs = sorted(self.model.subchannels.values(), key=lambda s: s.sub_id)
-        self.table.setRowCount(len(subs))
-        for row, s in enumerate(subs):
-            rods_str = ", ".join(f"R{rid}" for rid in s.rod_ids)
-            is_sel = "Да (выбран)" if s.sub_id in self.model.selected_subchannels else "Нет"
-
-            self.table.setItem(row, 0, QTableWidgetItem(f"S{s.sub_id}"))
-            self.table.setItem(row, 1, QTableWidgetItem(types_ru.get(s.sub_type, s.sub_type)))
-            self.table.setItem(row, 2, QTableWidgetItem(rods_str))
-            self.table.setItem(row, 3, QTableWidgetItem(f"{s.a_fluid_mm2:.2f}"))
-            self.table.setItem(row, 4, QTableWidgetItem(f"{s.p_wet_mm:.2f}"))
-            self.table.setItem(row, 5, QTableWidgetItem(f"{s.d_h_mm:.2f}"))
-            self.table.setItem(row, 6, QTableWidgetItem(is_sel))
-
-    def export_csv(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Экспорт характеристик подканалов", "subchannels_hydraulics.csv", "CSV (*.csv)")
-        if not path:
-            return
-        try:
-            with open(path, "w", encoding="utf-8-sig", newline="") as f:
-                writer = csv.writer(f)
-                writer.writerow(["ID подканала", "Тип", "Стержни", "Площадь A (мм2)", "Смоченный периметр P (мм)", "Гидравлический диаметр Dh (мм)", "Выбран в расчет"])
-                for row in range(self.table.rowCount()):
-                    writer.writerow([self.table.item(row, col).text() for col in range(self.table.columnCount())])
-            QMessageBox.information(self, "Экспорт завершён", f"Таблица успешно сохранена в:\n{path}")
-        except Exception as exc:
-            QMessageBox.warning(self, "Ошибка записи", f"Не удалось записать CSV: {exc}")
+from block_classifier import classify_subchannel_blocks
+from bundle_geometry import BundleModel
+from bundle_hydraulics_dialog import HydraulicsTableDialog
+from bundle_styles import SCIENTIFIC_QSS
+from mesh_advisor import format_friendly_error
+from mesh_quality import DEFAULT_PROFILE
+from mesh_quality_dialog import QualityDialog
+from mesh_subchannel_subpanel import MeshSubpanel
 
 
 class BundleBuilderWindow(QMainWindow):
@@ -322,12 +125,14 @@ class BundleBuilderWindow(QMainWindow):
         nav_group = QGroupBox("Интеллектуальное управление")
         nbox = QVBoxLayout(nav_group)
 
-        hint = QLabel("<b>Управление кликом мыши:</b><br>"
-                      "&bull; <b>Клик по стержню</b> — выбор (повторный клик снимает выбор)<br>"
-                      "&bull; <b>Клик по зазору / знакам (+) / (−)</b> — выбор подканала<br>"
-                      "&bull; <b>Клик по пустому фону</b> — снять выбор со стержня<br>"
-                      "&bull; <b>Колёсико</b> — зум к курсору<br>"
-                      "&bull; <b>Правая/средняя кнопка</b> — панорамирование")
+        hint = QLabel(
+            "<b>Управление кликом мыши:</b><br>"
+            "&bull; <b>Клик по стержню</b> — выбор (повторный клик снимает выбор)<br>"
+            "&bull; <b>Клик по зазору / знакам (+) / (−)</b> — выбор подканала<br>"
+            "&bull; <b>Клик по пустому фону</b> — снять выбор со стержня<br>"
+            "&bull; <b>Колёсико</b> — зум к курсору<br>"
+            "&bull; <b>Правая/средняя кнопка</b> — панорамирование"
+        )
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #2c3e50; background: #eaf2f8; padding: 7px; border-radius: 4px;")
         nbox.addWidget(hint)
@@ -372,7 +177,6 @@ class BundleBuilderWindow(QMainWindow):
         row_diam.addWidget(btn_apply_diam)
         r_layout.addLayout(row_diam)
 
-        # Кнопки снятия выбора и удаления стержня
         row_rod_actions = QHBoxLayout()
         btn_deselect_rod = QPushButton("Снять выбор со стержня")
         btn_deselect_rod.clicked.connect(self.on_deselect_rod)
@@ -417,7 +221,9 @@ class BundleBuilderWindow(QMainWindow):
         sbox.addWidget(btn_table)
 
         self.btn_goto_mesh = QPushButton("Перейти к сеточной модели (CFD) →")
-        self.btn_goto_mesh.setStyleSheet("font-weight: bold; background-color: #2e7d32; color: white; padding: 8px; font-size: 13px; border-radius: 4px;")
+        self.btn_goto_mesh.setStyleSheet(
+            "font-weight: bold; background-color: #2e7d32; color: white; padding: 8px; font-size: 13px; border-radius: 4px;"
+        )
         self.btn_goto_mesh.clicked.connect(self.switch_to_mesh_mode)
         sbox.addWidget(self.btn_goto_mesh)
 
@@ -512,9 +318,16 @@ class BundleBuilderWindow(QMainWindow):
         self.table_blocks = QTableWidget(self)
         self.table_blocks.setColumnCount(10)
         self.table_blocks.setHorizontalHeaderLabels([
-            "№ Блока и сектор", "Закон сгущения", "Опорный стержень", "Шаг у стенки h1 (мкм)",
-            "Слоёв по нормали", "Ячеек по дуге", "Шаг по дуге Δs (мкм)", "Параметр закона",
-            "Шаг в ядре (мкм)", "Вытянутость AR"
+            "№ Блока и сектор",
+            "Закон сгущения",
+            "Опорный стержень",
+            "Шаг у стенки h1 (мкм)",
+            "Слоёв по нормали",
+            "Ячеек по дуге",
+            "Шаг по дуге Δs (мкм)",
+            "Параметр закона",
+            "Шаг в ядре (мкм)",
+            "Вытянутость AR",
         ])
         self.table_blocks.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         self.table_blocks.setSelectionBehavior(QTableWidget.SelectRows)
@@ -669,7 +482,6 @@ class BundleBuilderWindow(QMainWindow):
             dist = np.linalg.norm(click_pt - np.array([rod.x, rod.y]))
             if dist <= (rod.diameter / 2.0):
                 coord = (rod.q, rod.r)
-                # Если кликнули по УЖЕ выбранному стержню — снимаем выбор!
                 if self.model.active_rod_coord == coord:
                     self.model.active_rod_coord = None
                 else:
@@ -714,7 +526,7 @@ class BundleBuilderWindow(QMainWindow):
             self.rebuild_view()
             return
 
-        # 5. Клик по пустому пространству (вне стержней и подканалов) -> снимает выбор со стержня!
+        # 5. Клик по пустому пространству -> снимает выбор со стержня
         if self.model.active_rod_coord is not None:
             self.model.active_rod_coord = None
             self.update_inspector()
@@ -793,9 +605,12 @@ class BundleBuilderWindow(QMainWindow):
             msg = QMessageBox(self)
             msg.setIcon(QMessageBox.Question)
             msg.setWindowTitle("Контроль пересечений")
-            msg.setText(f"Стержень перекрывает {len(clashes)} соседних ТВЭЛ(ов).\nУдалить пересекающиеся ТВЭЛы автоматически?")
+            msg.setText(
+                f"Стержень перекрывает {len(clashes)} соседних ТВЭЛ(ов).\n"
+                "Удалить пересекающиеся ТВЭЛы автоматически?"
+            )
             btn_yes = msg.addButton("Да, удалить автоматически", QMessageBox.YesRole)
-            btn_no = msg.addButton("Нет, оставить (удалю вручную)", QMessageBox.NoRole)
+            msg.addButton("Нет, оставить (удалю вручную)", QMessageBox.NoRole)
             btn_cancel = msg.addButton("Отмена", QMessageBox.RejectRole)
             msg.exec()
 
@@ -832,9 +647,12 @@ class BundleBuilderWindow(QMainWindow):
             msg = QMessageBox(self)
             msg.setIcon(QMessageBox.Question)
             msg.setWindowTitle("Контроль пересечений")
-            msg.setText(f"Заданный диаметр {new_val:.2f} мм перекрывает {len(clashes)} соседних ТВЭЛ(ов).\nУдалить пересекающиеся ТВЭЛы автоматически?")
+            msg.setText(
+                f"Заданный диаметр {new_val:.2f} мм перекрывает {len(clashes)} соседних ТВЭЛ(ов).\n"
+                "Удалить пересекающиеся ТВЭЛы автоматически?"
+            )
             btn_yes = msg.addButton("Да, удалить автоматически", QMessageBox.YesRole)
-            btn_no = msg.addButton("Нет, оставить (удалю вручную)", QMessageBox.NoRole)
+            msg.addButton("Нет, оставить (удалю вручную)", QMessageBox.NoRole)
             btn_cancel = msg.addButton("Отмена", QMessageBox.RejectRole)
             msg.exec()
 
@@ -856,7 +674,11 @@ class BundleBuilderWindow(QMainWindow):
             rod_id = self.model.coord_to_rod_id.get(self.model.active_rod_coord)
             if rod_id is not None and rod_id in self.model.rods:
                 rod = self.model.rods[rod_id]
-                type_names = {"fuel": "Обычный ТВЭЛ", "guide": "Направляющий Канал (НК)", "instrument": "Инструментальный Канал (ИК)"}
+                type_names = {
+                    "fuel": "Обычный ТВЭЛ",
+                    "guide": "Направляющий Канал (НК)",
+                    "instrument": "Инструментальный Канал (ИК)",
+                }
                 self.inspect_label.setText(
                     f"<b>Выбран стержень R{rod.rod_id}</b><br>"
                     f"Позиция (q, r): ({rod.q}, {rod.r})<br>"
@@ -873,7 +695,10 @@ class BundleBuilderWindow(QMainWindow):
                 self.rod_diam_spin.setValue(rod.diameter)
                 self.rod_diam_spin.blockSignals(False)
 
-                has_deleted = len(self.model.user_deleted_coords) > 0 or len(self.model.auto_deleted_clash_coords) > 0
+                has_deleted = (
+                    len(self.model.user_deleted_coords) > 0
+                    or len(self.model.auto_deleted_clash_coords) > 0
+                )
                 self.btn_restore_rods.setVisible(has_deleted)
                 return
 
@@ -886,7 +711,7 @@ class BundleBuilderWindow(QMainWindow):
                 "guide_sub": "НК (подканал у направляющего канала)",
                 "instrument_sub": "ИК (подканал у инструментального канала)",
                 "peripheral": "Периф (между стержнями и гранью)",
-                "corner": "Угловой (грань проходит в вершину угла)"
+                "corner": "Угловой (грань проходит в вершину угла)",
             }
             rods_str = ", ".join(f"R{rid}" for rid in sub.rod_ids)
             self.inspect_label.setText(
@@ -908,30 +733,42 @@ class BundleBuilderWindow(QMainWindow):
 
         self.ax.clear()
 
-        # 1. Шестигранная оболочка
-        hex_poly = Polygon(self.model.hex_vertices, closed=True, fill=False,
-                           edgecolor="#2c3e50", linewidth=2.5, zorder=2)
+        hex_poly = Polygon(
+            self.model.hex_vertices,
+            closed=True,
+            fill=False,
+            edgecolor="#2c3e50",
+            linewidth=2.5,
+            zorder=2,
+        )
         self.ax.add_patch(hex_poly)
 
         for i in range(6):
             mid = (self.model.hex_vertices[i] + self.model.hex_vertices[(i + 1) % 6]) / 2.0
-            self.ax.text(mid[0] * 1.07, mid[1] * 1.07, f"S{i+1}",
-                         ha="center", va="center", color="#2c3e50", fontsize=9, fontweight="bold")
+            self.ax.text(
+                mid[0] * 1.07,
+                mid[1] * 1.07,
+                f"S{i + 1}",
+                ha="center",
+                va="center",
+                color="#2c3e50",
+                fontsize=9,
+                fontweight="bold",
+            )
 
-        # 2. Отрисовка подканалов
         color_map = {
-            "interior": "#2ecc71",       # Зелёный
-            "guide_sub": "#f39c12",       # Янтарный (НК)
-            "instrument_sub": "#1abc9c",  # Бирюзовый (ИК)
-            "peripheral": "#3498db",      # Синий (Периф)
-            "corner": "#9b59b6"           # Фиолетовый (Угловой)
+            "interior": "#2ecc71",
+            "guide_sub": "#f39c12",
+            "instrument_sub": "#1abc9c",
+            "peripheral": "#3498db",
+            "corner": "#9b59b6",
         }
         edge_map = {
             "interior": "#27ae60",
             "guide_sub": "#d35400",
             "instrument_sub": "#16a085",
             "peripheral": "#2980b9",
-            "corner": "#8e44ad"
+            "corner": "#8e44ad",
         }
 
         bbox_style = dict(boxstyle="round,pad=0.25", facecolor="#ffffff", alpha=0.88, edgecolor="none")
@@ -941,38 +778,92 @@ class BundleBuilderWindow(QMainWindow):
             c = color_map.get(sub.sub_type, "#2ecc71")
             ec = edge_map.get(sub.sub_type, "#27ae60")
 
-            poly = Polygon(sub.polygon_points, closed=True, facecolor=c,
-                           edgecolor=ec, alpha=0.45, linewidth=1.5, zorder=3)
+            poly = Polygon(
+                sub.polygon_points,
+                closed=True,
+                facecolor=c,
+                edgecolor=ec,
+                alpha=0.45,
+                linewidth=1.5,
+                zorder=3,
+            )
             self.ax.add_patch(poly)
-            self.ax.text(sub.fluid_center[0], sub.fluid_center[1], "−",
-                         ha="center", va="center", color="#900C3F", fontsize=15, fontweight="bold",
-                         bbox=bbox_style, zorder=6)
+            self.ax.text(
+                sub.fluid_center[0],
+                sub.fluid_center[1],
+                "−",
+                ha="center",
+                va="center",
+                color="#900C3F",
+                fontsize=15,
+                fontweight="bold",
+                bbox=bbox_style,
+                zorder=6,
+            )
 
         candidates = self.model.get_candidate_neighbors()
         for sub_id in candidates:
             sub = self.model.subchannels[sub_id]
-            poly = Polygon(sub.polygon_points, closed=True, facecolor="#f1c40f",
-                           edgecolor="#f39c12", alpha=0.25, linewidth=1.2, linestyle="--", zorder=3)
+            poly = Polygon(
+                sub.polygon_points,
+                closed=True,
+                facecolor="#f1c40f",
+                edgecolor="#f39c12",
+                alpha=0.25,
+                linewidth=1.2,
+                linestyle="--",
+                zorder=3,
+            )
             self.ax.add_patch(poly)
-            self.ax.text(sub.fluid_center[0], sub.fluid_center[1], "+",
-                         ha="center", va="center", color="#d35400", fontsize=14, fontweight="bold",
-                         bbox=bbox_style, zorder=6)
+            self.ax.text(
+                sub.fluid_center[0],
+                sub.fluid_center[1],
+                "+",
+                ha="center",
+                va="center",
+                color="#d35400",
+                fontsize=14,
+                fontweight="bold",
+                bbox=bbox_style,
+                zorder=6,
+            )
 
         if not self.model.selected_subchannels:
             for sub in self.model.subchannels.values():
-                poly = Polygon(sub.polygon_points, closed=True, facecolor="#f8f9fa",
-                               edgecolor="#bdc3c7", alpha=0.3, linewidth=0.7, linestyle="-.", zorder=1)
+                poly = Polygon(
+                    sub.polygon_points,
+                    closed=True,
+                    facecolor="#f8f9fa",
+                    edgecolor="#bdc3c7",
+                    alpha=0.3,
+                    linewidth=0.7,
+                    linestyle="-.",
+                    zorder=1,
+                )
                 self.ax.add_patch(poly)
-                lbl = {"interior": "Регул.", "guide_sub": "НК", "instrument_sub": "ИК",
-                       "peripheral": "Периф", "corner": "Углов."}.get(sub.sub_type, "+")
-                self.ax.text(sub.fluid_center[0], sub.fluid_center[1], lbl,
-                             ha="center", va="center", color="#5d6d7e", fontsize=7.5, fontweight="bold",
-                             bbox=bbox_style, zorder=6)
+                lbl = {
+                    "interior": "Регул.",
+                    "guide_sub": "НК",
+                    "instrument_sub": "ИК",
+                    "peripheral": "Периф",
+                    "corner": "Углов.",
+                }.get(sub.sub_type, "+")
+                self.ax.text(
+                    sub.fluid_center[0],
+                    sub.fluid_center[1],
+                    lbl,
+                    ha="center",
+                    va="center",
+                    color="#5d6d7e",
+                    fontsize=7.5,
+                    fontweight="bold",
+                    bbox=bbox_style,
+                    zorder=6,
+                )
 
-        # 3. Стержни (ТВЭЛ / НК / ИК)
         active_id = self.model.active_rod_id
         for r_id, rod in self.model.rods.items():
-            is_active = (r_id == active_id)
+            is_active = r_id == active_id
 
             if rod.rod_type == "guide":
                 facecolor, edgecolor = "#f9e79f", "#b7950b"
@@ -990,38 +881,56 @@ class BundleBuilderWindow(QMainWindow):
                 edgecolor = "#c0392b"
                 facecolor = "#f2d7d5"
 
-            circle = Circle((rod.x, rod.y), rod.diameter / 2.0,
-                            facecolor=facecolor, edgecolor=edgecolor,
-                            linewidth=2.4 if is_active else (2.0 if rod.is_clashing else 1.5),
-                            linestyle="--" if rod.is_clashing else "-", zorder=5)
+            circle = Circle(
+                (rod.x, rod.y),
+                rod.diameter / 2.0,
+                facecolor=facecolor,
+                edgecolor=edgecolor,
+                linewidth=2.4 if is_active else (2.0 if rod.is_clashing else 1.5),
+                linestyle="--" if rod.is_clashing else "-",
+                zorder=5,
+            )
             self.ax.add_patch(circle)
 
             label = f"R{rod.rod_id}" + badge
-            self.ax.text(rod.x, rod.y, label,
-                         ha="center", va="center", color="#1a252f",
-                         fontsize=7.5 if badge else 8, fontweight="bold", zorder=7)
+            self.ax.text(
+                rod.x,
+                rod.y,
+                label,
+                ha="center",
+                va="center",
+                color="#1a252f",
+                fontsize=7.5 if badge else 8,
+                fontweight="bold",
+                zorder=7,
+            )
 
-        # 4. Сводка и гидравлика
         all_summary = self.model.get_total_assembly_summary()
         all_text = ""
         if all_summary:
-            all_text = (f"<br><b>Гидравлика ВСЕЙ сборки ТВС ({all_summary['total_subchannels']} подканалов):</b><br>"
-                        f"&bull; <b>Полная площадь A:</b> {all_summary['total_a_fluid_mm2']:.2f} мм²<br>"
-                        f"&bull; <b>Полный периметр P:</b> {all_summary['total_p_wet_mm']:.2f} мм<br>"
-                        f"&bull; <b>D_h всей ТВС:</b> <b>{all_summary['total_d_h_mm']:.2f} мм</b>")
+            all_text = (
+                f"<br><b>Гидравлика ВСЕЙ сборки ТВС ({all_summary['total_subchannels']} подканалов):</b><br>"
+                f"&bull; <b>Полная площадь A:</b> {all_summary['total_a_fluid_mm2']:.2f} мм²<br>"
+                f"&bull; <b>Полный периметр P:</b> {all_summary['total_p_wet_mm']:.2f} мм<br>"
+                f"&bull; <b>D_h всей ТВС:</b> <b>{all_summary['total_d_h_mm']:.2f} мм</b>"
+            )
 
         num_selected = len(self.model.selected_subchannels)
-        num_rods = len({rid for sid in self.model.selected_subchannels for rid in self.model.subchannels[sid].rod_ids})
+        num_rods = len(
+            {rid for sid in self.model.selected_subchannels for rid in self.model.subchannels[sid].rod_ids}
+        )
 
         sel_summary = self.model.get_selection_summary()
         if sel_summary:
             tot_a = sel_summary["total_a_fluid_mm2"]
             tot_p = sel_summary["total_p_wet_mm"]
             tot_dh = sel_summary["total_d_h_mm"]
-            sel_text = (f"<hr><b>Гидравлика ВЫБРАННОЙ области ({num_selected} подканалов, {num_rods} стержней):</b><br>"
-                        f"&bull; <b>Площадь A:</b> {tot_a:.2f} мм²<br>"
-                        f"&bull; <b>Периметр P:</b> {tot_p:.2f} мм<br>"
-                        f"&bull; <b>D_h эквив.:</b> <b>{tot_dh:.2f} мм</b>")
+            sel_text = (
+                f"<hr><b>Гидравлика ВЫБРАННОЙ области ({num_selected} подканалов, {num_rods} стержней):</b><br>"
+                f"&bull; <b>Площадь A:</b> {tot_a:.2f} мм²<br>"
+                f"&bull; <b>Периметр P:</b> {tot_p:.2f} мм<br>"
+                f"&bull; <b>D_h эквив.:</b> <b>{tot_dh:.2f} мм</b>"
+            )
         else:
             sel_text = "<hr><i>Подканалы не выбраны (кликните '+' или 'Выбрать ВСЕ').</i>"
 
@@ -1086,7 +995,6 @@ class BundleBuilderWindow(QMainWindow):
             except Exception as exc:
                 QMessageBox.warning(self, "Ошибка", f"Не удалось загрузить файл: {exc}")
 
-
     def switch_to_mesh_mode(self):
         if not self.model.selected_subchannels:
             QMessageBox.warning(self, "Предупреждение", "Сначала выберите хотя бы один подканал на сечении ТВС.")
@@ -1119,26 +1027,36 @@ class BundleBuilderWindow(QMainWindow):
         return inst.template_id if inst else 1
 
     def on_build_layer_only(self):
-        if not self.model.selected_subchannels: return
+        if not self.model.selected_subchannels:
+            return
         self.mesh_subpanel.save_current_ui_to_active_scope()
         self.mesh_subpanel.update_tree_status()
         base_p = self.base_params
 
         try:
-            cm_method = self.mesh_subpanel.combo_center_method.currentData() if hasattr(self.mesh_subpanel, "combo_center_method") else "equi_clearance"
+            cm_method = (
+                self.mesh_subpanel.combo_center_method.currentData()
+                if hasattr(self.mesh_subpanel, "combo_center_method")
+                else "equi_clearance"
+            )
             res = ms.build_mesh_from_bundle_model(
-                self.model, base_params=base_p,
+                self.model,
+                base_params=base_p,
                 template_overrides=self.template_configs,
                 block_custom_overrides=self.block_custom_configs,
                 auto_fill_core=False,
-                center_method=cm_method, hermite_tfi=(self.mesh_subpanel.chk_hermite_tfi.isChecked() if hasattr(self.mesh_subpanel, "chk_hermite_tfi") else False)
+                center_method=cm_method,
+                hermite_tfi=(
+                    self.mesh_subpanel.chk_hermite_tfi.isChecked()
+                    if hasattr(self.mesh_subpanel, "chk_hermite_tfi")
+                    else False
+                ),
             )
             z_len, nz = base_p.z_len, base_p.nz
             z_nodes = np.linspace(0, z_len, nz + 1)
             b3d = mq.extrude_blocks(res.blocks, z_nodes)
             rep = mq.analyse_blocks(b3d)
 
-            self.current_layer_result = res
             self.current_layer_result = res if not res.complete else None
             self.current_mesh_result = res
             self.current_quality_report = rep
@@ -1163,20 +1081,31 @@ class BundleBuilderWindow(QMainWindow):
             QMessageBox.critical(self, "Ошибка построения слоя", user_msg)
 
     def on_build_multiblock_mesh(self):
-        if not self.model.selected_subchannels: return
+        if not self.model.selected_subchannels:
+            return
         self.mesh_subpanel.save_current_ui_to_active_scope()
         self.mesh_subpanel.update_tree_status()
         base_p = self.base_params
-        is_layer_mode = (base_p.law == "wall_core")
+        is_layer_mode = base_p.law == "wall_core"
 
         try:
-            cm_method = self.mesh_subpanel.combo_center_method.currentData() if hasattr(self.mesh_subpanel, "combo_center_method") else "equi_clearance"
+            cm_method = (
+                self.mesh_subpanel.combo_center_method.currentData()
+                if hasattr(self.mesh_subpanel, "combo_center_method")
+                else "equi_clearance"
+            )
             res = ms.build_mesh_from_bundle_model(
-                self.model, base_params=base_p,
+                self.model,
+                base_params=base_p,
                 template_overrides=self.template_configs,
                 block_custom_overrides=self.block_custom_configs,
                 auto_fill_core=False if is_layer_mode else True,
-                center_method=cm_method, hermite_tfi=(self.mesh_subpanel.chk_hermite_tfi.isChecked() if hasattr(self.mesh_subpanel, "chk_hermite_tfi") else False)
+                center_method=cm_method,
+                hermite_tfi=(
+                    self.mesh_subpanel.chk_hermite_tfi.isChecked()
+                    if hasattr(self.mesh_subpanel, "chk_hermite_tfi")
+                    else False
+                ),
             )
             z_len, nz = base_p.z_len, base_p.nz
             z_nodes = np.linspace(0, z_len, nz + 1)
@@ -1208,7 +1137,8 @@ class BundleBuilderWindow(QMainWindow):
         layer_src = getattr(self, "current_layer_result", None)
         if layer_src is None and self.current_mesh_result is not None and not self.current_mesh_result.complete:
             layer_src = self.current_mesh_result
-        if layer_src is None: return
+        if layer_src is None:
+            return
         try:
             f = self.mesh_subpanel.fields
             growth = f["core_growth"].value()
@@ -1216,14 +1146,28 @@ class BundleBuilderWindow(QMainWindow):
             maxcells = f["core_max_cells"].value()
 
             q_trans = f["core_transition"].value() if "core_transition" in f else 1.0
-            cmode = self.mesh_subpanel.combo_core_mode.currentData() if hasattr(self.mesh_subpanel, "combo_core_mode") else "cfd_growth"
+            cmode = (
+                self.mesh_subpanel.combo_core_mode.currentData()
+                if hasattr(self.mesh_subpanel, "combo_core_mode")
+                else "cfd_growth"
+            )
             clayers = f["core_layers"].value() if "core_layers" in f else 20
-            h_tfi = self.mesh_subpanel.chk_hermite_tfi.isChecked() if hasattr(self.mesh_subpanel, "chk_hermite_tfi") else False
+            h_tfi = (
+                self.mesh_subpanel.chk_hermite_tfi.isChecked()
+                if hasattr(self.mesh_subpanel, "chk_hermite_tfi")
+                else False
+            )
 
             full_res = ms.fill_subchannel_core(
-                layer_src, self.model,
-                growth=growth, max_size=maxsize, max_cells=maxcells,
-                transition_ratio=q_trans, core_mode=cmode, core_layers=clayers, hermite_tfi=h_tfi
+                layer_src,
+                self.model,
+                growth=growth,
+                max_size=maxsize,
+                max_cells=maxcells,
+                transition_ratio=q_trans,
+                core_mode=cmode,
+                core_layers=clayers,
+                hermite_tfi=h_tfi,
             )
             z_len, nz = full_res.params.z_len, full_res.params.nz
             z_nodes = np.linspace(0, z_len, nz + 1)
@@ -1239,25 +1183,32 @@ class BundleBuilderWindow(QMainWindow):
             d = full_res.diagnostics
             extra = ""
             if d.get("core_target_exceeded"):
-                extra = (f"\n⚠ Узкий зазор ограничил число слоёв: в центре ячейки крупнее целевого "
-                         f"({d.get('core_target_m', 0)*1e6:.0f} мкм) — до {d.get('core_plateau_max_m', 0)*1e6:.0f} мкм.")
+                extra = (
+                    f"\n⚠ Узкий зазор ограничил число слоёв: в центре ячейки крупнее целевого "
+                    f"({d.get('core_target_m', 0) * 1e6:.0f} мкм) — до {d.get('core_plateau_max_m', 0) * 1e6:.0f} мкм."
+                )
             self.mesh_subpanel.lbl_status.setText(
                 f"Ядро заполнено: {d['blocks']} блоков, {d['cells_3d']:,} ячеек (3D). "
                 f"Слоёв ядра: {d.get('core_layers_count', '?')}; ячейка на конце ядра: "
-                f"зазор ≈ {d.get('core_plateau_min_m', 0)*1e6:.0f} … центр ≈ {d.get('core_plateau_max_m', 0)*1e6:.0f} мкм.\n"
+                f"зазор ≈ {d.get('core_plateau_min_m', 0) * 1e6:.0f} … центр ≈ {d.get('core_plateau_max_m', 0) * 1e6:.0f} мкм.\n"
                 f"Min Jacobian: {rep['metrics']['scaled_jacobian']['min']:.3f}.{extra}\n"
                 f"Можно менять параметры Блока 5 и нажимать «Заполнить ядро сетки» повторно — призма не пересоздаётся."
             )
             self.mesh_subpanel.update_core_preview()
             self.redraw_mesh_views()
             self.populate_blocks_table()
-            QMessageBox.information(self, "Ядро заполнено", f"Сетка успешно заполнена до центра подканалов! Всего ячеек: {d['cells_3d']:,}")
+            QMessageBox.information(
+                self,
+                "Ядро заполнено",
+                f"Сетка успешно заполнена до центра подканалов! Всего ячеек: {d['cells_3d']:,}",
+            )
         except Exception as exc:
             user_msg = format_friendly_error(exc)
             QMessageBox.critical(self, "Не удалось заполнить ядро", user_msg)
 
     def populate_blocks_table(self):
-        if self.current_mesh_result is None: return
+        if self.current_mesh_result is None:
+            return
         metrics = getattr(self.current_mesh_result, "block_metrics", [])
         self.table_blocks.setRowCount(len(metrics))
 
@@ -1276,26 +1227,35 @@ class BundleBuilderWindow(QMainWindow):
 
             it_param = QTableWidgetItem(m.special_param_str)
             if m.law == "geometric":
-                if m.growth_q <= 1.20: it_param.setBackground(QBrush(QColor("#e8f5e9")))
-                elif m.growth_q <= 1.35: it_param.setBackground(QBrush(QColor("#fffde7")))
-                else: it_param.setBackground(QBrush(QColor("#ffebee")))
+                if m.growth_q <= 1.20:
+                    it_param.setBackground(QBrush(QColor("#e8f5e9")))
+                elif m.growth_q <= 1.35:
+                    it_param.setBackground(QBrush(QColor("#fffde7")))
+                else:
+                    it_param.setBackground(QBrush(QColor("#ffebee")))
             elif "tanh" in m.law or "sinh" in m.law:
-                if m.growth_q <= 3.5: it_param.setBackground(QBrush(QColor("#e8f5e9")))
-                else: it_param.setBackground(QBrush(QColor("#fffde7")))
+                if m.growth_q <= 3.5:
+                    it_param.setBackground(QBrush(QColor("#e8f5e9")))
+                else:
+                    it_param.setBackground(QBrush(QColor("#fffde7")))
             elif m.law == "power":
-                if m.growth_q <= 2.2: it_param.setBackground(QBrush(QColor("#e8f5e9")))
-                else: it_param.setBackground(QBrush(QColor("#fffde7")))
+                if m.growth_q <= 2.2:
+                    it_param.setBackground(QBrush(QColor("#e8f5e9")))
+                else:
+                    it_param.setBackground(QBrush(QColor("#fffde7")))
 
             self.table_blocks.setItem(row_idx, 7, it_param)
             self.table_blocks.setItem(row_idx, 8, QTableWidgetItem(f"{m.h_last_um:.1f}"))
 
             it_ar = QTableWidgetItem(f"{m.aspect_ratio_wall:.1f}")
-            if m.aspect_ratio_wall > 200.0: it_ar.setBackground(QBrush(QColor("#fffde7")))
+            if m.aspect_ratio_wall > 200.0:
+                it_ar.setBackground(QBrush(QColor("#fffde7")))
             self.table_blocks.setItem(row_idx, 9, it_ar)
 
     def on_table_block_selected(self):
         items = self.table_blocks.selectedItems()
-        if not items: return
+        if not items:
+            return
         row = self.table_blocks.currentRow()
         gid_item = self.table_blocks.item(row, 0)
         if gid_item:
@@ -1306,11 +1266,13 @@ class BundleBuilderWindow(QMainWindow):
                 self.redraw_layer_plot_for_block(self.active_plot_block_idx)
 
     def redraw_layer_plot_for_block(self, block_idx):
-        if self.current_mesh_result is None: return
+        if self.current_mesh_result is None:
+            return
         res = self.current_mesh_result
         all_w = getattr(res, "all_block_widths", [])
         widths_m = all_w[block_idx] if (all_w and block_idx < len(all_w)) else res.layer_widths
-        if widths_m is None: return
+        if widths_m is None:
+            return
 
         self.ax_layers.clear()
         widths_um = widths_m * 1e6
@@ -1325,7 +1287,7 @@ class BundleBuilderWindow(QMainWindow):
         self.ax_layers.plot(nodes_idx, widths_um[0], "b.-", label="Сечение 1 (к центру O)")
         if widths_um.shape[0] > 1:
             mid_idx = widths_um.shape[0] // 2
-            self.ax_layers.plot(nodes_idx, widths_um[mid_idx], "g.-", label=f"Сечение {mid_idx+1}")
+            self.ax_layers.plot(nodes_idx, widths_um[mid_idx], "g.-", label=f"Сечение {mid_idx + 1}")
             self.ax_layers.plot(nodes_idx, widths_um[-1], "r.-", label="Сечение N (к зазору M)")
 
         self.ax_layers.set_xlabel("Номер ячейки по нормали (j)")
@@ -1336,87 +1298,133 @@ class BundleBuilderWindow(QMainWindow):
         self.canvas_layers.draw_idle()
 
     def on_mesh_scroll(self, event):
-        if event.inaxes != self.ax_mesh or event.xdata is None or event.ydata is None: return
+        if event.inaxes != self.ax_mesh or event.xdata is None or event.ydata is None:
+            return
         base_scale = 1.2
         scale = 1.0 / base_scale if event.button == "up" else base_scale
-        cur_xlim = self.ax_mesh.get_xlim(); cur_ylim = self.ax_mesh.get_ylim()
+        cur_xlim = self.ax_mesh.get_xlim()
+        cur_ylim = self.ax_mesh.get_ylim()
         xdata, ydata = event.xdata, event.ydata
-        w_old = cur_xlim[1] - cur_xlim[0]; h_old = cur_ylim[1] - cur_ylim[0]
-        w_new = w_old * scale; h_new = h_old * scale
-        rel_x = (cur_xlim[1] - xdata) / w_old; rel_y = (cur_ylim[1] - ydata) / h_old
+        w_old = cur_xlim[1] - cur_xlim[0]
+        h_old = cur_ylim[1] - cur_ylim[0]
+        w_new = w_old * scale
+        h_new = h_old * scale
+        rel_x = (cur_xlim[1] - xdata) / w_old
+        rel_y = (cur_ylim[1] - ydata) / h_old
         self.ax_mesh.set_xlim(xdata - w_new * (1.0 - rel_x), xdata + w_new * rel_x)
         self.ax_mesh.set_ylim(ydata - h_new * (1.0 - rel_y), ydata + h_new * rel_y)
         self.canvas_mesh.draw_idle()
 
     def on_toggle_ruler(self, checked):
         self.ruler_active = checked
-        if not checked: self.clear_ruler()
+        if not checked:
+            self.clear_ruler()
 
     def clear_ruler(self):
         self.ruler_p1 = None
         if self.ruler_line is not None:
-            try: self.ruler_line.remove()
-            except Exception: pass
+            try:
+                self.ruler_line.remove()
+            except Exception:
+                pass
             self.ruler_line = None
         if self.ruler_text is not None:
-            try: self.ruler_text.remove()
-            except Exception: pass
+            try:
+                self.ruler_text.remove()
+            except Exception:
+                pass
             self.ruler_text = None
         self.canvas_mesh.draw_idle()
 
     def on_ruler_click(self, event):
-        if not self.ruler_active or event.inaxes != self.ax_mesh or event.button != 1 or event.xdata is None or event.ydata is None: return
+        if (
+            not self.ruler_active
+            or event.inaxes != self.ax_mesh
+            or event.button != 1
+            or event.xdata is None
+            or event.ydata is None
+        ):
+            return
         x, y = event.xdata, event.ydata
         if self.ruler_p1 is None:
             self.ruler_p1 = (x, y)
         else:
             p1, p2 = self.ruler_p1, (x, y)
             dist_mm = float(np.hypot(p2[0] - p1[0], p2[1] - p1[1]))
-            badge = f"ΔL = {dist_mm*1e3:.3f} мкм ({dist_mm:.4f} мм)"
+            badge = f"ΔL = {dist_mm * 1e3:.3f} мкм ({dist_mm:.4f} мм)"
 
-            if self.ruler_line is not None: self.ruler_line.set_data([p1[0], p2[0]], [p1[1], p2[1]])
-            else: self.ruler_line, = self.ax_mesh.plot([p1[0], p2[0]], [p1[1], p2[1]], "r-o", linewidth=1.5, markersize=4, zorder=10)
+            if self.ruler_line is not None:
+                self.ruler_line.set_data([p1[0], p2[0]], [p1[1], p2[1]])
+            else:
+                (self.ruler_line,) = self.ax_mesh.plot(
+                    [p1[0], p2[0]], [p1[1], p2[1]], "r-o", linewidth=1.5, markersize=4, zorder=10
+                )
 
             mid_x, mid_y = (p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0
             if self.ruler_text is not None:
-                self.ruler_text.set_position((mid_x, mid_y)); self.ruler_text.set_text(badge)
+                self.ruler_text.set_position((mid_x, mid_y))
+                self.ruler_text.set_text(badge)
             else:
                 self.ruler_text = self.ax_mesh.text(
-                    mid_x, mid_y, badge, color="red", fontsize=8.5, fontweight="bold",
+                    mid_x,
+                    mid_y,
+                    badge,
+                    color="red",
+                    fontsize=8.5,
+                    fontweight="bold",
                     bbox=dict(boxstyle="round,pad=0.25", facecolor="#fff9c4", edgecolor="red", linewidth=1.0),
-                    zorder=11
+                    zorder=11,
                 )
             self.canvas_mesh.draw_idle()
             self.ruler_p1 = None
 
     def on_ruler_motion(self, event):
-        if not self.ruler_active or self.ruler_p1 is None or event.inaxes != self.ax_mesh or event.xdata is None or event.ydata is None: return
+        if (
+            not self.ruler_active
+            or self.ruler_p1 is None
+            or event.inaxes != self.ax_mesh
+            or event.xdata is None
+            or event.ydata is None
+        ):
+            return
         p1, p2 = self.ruler_p1, (event.xdata, event.ydata)
         dist_mm = float(np.hypot(p2[0] - p1[0], p2[1] - p1[1]))
-        badge = f"{dist_mm*1e3:.1f} мкм"
-        if self.ruler_line is not None: self.ruler_line.set_data([p1[0], p2[0]], [p1[1], p2[1]])
-        else: self.ruler_line, = self.ax_mesh.plot([p1[0], p2[0]], [p1[1], p2[1]], "r--", linewidth=1.2, zorder=10)
+        badge = f"{dist_mm * 1e3:.1f} мкм"
+        if self.ruler_line is not None:
+            self.ruler_line.set_data([p1[0], p2[0]], [p1[1], p2[1]])
+        else:
+            (self.ruler_line,) = self.ax_mesh.plot([p1[0], p2[0]], [p1[1], p2[1]], "r--", linewidth=1.2, zorder=10)
 
         mid_x, mid_y = (p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0
         if self.ruler_text is not None:
-            self.ruler_text.set_position((mid_x, mid_y)); self.ruler_text.set_text(badge)
+            self.ruler_text.set_position((mid_x, mid_y))
+            self.ruler_text.set_text(badge)
         else:
             self.ruler_text = self.ax_mesh.text(
-                mid_x, mid_y, badge, color="red", fontsize=8,
+                mid_x,
+                mid_y,
+                badge,
+                color="red",
+                fontsize=8,
                 bbox=dict(boxstyle="round,pad=0.2", facecolor="#ffffff", edgecolor="red", alpha=0.8),
-                zorder=11
+                zorder=11,
             )
         self.canvas_mesh.draw_idle()
 
     def redraw_mesh_views(self):
-        if self.current_mesh_result is None: return
-        res = self.current_mesh_result; p = res.params
+        if self.current_mesh_result is None:
+            return
+        res = self.current_mesh_result
         prev_xlim = self.ax_mesh.get_xlim() if self._mesh_drawn else None
         prev_ylim = self.ax_mesh.get_ylim() if self._mesh_drawn else None
 
         self.ax_mesh.clear()
         colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
-        stride = self.combo_detail.currentData() if hasattr(self, "combo_detail") and self.combo_detail.currentData() else 1
+        stride = (
+            self.combo_detail.currentData()
+            if hasattr(self, "combo_detail") and self.combo_detail.currentData()
+            else 1
+        )
 
         for k, (bx, by) in enumerate(res.blocks):
             v = np.stack((bx * 1e3, by * 1e3), axis=-1)
@@ -1427,15 +1435,19 @@ class BundleBuilderWindow(QMainWindow):
             self.ax_mesh.add_collection(LineCollection(lines, colors=c, linewidths=0.5, alpha=0.85))
 
             gid = k + 1
-            is_active = (self.highlighted_block_id == gid)
-            is_custom = (gid in self.block_custom_configs)
+            is_active = self.highlighted_block_id == gid
+            is_custom = gid in self.block_custom_configs
             tid = self.get_template_for_block(gid)
-            has_tmpl = (tid in self.template_configs)
+            has_tmpl = tid in self.template_configs
 
-            if is_active: border_col, border_lw = "red", 2.4
-            elif is_custom: border_col, border_lw = "#e67e22", 2.0
-            elif has_tmpl: border_col, border_lw = "#2980b9", 1.6
-            else: border_col, border_lw = "black", 0.8
+            if is_active:
+                border_col, border_lw = "red", 2.4
+            elif is_custom:
+                border_col, border_lw = "#e67e22", 2.0
+            elif has_tmpl:
+                border_col, border_lw = "#2980b9", 1.6
+            else:
+                border_col, border_lw = "black", 0.8
 
             border = [v[0], v[-1], v[:, 0], v[:, -1]]
             self.ax_mesh.add_collection(LineCollection(border, colors=border_col, linewidths=border_lw))
@@ -1445,17 +1457,27 @@ class BundleBuilderWindow(QMainWindow):
             badge_col = "#ffe0b2" if is_custom else ("#d4e6f1" if has_tmpl else "#ffffff")
 
             self.ax_mesh.text(
-                cx, cy, badge_lbl, fontsize=7.5, fontweight="bold", color="#111", ha="center", va="center",
-                bbox=dict(boxstyle="round,pad=0.2", facecolor=badge_col, alpha=0.9, edgecolor=border_col, linewidth=0.8)
+                cx,
+                cy,
+                badge_lbl,
+                fontsize=7.5,
+                fontweight="bold",
+                color="#111",
+                ha="center",
+                va="center",
+                bbox=dict(boxstyle="round,pad=0.2", facecolor=badge_col, alpha=0.9, edgecolor=border_col, linewidth=0.8),
             )
 
         if prev_xlim is not None and prev_ylim is not None:
-            self.ax_mesh.set_xlim(prev_xlim); self.ax_mesh.set_ylim(prev_ylim)
+            self.ax_mesh.set_xlim(prev_xlim)
+            self.ax_mesh.set_ylim(prev_ylim)
         else:
-            self.ax_mesh.autoscale_view(); self._mesh_drawn = True
+            self.ax_mesh.autoscale_view()
+            self._mesh_drawn = True
 
         self.ax_mesh.set_aspect("equal", adjustable="box")
-        self.ax_mesh.set_xlabel("X (мм)"); self.ax_mesh.set_ylabel("Y (мм)")
+        self.ax_mesh.set_xlabel("X (мм)")
+        self.ax_mesh.set_ylabel("Y (мм)")
         self.ax_mesh.set_title(f"Сетка выбранной области: {len(res.blocks)} блоков")
         self.canvas_mesh.draw_idle()
         self.redraw_layer_plot_for_block(self.active_plot_block_idx)
@@ -1465,14 +1487,15 @@ class BundleBuilderWindow(QMainWindow):
         self.redraw_mesh_views()
 
     def on_check_quality(self):
-        if self.current_quality_report is None: return
+        if self.current_quality_report is None:
+            return
         try:
-            from mesh_gui import QualityDialog
-            from mesh_quality import DEFAULT_PROFILE
             dlg = QualityDialog(
-                self, report=self.current_quality_report,
-                kind="3D сетка выбранных подканалов ТВС", profile=DEFAULT_PROFILE,
-                result=self.current_mesh_result
+                self,
+                report=self.current_quality_report,
+                kind="3D сетка выбранных подканалов ТВС",
+                profile=DEFAULT_PROFILE,
+                result=self.current_mesh_result,
             )
             dlg.exec()
         except Exception as exc:
@@ -1483,12 +1506,16 @@ class BundleBuilderWindow(QMainWindow):
             QMessageBox.warning(self, "Предупреждение", "Сетка не заполнена! Сначала заполните ядро подканала.")
             return
         try:
-            from mesh_subchannel_subpanel import StarCcmExportDialog
+            from starccm_export_dialog import StarCcmExportDialog
+
             f_props = getattr(self.mesh_subpanel, "current_fluid_props", {})
             yp_data = getattr(self.mesh_subpanel, "last_yplus_result", {})
             dlg = StarCcmExportDialog(
-                self, mesh_result=self.current_mesh_result,
-                bundle_model=self.model, fluid_props=f_props, yplus_data=yp_data
+                self,
+                mesh_result=self.current_mesh_result,
+                bundle_model=self.model,
+                fluid_props=f_props,
+                yplus_data=yp_data,
             )
             dlg.exec()
         except Exception as exc:
@@ -1506,11 +1533,13 @@ class BundleBuilderWindow(QMainWindow):
             except Exception as exc:
                 QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить сетку:\n{exc}")
 
+
 def main():
     app = QApplication(sys.argv)
     window = BundleBuilderWindow()
     window.show()
     sys.exit(app.exec())
+
 
 if __name__ == "__main__":
     main()
