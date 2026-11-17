@@ -331,6 +331,17 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         p_xyz = p_macro.parent / self.edit_xyz.text().strip()
 
         try:
+            same_path = p_macro.resolve() == p_xyz.resolve()
+            if not same_path and p_macro.exists() and p_xyz.exists():
+                same_path = p_macro.samefile(p_xyz)
+        except (OSError, RuntimeError) as exc:
+            QMessageBox.critical(self, "Ошибка путей", f"Не удалось проверить пути файлов:\n{exc}")
+            return
+        if same_path:
+            QMessageBox.critical(self, "Совпадение путей", "Файл сетки XYZ и Java-макрос должны иметь разные пути.")
+            return
+
+        try:
             ms.export_subchannel_plot3d(self.mesh_result, str(p_xyz))
         except Exception as exc:
             QMessageBox.critical(self, "Ошибка сохранения сетки", f"Не удалось экспортировать файл сетки:\n{exc}")
@@ -368,14 +379,18 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
             "selected_subchannels": sel_subs
         }
 
-        java_code = smg.generate_starccm_java_macro(
-            xyz_filename=p_xyz.name,
-            mesh_result=self.mesh_result,
-            bundle_model=self.bundle_model,
-            fluid_props=self.fluid_props,
-            yplus_data=self.yplus_data,
-            options=opts
-        )
+        try:
+            java_code = smg.generate_starccm_java_macro(
+                xyz_filename=p_xyz.name,
+                mesh_result=self.mesh_result,
+                bundle_model=self.bundle_model,
+                fluid_props=self.fluid_props,
+                yplus_data=self.yplus_data,
+                options=opts
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Ошибка генерации макроса", f"Не удалось сгенерировать Java-макрос:\n{exc}\nФайл сетки уже экспортирован: {p_xyz}")
+            return
 
         try:
             p_macro.write_text(java_code, encoding="utf-8")
