@@ -26,16 +26,16 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         self.fluid_props = fluid_props or {}
         self.yplus_data = yplus_data or {}
 
-        # Точная актуальная высота модели L_z (считывается из поля ввода высоты сетки):
+        # Высота готовой сетки важнее ещё не применённых значений UI.
         self.lz_m = 0.050
-        if parent and hasattr(parent, "mesh_subpanel") and "z_len" in parent.mesh_subpanel.fields:
+        p = getattr(mesh_result, "params", None)
+        mesh_height = getattr(p, "z_len", None)
+        if mesh_height is None:
+            mesh_height = getattr(p, "L", None)
+        if mesh_height is not None:
+            self.lz_m = float(mesh_height)
+        elif parent and hasattr(parent, "mesh_subpanel") and "z_len" in parent.mesh_subpanel.fields:
             self.lz_m = float(parent.mesh_subpanel.fields["z_len"].value())
-        elif mesh_result and hasattr(mesh_result, "params"):
-            p = mesh_result.params
-            if hasattr(p, "z_len") and p.z_len is not None:
-                self.lz_m = float(p.z_len)
-            elif hasattr(p, "L") and p.L is not None:
-                self.lz_m = float(p.L)
 
         # Количество подканалов:
         self.sub_count = getattr(mesh_result, "subchannels_count", 3) if mesh_result else 3
