@@ -500,8 +500,8 @@ class MeshWindow(QMainWindow):
         self.advanced_toggle.setVisible(not simple)
         self.advanced.setVisible(not simple and self.advanced_toggle.isChecked())
         self.layer_countrow.setVisible(layer)
-        self.layer_thicknessrow.setVisible(layer)
-        self.layer_growthrow.setVisible(layer and mode == "layer_growth")
+        self.layer_thicknessrow.setVisible(layer and mode != "layer_first_growth")
+        self.layer_growthrow.setVisible(layer and mode in ("layer_growth", "layer_first_growth"))
         self.build_button.setText("Построить пристеночный слой" if layer else "Построить сетку")
         self.full.setText("Оба канала (12 участков слоя)" if layer else "Оба канала полностью (12 блоков)")
         self.zones.setText("Внешняя граница слоя" if layer else "Границы зон")
@@ -772,8 +772,8 @@ class MeshWindow(QMainWindow):
                 mode=mode,
                 wall_layers=f["layer_cells"].value(),
                 layer_thickness=f["layer_thickness"].value(),
-                h1=f["h1"].value() if mode == "layer_thickness" else f["h1"].model.raw,
-                layer_growth=f["layer_growth"].value() if mode == "layer_growth" else f["layer_growth"].model.raw,
+                h1=f["h1"].value() if mode in ("layer_thickness", "layer_first_growth") else f["h1"].model.raw,
+                layer_growth=f["layer_growth"].value() if mode in ("layer_growth", "layer_first_growth") else f["layer_growth"].model.raw,
             )
 
         if law == "geometric":
@@ -869,9 +869,9 @@ class MeshWindow(QMainWindow):
             raise ValueError("Неизвестная единица")
         integers = dict(ni=p.ni, nz=p.nz, layer_cells=p.wall_layers)
         numbers = dict(d_rod=p.d_rod, pitch=p.pitch, z_len=p.z_len, layer_thickness=p.layer_thickness)
-        if p.mode == "layer_thickness":
+        if p.mode in ("layer_thickness", "layer_first_growth"):
             numbers["h1"] = p.h1
-        else:
+        if p.mode in ("layer_growth", "layer_first_growth"):
             numbers["layer_growth"] = p.layer_growth
         for key, value in integers.items():
             if not self.fields[key].minimum() <= value <= self.fields[key].maximum():

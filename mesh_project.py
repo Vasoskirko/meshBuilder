@@ -149,7 +149,10 @@ def merge_project_inputs(base,current):
     if base is None or (base.law,base.mode)!=(current.law,current.mode):return current
     keys=list(GEOMETRY_KEYS)+["law","mode"]
     if current.law=="wall_core":
-        keys += ["wall_layers","layer_thickness","h1" if current.mode=="layer_thickness" else "layer_growth"]
+        keys.append("wall_layers")
+        if current.mode != "layer_first_growth":keys.append("layer_thickness")
+        if current.mode in ("layer_thickness","layer_first_growth"):keys.append("h1")
+        if current.mode in ("layer_growth","layer_first_growth"):keys.append("layer_growth")
     else:
         if current.mode in ("first_count","shape_count"):keys.append("nj")
         if current.law!="uniform" and current.mode!="shape_count":keys.append("h1")
