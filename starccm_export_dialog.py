@@ -179,9 +179,9 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         l_p.addWidget(lbl_p_info)
         l_tab3.addWidget(grp_param)
 
-        grp_rep = QGroupBox("2. Отчеты расхода и баланса (сохраняются в дереве)", tab_mon)
+        grp_rep = QGroupBox("2. Отчеты расхода и энергии (сохраняются в дереве)", tab_mon)
         l_r = QVBoxLayout(grp_rep)
-        self.chk_reports = QCheckBox("Создать отчеты баланса расхода (MassFlow_Inlet/Outlet_Total, Imbalance_MassFlow %)", grp_rep)
+        self.chk_reports = QCheckBox("Создать отчеты расхода и невязки; при включенной энергии — тепловой баланс", grp_rep)
         self.chk_reports.setChecked(True)
         l_r.addWidget(self.chk_reports)
         l_tab3.addWidget(grp_rep)
@@ -300,6 +300,7 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
             self.rb_wall_by_rod.setChecked(True)
             self.rb_wall_by_rod.setEnabled(True)
             self.rb_wall_60.setEnabled(True)
+            self.rb_wall_60.setToolTip("")
             self.rb_wall_rod.setEnabled(False)
         else:
             self.rb_io_single.setChecked(True)
@@ -307,7 +308,8 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
             self.rb_io_split.setEnabled(False)
             self.rb_wall_by_rod.setChecked(True)
             self.rb_wall_by_rod.setEnabled(True)
-            self.rb_wall_60.setEnabled(True)
+            self.rb_wall_60.setEnabled(False)
+            self.rb_wall_60.setToolTip("После Fuse исходные секторы 60° не сохраняются; доступна группировка по стержням.")
             self.rb_wall_rod.setEnabled(True)
 
     def update_dz_hint(self):

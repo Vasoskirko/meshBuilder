@@ -2,6 +2,7 @@
 """Генератор канонического Java-макроса автоматизации для Simcenter STAR-CCM+ (версии 21.02+)."""
 import math
 from yplus_calculator import export_yplus_data
+from starccm_export_geometry import export_geometry, plane_positions, domain_expression
 from typing import Dict, Any, List
 from pathlib import Path
 import numpy as np
@@ -76,15 +77,17 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
 
     is_single_io = (inlet_outlet_mode == "single")
 
-    # Центры подканалов (X_c, Y_c) для осевых зондов:
-    sub_centers = []
-    if bundle_model and hasattr(bundle_model, "selected_subchannels"):
-        for sid in bundle_model.selected_subchannels:
-            sub = bundle_model.subchannels.get(sid)
-            if sub and hasattr(sub, "fluid_center"):
-                sub_centers.append((float(sub.fluid_center[0]) * 1e-3, float(sub.fluid_center[1]) * 1e-3))
-    while len(sub_centers) < subchannels_count:
-        sub_centers.append((0.0, 0.0))
+    signatures, domains = export_geometry(mesh_result, bundle_model)
+    if inter_fuse and rod_mode == "sectors_60":
+        raise ValueError("Секторы 60° не поддерживаются после Fuse; выберите группировку по стержням")
+    if inter_fuse and len(domains) != subchannels_count:
+        raise ValueError("Для анализа подканалов после Fuse нужна геометрия исходных подканалов")
+    sub_centers = [d["center"] for d in domains]
+    if not sub_centers:
+        sub_centers = [(0., 0.)] * subchannels_count
+    selected_subchannels = sorted(set(selected_subchannels))
+    if any(type(i) is not int or not 1 <= i <= subchannels_count for i in selected_subchannels):
+        raise ValueError("Неизвестный номер подканала для сечений")
 
     c = []
     c.append('// ===========================================================================')
@@ -117,6 +120,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('        sim.println(">>> [TVS Mesh Builder v3.15.0] СТАРТ КОМПЛЕКСНОЙ НАСТРОЙКИ СЦЕНЫ");')
     c.append('        sim.println("=================================================================");')
     c.append('')
+    c.append('        final double[][] boundaryGeometry = boundaryGeometry();')
     if import_mesh:
         sq = chr(39)
         c.append('        // 1. Импорт многоблочной структурированной сетки Plot3D (.xyz)')
@@ -295,16 +299,15 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('                }')
     c.append('            }')
     c.append('')
-    c.append('            // Среди боковых граней (их ровно 6):')
-    c.append('            // Сортируем по площади в порядке возрастания: 3 наименьшие — зазоры, 3 наибольшие — стержни!')
-    c.append('            laterals.sort((a, b) -> Double.compare(a.area, b.area));')
     c.append('            List<BoundaryData> gaps = new ArrayList<>();')
     c.append('            List<BoundaryData> rods = new ArrayList<>();')
-    c.append('            for (int k = 0; k < laterals.size(); k++) {')
-    c.append('                if (k < 3) gaps.add(laterals.get(k));')
-    c.append('                else rods.add(laterals.get(k));')
+    c.append('            Map<Boundary, Integer> rodIds = new HashMap<>();')
+    c.append('            for (BoundaryData bd : laterals) {')
+    c.append('                int identity = classifyBoundary(bd.area, bd.cx, bd.cy, boundaryGeometry);')
+    c.append('                if (identity == 0) gaps.add(bd);')
+    c.append('                else if (identity > 0) { rods.add(bd); rodIds.put(bd.bnd, identity - 1); }')
+    c.append('                else throw new IllegalStateException("Неизвестная боковая поверхность: " + bd.bnd.getPresentationName() + "; проверьте геометрию импорта.");')
     c.append('            }')
-    c.append('')
     c.append('            for (BoundaryData bd : gaps) {')
     c.append('                gapCandidates.add(new GapCandidate(curReg, bd.bnd, bd.cx, bd.cy, subNum));')
     c.append('                sim.println(String.format("  %-13s | %12.2f | (%8.3f, %8.3f, %8.3f) | ЗАЗОР (стык/sym)", bd.bnd.getPresentationName(), bd.area, bd.cx*1e3, bd.cy*1e3, bd.cz*1e3));')
@@ -313,12 +316,20 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('            List<Boundary> rodBnds = new ArrayList<>();')
     c.append('            for (int rIdx = 0; rIdx < rods.size(); rIdx++) {')
     c.append('                BoundaryData bd = rods.get(rIdx);')
-    c.append('                bd.bnd.setPresentationName(String.format("rod_%d_%d", subNum, rIdx + 1));')
+    c.append('                bd.bnd.setPresentationName(String.format("rod_R%d_part%d", rodIds.get(bd.bnd), rIdx + 1));')
     c.append('                rodBnds.add(bd.bnd);')
     c.append('                sim.println(String.format("  %-13s | %12.2f | (%8.3f, %8.3f, %8.3f) | СТЕРЖЕНЬ (rod)", bd.bnd.getPresentationName(), bd.area, bd.cx*1e3, bd.cy*1e3, bd.cz*1e3));')
     c.append('            }')
     if rod_mode == "monolithic":
         c.append('            if (!rodBnds.isEmpty()) { meshMgr.combineBoundaries(rodBnds); Boundary mRod = rodBnds.get(0); mRod.setPresentationName(String.format("rod_%d", subNum)); allRods.add(mRod); }')
+    elif rod_mode == "by_rod":
+        c.append('            Map<Integer, List<Boundary>> byRod = new TreeMap<>();')
+        c.append('            for (Boundary b : rodBnds) byRod.computeIfAbsent(rodIds.get(b), k -> new ArrayList<>()).add(b);')
+        c.append('            for (Map.Entry<Integer, List<Boundary>> entry : byRod.entrySet()) {')
+        c.append('                List<Boundary> group = entry.getValue();')
+        c.append('                if (group.size() > 1) meshMgr.combineBoundaries(group);')
+        c.append('                Boundary b = group.get(0); b.setPresentationName("rod_R" + entry.getKey()); allRods.add(b);')
+        c.append('            }')
     else:
         c.append('            allRods.addAll(rodBnds);')
     c.append('            sim.println("  ---------------------------------------------------------------------------------------------------");')
@@ -340,12 +351,13 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('                if (dist < 1e-4 && dist < minDist) { minDist = dist; bestMatch = cj; }')
     c.append('            }')
     c.append('            if (bestMatch != null) {')
-    c.append('                ci.paired = true; bestMatch.paired = true; pairCount++;')
+    c.append('                // Count and mark a pair only after successful interface creation.')
     c.append('                String ifName = String.format("if_s%d_s%d", ci.subNum, bestMatch.subNum);')
     c.append('                ci.bnd.setPresentationName(String.format("if_s%d_s%d", ci.subNum, bestMatch.subNum));')
     c.append('                bestMatch.bnd.setPresentationName(String.format("if_s%d_s%d", bestMatch.subNum, ci.subNum));')
     c.append('                try {')
     c.append('                    sim.getInterfaceManager().createBoundaryInterface(ci.bnd, bestMatch.bnd, ifName);')
+    c.append('                    ci.paired = true; bestMatch.paired = true; pairCount++;')
     c.append('                    pairedNames.add(ifName);')
     c.append('                    sim.println(String.format("  • [OK] Сшит интерфейс: %s (зазор = %.3e м)", ifName, minDist));')
     c.append('                } catch (Exception e) { sim.println("  [!] Ошибка сшивки " + ifName + ": " + e.getMessage()); }')
@@ -386,98 +398,64 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
         c.append('        createParam(sim, gpm, grpGrid, "y_plus_target", ' + f"{yplus_tgt:.2f}" + ', "", null, null);')
         c.append('        createParam(sim, gpm, grpGrid, "h1_wall", ' + f"{h1_m:.3e}" + ', "m", Dimensions.Builder().length(1).build(), null);')
         c.append('')
-    if create_reports:
-        c.append('        // 8. Отчеты расхода и баланса (сохраняются в дереве проекта):')
-        c.append('        sim.println(">>> [7/7] Создание физических отчетов, балансов и мониторов (сохраняются)...");')
-        c.append('        try {')
-        c.append('            MassFlowReport repIn = sim.getReportManager().createReport(MassFlowReport.class);')
-        c.append('            repIn.setPresentationName("MassFlow_Inlet_Total"); repIn.getParts().setObjects(allInlets);')
-        c.append('            MassFlowReport repOut = sim.getReportManager().createReport(MassFlowReport.class);')
-        c.append('            repOut.setPresentationName("MassFlow_Outlet_Total"); repOut.getParts().setObjects(allOutlets);')
-        c.append('            sim.getMonitorManager().createMonitors(Arrays.asList(repIn, repOut));')
-        c.append('')
-        c.append('            for (int sIdx = 0; sIdx < subchannelRegions.size(); sIdx++) {')
-        c.append('                Region curReg = subchannelRegions.get(sIdx); int subNum = sIdx + 1;')
-        c.append('                Boundary inB = curReg.getBoundaryManager().getBoundary("in_" + subNum);')
-        c.append('                if (inB != null) {')
-        c.append('                    MassFlowReport repInSub = sim.getReportManager().createReport(MassFlowReport.class);')
-        c.append('                    repInSub.setPresentationName(String.format("MassFlow_In_Sub%d", subNum));')
-        c.append('                    repInSub.getParts().setObjects(inB);')
-        c.append('                }')
-        c.append('                Boundary outB = curReg.getBoundaryManager().getBoundary("out_" + subNum);')
-        c.append('                if (outB != null) {')
-        c.append('                    MassFlowReport repOutSub = sim.getReportManager().createReport(MassFlowReport.class);')
-        c.append('                    repOutSub.setPresentationName(String.format("MassFlow_Out_Sub%d", subNum));')
-        c.append('                    repOutSub.getParts().setObjects(outB);')
-        c.append('                }')
-        c.append('            }')
-        c.append('')
-        c.append('            // Невязка расхода (Imbalance_MassFlow в %):')
-        c.append('            try {')
-        c.append('                ExpressionReport imbRep = sim.getReportManager().createReport(ExpressionReport.class);')
-        c.append('                imbRep.setPresentationName("Imbalance_MassFlow");')
-        c.append('                imbRep.setDefinition("abs(${MassFlow_Inlet_TotalReport} - ${MassFlow_Outlet_TotalReport}) / max(abs(${MassFlow_Inlet_TotalReport}), 1e-30) * 100");')
-        c.append('                sim.getMonitorManager().createMonitors(Collections.singletonList(imbRep));')
-        c.append('                sim.println("  • Создан отчет невязки расхода [Imbalance_MassFlow]!");')
-        c.append('            } catch (Exception ignored) {}')
-        c.append('')
-        if enable_thermal:
-            c.append('            // Тепловой баланс при активной энергии:')
-            c.append('            try {')
-            c.append('                SurfaceIntegralReport repHeat = (SurfaceIntegralReport) sim.getReportManager().create("star.base.report.SurfaceIntegralReport");')
-            c.append('                repHeat.setPresentationName("Heat_Flux_Rods_Total");')
-            c.append('                repHeat.getParts().setObjects(allRods);')
-            c.append('                sim.println("  • Создан отчет теплового потока стержней [Heat_Flux_Rods_Total]!");')
-            c.append('            } catch (Exception ignored) {}')
-        c.append('            sim.println("  • Созданы отчеты и мониторы баланса расхода (вход и выход)!");')
-        c.append('        } catch (Exception ignored) {}')
-        c.append('')
-
     # 9. Создание Derived Parts (PlaneSection и LineSection) по точному рекордеру 21.02.007:
     c.append('        // 9. Создание сечений и зондов (Derived Parts) по рекордеру STAR-CCM+ 21.02.007:')
     c.append('        sim.println(">>> Создание производных деталей (Derived Parts)...");')
     c.append('        int planesCreated = 0;')
     c.append('        int probesCreated = 0;')
+    c.append('        int[] reportCounts = new int[] {0, 0};')
     c.append('        try {')
     c.append('            Units uLen = sim.getUnitsManager().getPreferredUnits(Dimensions.Builder().length(1).build());')
     c.append('            LabCoordinateSystem labCoord = sim.getCoordinateSystemManager().getLabCoordinateSystem();')
     c.append('            double lz = ' + f"{lz_m:.6f}" + ';')
     c.append('')
-    if key_planes:
-        c.append('            createPlaneSection(sim, labCoord, uLen, subchannelRegions, "Section_Global_Inlet", 0.0); planesCreated++;')
-        c.append('            createPlaneSection(sim, labCoord, uLen, subchannelRegions, "Section_Global_Mid", lz / 2.0); planesCreated++;')
-        c.append('            createPlaneSection(sim, labCoord, uLen, subchannelRegions, "Section_Global_Outlet", lz); planesCreated++;')
-    if n_planes > 1:
-        c.append('            int np = ' + str(n_planes) + ';')
-        c.append('            double dz = lz / (np - 1);')
-        c.append('            for (int k = 0; k < np; k++) {')
-        c.append('                double zPos = k * dz;')
-        c.append('                createPlaneSection(sim, labCoord, uLen, subchannelRegions, String.format("Section_Global_Z_%02d", k + 1), zPos); planesCreated++;')
-        c.append('            }')
-    if sub_planes:
-        for s_idx in selected_subchannels:
-            c.append(f'            if ({s_idx} <= subchannelRegions.size()) {{')
-            c.append(f'                Region rSub = subchannelRegions.get({s_idx - 1});')
-            c.append('                List<Region> singleSub = Collections.singletonList(rSub);')
-            c.append('                String subName = rSub.getPresentationName();')
-            c.append('                createPlaneSection(sim, labCoord, uLen, singleSub, subName + "_Section_Inlet", 0.0); planesCreated++;')
-            c.append('                createPlaneSection(sim, labCoord, uLen, singleSub, subName + "_Section_Mid", lz / 2.0); planesCreated++;')
-            c.append('                createPlaneSection(sim, labCoord, uLen, singleSub, subName + "_Section_Outlet", lz); planesCreated++;')
-            if n_sub_planes > 1:
-                c.append(f'                int nsp = {n_sub_planes}; double dz_s = lz / (nsp - 1);')
-                c.append('                for (int k = 0; k < nsp; k++) {')
-                c.append('                    double zPos = k * dz_s;')
-                c.append('                    createPlaneSection(sim, labCoord, uLen, singleSub, String.format("%s_Section_Z_%02d", subName, k + 1), zPos); planesCreated++;')
-                c.append('                }')
-            c.append('            }')
+    c.append('            List<List<? extends NamedObject>> sourceParts = new ArrayList<>();')
+    if inter_fuse:
+        for d in domains:
+            number = d["number"]
+            expression = domain_expression(d["triangle"])
+            c.append(f'            UserFieldFunction mask{number} = getOrCreateFF(sim, "SubchannelMask_{number}", "{expression}");')
+            c.append(f'            ThresholdPart domain{number} = sim.getPartManager().createThresholdPart(new NeoObjectVector(subchannelRegions.toArray()), new DoubleVector(new double[] {{0.5, 1.5}}), sim.getUnitsManager().getObject(""), mask{number}, 0);')
+            c.append(f'            domain{number}.setPresentationName("Subchannel_{number}_Domain");')
+            c.append(f'            sourceParts.add(Collections.singletonList(domain{number}));')
+    else:
+        c.append('            for (Region region : subchannelRegions) sourceParts.add(Collections.singletonList(region));')
+    for pos in plane_positions(n_planes, key_planes):
+        c.append(f'            createPlaneSection(sim, labCoord, uLen, subchannelRegions, "Section_Global_Z_{pos:.12f}", lz * {pos:.12f}); planesCreated++;')
+    for number in range(1, subchannels_count + 1):
+        positions = plane_positions(n_sub_planes, True) if sub_planes and number in selected_subchannels else []
+        if create_reports:
+            positions = sorted(set(positions + [0., 1.]))
+        for pos in positions:
+            # A single source has the same domain as the global plane: reuse it.
+            reuse = subchannels_count == 1 and pos in plane_positions(n_planes, key_planes)
+            name = f'Section_Global_Z_{pos:.12f}' if reuse else f'Subchannel_{number}_Section_Z_{pos:.12f}'
+            if not reuse:
+                c.append(f'            createPlaneSection(sim, labCoord, uLen, sourceParts.get({number-1}), "{name}", lz * {pos:.12f}); planesCreated++;')
+            if create_reports and pos in (0., 1.):
+                side = 'In' if pos == 0 else 'Out'
+                c.append(f'            createMassFlowReport(sim, "MassFlow_{side}_Sub{number}", Collections.singletonList((PlaneSection) sim.getPartManager().getObject("{name}")), reportCounts);')
     if axis_probes:
         for idx, (xc, yc) in enumerate(sub_centers):
-            c.append(f'            if ({idx} < subchannelRegions.size()) {{')
-            c.append(f'                Region rSub = subchannelRegions.get({idx});')
-            c.append(f'                createAxisLine(sim, labCoord, uLen, Collections.singletonList(rSub), "Probe_Axis_" + rSub.getPresentationName(), {xc:.8e}, {yc:.8e}, lz); probesCreated++;')
-            c.append('            }')
+            if idx + 1 in selected_subchannels:
+                c.append(f'            createAxisLine(sim, labCoord, uLen, sourceParts.get({idx}), "Probe_Axis_Subchannel_{idx+1}", {xc:.16e}, {yc:.16e}, lz); probesCreated++;')
     c.append('            sim.println(String.format("  • Производные плоскости (%d шт) и зонды (%d шт) успешно построены!", planesCreated, probesCreated));')
     c.append('        } catch (Exception e) { sim.println("  [!] Ошибка при создании Derived Parts: " + e.getMessage()); }')
+
+    if create_reports:
+        c.append('        createMassFlowReport(sim, "MassFlow_Inlet_Total", allInlets, reportCounts);')
+        c.append('        createMassFlowReport(sim, "MassFlow_Outlet_Total", allOutlets, reportCounts);')
+        c.append('        createExpressionReport(sim, "Imbalance_MassFlow", "abs(${MassFlow_Inlet_TotalReport} + ${MassFlow_Outlet_TotalReport}) / max(abs(${MassFlow_Inlet_TotalReport}), 1e-30) * 100", reportCounts);')
+        if enable_thermal or use_iapws:
+            c.append('        List<Boundary> thermalWalls = new ArrayList<>(allRods);')
+            c.append('        for (GapCandidate gap : gapCandidates) if (!gap.paired) thermalWalls.add(gap.bnd);')
+            c.append('        createHeatReport(sim, "Heat_Flux_Rods_Total", allRods, reportCounts);')
+            c.append('        createHeatReport(sim, "Heat_Flux_Walls_Total", thermalWalls, reportCounts);')
+            c.append('        createEnthalpyReport(sim, "TotalEnthalpy_Inlet", allInlets, reportCounts);')
+            c.append('        createEnthalpyReport(sim, "TotalEnthalpy_Outlet", allOutlets, reportCounts);')
+            c.append('        createExpressionReport(sim, "Energy_Flow_Inlet_Total", "${MassFlow_Inlet_TotalReport} * ${TotalEnthalpy_InletReport}", reportCounts);')
+            c.append('        createExpressionReport(sim, "Energy_Flow_Outlet_Total", "${MassFlow_Outlet_TotalReport} * ${TotalEnthalpy_OutletReport}", reportCounts);')
+            c.append('        createExpressionReport(sim, "Imbalance_Energy", "abs(${Energy_Flow_Inlet_TotalReport} + ${Energy_Flow_Outlet_TotalReport} - ${Heat_Flux_Walls_TotalReport}) / max(max(abs(${Energy_Flow_Inlet_TotalReport}), abs(${Energy_Flow_Outlet_TotalReport})), max(abs(${Heat_Flux_Walls_TotalReport}), 1e-30)) * 100", reportCounts);')
 
     # 10. Создание скалярной сцены контроля качества (Quality_VolumeChange):
     if create_scene:
@@ -497,13 +475,26 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('        for (String pNm : pairedNames) sim.println("     • " + pNm + " --> [ СОЗДАН ]");')
     c.append('        sim.println(" [2] ПРОИЗВОДНЫЕ ДЕТАЛИ (Derived Parts): " + planesCreated + " сечений и " + probesCreated + " зондов создано.");')
     c.append('        sim.println(" [3] ПАРАМЕТРЫ (Tools > Parameters): группы Properties, Initial, Grid_YPlus успешно созданы.");')
-    c.append('        sim.println(" [4] ОТЧЕТЫ И МОНИТОРЫ (Reports): баланс расхода и невязка Imbalance_MassFlow созданы.");')
+    c.append('        sim.println(" [4] ОТЧЕТЫ И МОНИТОРЫ: создано " + reportCounts[0] + " отчетов и " + reportCounts[1] + " мониторов; проверьте сообщения [!].");')
     c.append('        sim.println("===================================================================================================");')
-    c.append('        sim.println(">>> СЦЕНА STAR-CCM+ ПОЛНОСТЬЮ НАСТРОЕНА И ГОТОВА К РАСЧЕТУ!");')
+    c.append('        sim.println(">>> СОЗДАНИЕ ОБЪЕКТОВ ЗАВЕРШЕНО. ПРОВЕРЬТЕ СООБЩЕНИЯ [!] И ЗАДАЙТЕ ГРАНИЧНЫЕ УСЛОВИЯ.");')
     c.append('        sim.println("===================================================================================================\\n");')
     c.append('    }')
     c.append('')
-    c.append('    private void createPlaneSection(Simulation sim, LabCoordinateSystem labCoord, Units uLen, List<Region> parts, String name, double zVal) {')
+    c.append('    private double[][] boundaryGeometry() {')
+    c.append('        List<double[]> rows = new ArrayList<>();')
+    for idx in range(0, len(signatures), 64):
+        c.append(f'        Collections.addAll(rows, geometryChunk{idx // 64}());')
+    c.append('        return rows.toArray(new double[0][]);')
+    c.append('    }')
+    for idx in range(0, len(signatures), 64):
+        c.append(f'    private double[][] geometryChunk{idx // 64}() {{')
+        c.append('        return new double[][] {')
+        for row in signatures[idx:idx+64]:
+            c.append('            {' + ', '.join(f'{float(v):.16e}' for v in row) + '},')
+        c.append('        };')
+        c.append('    }')
+    c.append('    private void createPlaneSection(Simulation sim, LabCoordinateSystem labCoord, Units uLen, List<? extends NamedObject> parts, String name, double zVal) {')
     c.append('        try {')
     c.append('            PlaneSection ps = (PlaneSection) sim.getPartManager().createImplicitPart(')
     c.append('                new ArrayList<>(Collections.<NamedObject>emptyList()),')
@@ -515,10 +506,10 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('            ps.getInputParts().setObjects(parts);')
     c.append('            ps.getOriginCoordinate().setValue(new DoubleVector(new double[] {0.0, 0.0, zVal}));')
     c.append('            ps.getOrientationCoordinate().setValue(new DoubleVector(new double[] {0.0, 0.0, 1.0}));')
-    c.append('        } catch (Exception ignored) {}')
+    c.append('        } catch (Exception e) { throw new IllegalStateException(name + ": " + e.getMessage(), e); }')
     c.append('    }')
     c.append('')
-    c.append('    private void createAxisLine(Simulation sim, LabCoordinateSystem labCoord, Units uLen, List<Region> parts, String name, double x, double y, double lz) {')
+    c.append('    private void createAxisLine(Simulation sim, LabCoordinateSystem labCoord, Units uLen, List<? extends NamedObject> parts, String name, double x, double y, double lz) {')
     c.append('        try {')
     c.append('            LineSection ls = sim.getPartManager().createLineSection(')
     c.append('                new ArrayList<>(Collections.<NamedObject>emptyList()),')
@@ -530,9 +521,60 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('            ls.setInputMode(LineSectionInputMode.POINTPOINT);')
     c.append('            ls.getPointPoint().getStartPointCoordinate().setValue(new DoubleVector(new double[] {x, y, 0.0}));')
     c.append('            ls.getPointPoint().getEndPointCoordinate().setValue(new DoubleVector(new double[] {x, y, lz}));')
-    c.append('        } catch (Exception ignored) {}')
+    c.append('        } catch (Exception e) { throw new IllegalStateException(name + ": " + e.getMessage(), e); }')
     c.append('    }')
     c.append('')
+    c.extend(r"""
+    private int classifyBoundary(double area, double x, double y, double[][] signatures) {
+        int identity = -1;
+        for (double[] row : signatures) {
+            if (Math.abs(area - row[2]) <= Math.max(1e-5, row[2] * 2e-4)
+                    && Math.hypot(x - row[3], y - row[4]) <= 1e-7) {
+                int candidate = row[0] == 0 ? 0 : 1 + (int) row[1];
+                if (identity >= 0 && identity != candidate) throw new IllegalStateException("Неоднозначная геометрия поверхности");
+                identity = candidate;
+            }
+        }
+        return identity;
+    }
+    private void registerReport(Simulation sim, Report report, int[] counts) {
+        counts[0]++;
+        try { report.createMonitor(); counts[1]++; }
+        catch (Exception e) { sim.println("  [!] Монитор " + report.getPresentationName() + ": " + e.getMessage()); }
+    }
+    private void createMassFlowReport(Simulation sim, String name, List<? extends NamedObject> parts, int[] counts) {
+        try {
+            MassFlowReport report = sim.getReportManager().createReport(MassFlowReport.class);
+            report.setPresentationName(name); report.getParts().setObjects(parts);
+            registerReport(sim, report, counts);
+        } catch (Exception e) { sim.println("  [!] Отчет " + name + ": " + e.getMessage()); }
+    }
+    private void createExpressionReport(Simulation sim, String name, String expression, int[] counts) {
+        try {
+            ExpressionReport report = sim.getReportManager().createReport(ExpressionReport.class);
+            report.setPresentationName(name); report.setDefinition(expression);
+            registerReport(sim, report, counts);
+        } catch (Exception e) { sim.println("  [!] Отчет " + name + ": " + e.getMessage()); }
+    }
+    private void createHeatReport(Simulation sim, String name, List<? extends NamedObject> parts, int[] counts) {
+        try {
+            FieldFunction flux = sim.getFieldFunctionManager().getFunction("BoundaryHeatFlux");
+            if (flux == null) throw new IllegalStateException("Недоступно поле BoundaryHeatFlux");
+            SurfaceIntegralReport report = sim.getReportManager().createReport(SurfaceIntegralReport.class);
+            report.setPresentationName(name); report.setFieldFunction(flux); report.getParts().setObjects(parts);
+            registerReport(sim, report, counts);
+        } catch (Exception e) { sim.println("  [!] Отчет " + name + ": " + e.getMessage()); }
+    }
+    private void createEnthalpyReport(Simulation sim, String name, List<? extends NamedObject> parts, int[] counts) {
+        try {
+            FieldFunction enthalpy = sim.getFieldFunctionManager().getFunction("TotalEnthalpy");
+            if (enthalpy == null) throw new IllegalStateException("Недоступно поле TotalEnthalpy");
+            MassFlowAverageReport report = sim.getReportManager().createReport(MassFlowAverageReport.class);
+            report.setPresentationName(name); report.setFieldFunction(enthalpy); report.getParts().setObjects(parts);
+            registerReport(sim, report, counts);
+        } catch (Exception e) { sim.println("  [!] Отчет " + name + ": " + e.getMessage()); }
+    }
+""".strip('\n').splitlines())
     c.append('    private double measureArea(SurfaceIntegralReport areaRep, UserFieldFunction unityFF, Boundary b) { try { areaRep.getParts().setObjects(b); areaRep.setFieldFunction(unityFF); return areaRep.getReportMonitorValue() * 1e6; } catch (Exception e) { return 0.0; } }')
     c.append('    private double[] getCentroid3D(SurfaceIntegralReport rep, UserFieldFunction unityFF, UserFieldFunction ffX, UserFieldFunction ffY, UserFieldFunction ffZ, Boundary b) {')
     c.append('        try {')
