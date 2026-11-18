@@ -5,11 +5,11 @@ import tempfile
 from pathlib import Path
 
 FIELD_CHOICES = {
-    'z_fraction': 'Относительная высота ZFraction',
-    'speed': 'Модуль скорости Speed',
-    'mass_flux': 'Модуль массового потока MassFluxMagnitude',
-    'quality': 'Ссылки на нативные поля качества',
-    'balances': 'Знаковые балансы массы и энергии',
+    'z_fraction': 'Относительная высота Z/L: 0 на входе, 1 на выходе',
+    'speed': 'Модуль скорости |U|, м/с — для сцен и графиков',
+    'mass_flux': 'Массовый поток ρ|U|, кг/(м²·с) — для распределений',
+    'quality': 'Удобные имена нативных полей качества — значения не пересчитываются',
+    'balances': 'Знаковые суммы потоков массы и энергии — для контроля баланса',
 }
 REPORT_CHOICES = {
     'geometry': 'Площади, объёмы, смоченный периметр и гидравлический диаметр',
@@ -23,13 +23,13 @@ MEAN_CHOICES = {'velocity': 'Вектор скорости', 'pressure': 'Дав
 DEFAULTS = dict(import_mesh=True, inner_fuse=True, inter_fuse=False,
     region_mode='by_subchannel', inlet_outlet_mode='by_subchannel', rename_boundaries=True,
     rod_wall_mode='by_rod', turbulence_model='rst', use_iapws=False,
-    enable_thermal=True, enable_gravity=False, create_parameters=True, create_physics=True,
+    enable_thermal=True, enable_gravity=False, gravity_axis="-Z", evaluate_solution_reports=False, create_parameters=True, create_physics=True,
     create_mass_reports=True, create_quality_scene=True, create_quality_histograms=True,
     quality_bins=50, gap_sections=False, n_planes=11, n_sub_planes=11,
     key_planes=True, sub_planes=True, axis_probes=True, selected_subchannels=[],
     create_bad_cells=True, group_objects=True, create_summary=True, create_field_functions=True, initialize_solution=True,
     field_functions=list(FIELD_CHOICES), subchannel_reports=[], time_mean_fields=[], mean_start_step=1)
-ENUMS = dict(region_mode=('by_subchannel','monolithic'), inlet_outlet_mode=('by_subchannel','single'),
+ENUMS = dict(gravity_axis=('-X','+X','-Y','+Y','-Z','+Z'), region_mode=('by_subchannel','monolithic'), inlet_outlet_mode=('by_subchannel','single'),
     rod_wall_mode=('by_rod','sectors_60','monolithic'), turbulence_model=('rst','hybrid_srh'))
 
 

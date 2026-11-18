@@ -7,6 +7,8 @@ import re
 from starccm_macro_support import JAVA_SUPPORT
 from starccm_analysis import ANALYSIS_SUPPORT
 from starccm_physics_support import PHYSICS_SUPPORT
+from starccm_group_support import GROUP_SUPPORT
+from starccm_audit_support import AUDIT_SUPPORT
 from starccm_export_profile import FIELD_CHOICES, REPORT_CHOICES, MEAN_CHOICES
 from yplus_calculator import export_yplus_data
 from starccm_export_geometry import export_geometry, plane_positions, domain_expression, plane_label, shared_gap_sections
@@ -87,6 +89,12 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     use_iapws = options.get("use_iapws", False)
     enable_thermal = options.get("enable_thermal", True)
     enable_gravity = options.get("enable_gravity", False)
+    gravity_axis = options.get("gravity_axis", "-Z")
+    if gravity_axis not in ("-X","+X","-Y","+Y","-Z","+Z"):
+        raise ValueError("Неизвестное направление гравитации")
+    gravity_vector=[0.,0.,0.]
+    gravity_vector["XYZ".index(gravity_axis[1])]=9.81 if gravity_axis[0]=="+" else -9.81
+    evaluate_solution = options.get("evaluate_solution_reports", False)
     initialize_solution = options.get("initialize_solution", True)
     create_params = options.get("create_parameters", True)
     create_reports = options.get("create_mass_reports", True)
@@ -285,6 +293,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
         c.append('            sim.println("  • Уравнение энергии: Segregated Fluid Temperature");')
     if enable_gravity:
         c.append('            phys.enable(GravityModel.class);')
+        c.append('            phys.getReferenceValues().get(Gravity.class).setConstant(new double[] {' + ','.join(str(v) for v in gravity_vector) + '});')
         c.append('            sim.println("  • Гравитация: GravityModel включена");')
     c.append('            phys.enable(TurbulentModel.class);')
     c.append('            phys.enable(RansTurbulenceModel.class);')
@@ -637,7 +646,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
                 ('sim.getSceneManager()','Scenes'),('sim.getFieldFunctionManager()','FieldFunctions'),('sim.get(GlobalParameterManager.class)','Parameters')]:
             c.append(f'        try {{ groupManaged(sim,{manager},"{category}"); }} catch (Exception e) {{ warn(sim,"  [!] Grouping {category}: " + e.getMessage()); }}')
     if create_summary:
-        c.append('        writeSummary(sim,subchannelRegions,exportFingerprint,expectedCells);')
+        c.append('        writeSummary(sim,subchannelRegions,exportFingerprint,expectedCells,' + str(evaluate_solution).lower() + ');')
     c.append('        // 11. Итоговый аудит созданных объектов:')
     c.append('        sim.println("\\n===================================================================================================");')
     c.append('        sim.println("                       ИТОГОВЫЙ АУДИТ СОЗДАННЫХ ОБЪЕКТОВ СЦЕНЫ STAR-CCM+");')
@@ -715,6 +724,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     }
     private void registerReport(Simulation sim, Report report, int[] counts) {
         counts[0]++;
+        if (meshOnlyReport(report.getPresentationName())) return;
         try {
             boolean found=false;
             for (ReportMonitor monitor : sim.getMonitorManager().getObjectsOf(ReportMonitor.class))
@@ -856,6 +866,8 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('            }')
     c.append('        } catch (Exception e) { warn(sim,"  [!] Parameter " + name + ": " + e.getMessage()); }')
     c.append('    }')
+    c.extend(GROUP_SUPPORT.strip('\n').splitlines())
+    c.extend(AUDIT_SUPPORT.strip('\n').splitlines())
     c.extend(PHYSICS_SUPPORT.strip('\n').splitlines())
     c.extend(ANALYSIS_SUPPORT.strip('\n').splitlines())
     c.extend(JAVA_SUPPORT.strip('\n').splitlines())

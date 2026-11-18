@@ -9,10 +9,13 @@ class CheckPhysics {
     static class ScalarGlobalParameter {}
     static class GlobalParameterManager { Map<String,Object> parameters=new HashMap<>(); }
     static class Quantity { String definition;void setDefinition(String d) { definition=d; } }
-    static class ConstantMaterialPropertyMethod { Quantity quantity=new Quantity();Quantity getQuantity() { return quantity; } }
+    static class MaterialPropertyMethod {}
+    static class VariableWaterMethod extends MaterialPropertyMethod {}
+    static class ConstantMaterialPropertyMethod extends MaterialPropertyMethod { Quantity quantity=new Quantity();Quantity getQuantity() { return quantity; } }
     static class MaterialProperty {
-        ConstantMaterialPropertyMethod method=new ConstantMaterialPropertyMethod();int writes;
-        void setMethod(Class<?> c) { writes++; } ConstantMaterialPropertyMethod getMethod() { return method; }
+        MaterialPropertyMethod method=new ConstantMaterialPropertyMethod();int writes;
+        Quantity methodQuantity() { return ((ConstantMaterialPropertyMethod)method).quantity; }
+        void setMethod(Class<?> c) { writes++; } MaterialPropertyMethod getMethod() { return method; }
     }
     static class ConstantDensityProperty extends MaterialProperty {}
     static class DynamicViscosityProperty extends MaterialProperty {}
@@ -76,10 +79,10 @@ class CheckPhysics {
         require(c.configurePhysicalValues(s,physics,List.of(region),false,true),"configuration failed");
         require(region.physics==physics,"continuum not assigned");
         Properties properties=physics.models.liquid.material.properties;
-        require(properties.getMaterialProperty(ConstantDensityProperty.class).method.quantity.definition.equals("${rho}"),"density not linked");
-        require(properties.getMaterialProperty(DynamicViscosityProperty.class).method.quantity.definition.equals("${dynvis}"),"viscosity not linked");
-        require(properties.getMaterialProperty(SpecificHeatProperty.class).method.quantity.definition.equals("${Cp}"),"Cp not linked");
-        require(properties.getMaterialProperty(ThermalConductivityProperty.class).method.quantity.definition.equals("${lambda}"),"conductivity not linked");
+        require(properties.getMaterialProperty(ConstantDensityProperty.class).methodQuantity().definition.equals("${rho}"),"density not linked");
+        require(properties.getMaterialProperty(DynamicViscosityProperty.class).methodQuantity().definition.equals("${dynvis}"),"viscosity not linked");
+        require(properties.getMaterialProperty(SpecificHeatProperty.class).methodQuantity().definition.equals("${Cp}"),"Cp not linked");
+        require(properties.getMaterialProperty(ThermalConductivityProperty.class).methodQuantity().definition.equals("${lambda}"),"conductivity not linked");
         require(physics.references.pressure.definition.equals("${P_ref}"),"absolute reference pressure");
         require(physics.initial.get(InitialPressureProfile.class).method.quantity.definition.equals("${P_init}"),"gauge initial pressure");
         require(physics.initial.get(StaticTemperatureProfile.class).method.quantity.definition.equals("${T_init}"),"initial temperature");
@@ -89,8 +92,12 @@ class CheckPhysics {
         c.initializeFirstSolution(s,false,false,true);require(s.solution.initializationCount==1,"disabled initialization ran");
         c.initializeFirstSolution(s,false,true,false);require(s.solution.initializationCount==1,"initialized after setup failure");
         PhysicsContinuum iapws=new PhysicsContinuum();
+        Properties ip=iapws.models.liquid.material.properties;
+        ip.getMaterialProperty(DynamicViscosityProperty.class).method=new VariableWaterMethod();
+        ip.getMaterialProperty(ThermalConductivityProperty.class).method=new VariableWaterMethod();
         require(c.configurePhysicalValues(s,iapws,List.of(region),true,true),"iapws initial values failed");
-        require(iapws.models.liquid.material.properties.properties.isEmpty(),"IAPWS overwritten with constants");
+        require(ip.getMaterialProperty(DynamicViscosityProperty.class).writes==0,"IAPWS overwritten with constants");
+        require(!c.configurePhysicalValues(s,new PhysicsContinuum(),List.of(region),true,true),"IAPWS accepted default constant transport");
         s.parameters.parameters.remove("dynvis");
         require(!c.configurePhysicalValues(s,new PhysicsContinuum(),List.of(region),false,true),"missing dependency accepted");
         require(c.meshOnlyReport("Sub2_Volume") && c.meshOnlyReport("Quality_Min_CellQuality"),"geometry report deferred");

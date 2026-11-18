@@ -37,6 +37,14 @@ PHYSICS_SUPPORT = r'''
             VelocityProfile velocity=physics.getInitialConditions().get(VelocityProfile.class);
             velocity.setMethod(ConstantVectorProfileMethod.class);
             velocity.getMethod(ConstantVectorProfileMethod.class).getQuantity().setDefinition("[0, 0, ${U_init}]");
+            if (iapws) {
+                Material material=physics.getModelManager().getModel(SingleComponentLiquidModel.class).getMaterial();
+                MaterialPropertyMethod viscosity=material.getMaterialProperties().getMaterialProperty(DynamicViscosityProperty.class).getMethod();
+                MaterialPropertyMethod conductivity=material.getMaterialProperties().getMaterialProperty(ThermalConductivityProperty.class).getMethod();
+                sim.println("  • IAPWS transport methods: viscosity="+viscosity.getClass().getSimpleName()+", conductivity="+conductivity.getClass().getSimpleName());
+                if (viscosity instanceof ConstantMaterialPropertyMethod || conductivity instanceof ConstantMaterialPropertyMethod)
+                    throw new IllegalStateException("IAPWS EOS does not configure transport properties: select variable water viscosity/conductivity methods in Material Properties, then initialize manually. Constant defaults are not accepted.");
+            }
             sim.println("  • Material, absolute reference pressure and initial gauge pressure/temperature/axial velocity configured.");
             return true;
         } catch (Exception e) { warn(sim,"  [!] Physical values: " + e.getMessage()); return false; }

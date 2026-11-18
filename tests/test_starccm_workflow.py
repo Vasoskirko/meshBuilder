@@ -8,6 +8,8 @@ from PySide6.QtWidgets import QApplication
 from starccm_export_dialog import StarCcmExportDialog
 from starccm_export_profile import DEFAULTS, save_profile, load_profile, validate_options
 from starccm_macro_support import JAVA_SUPPORT
+from starccm_group_support import GROUP_SUPPORT
+from starccm_physics_support import PHYSICS_SUPPORT
 
 class ExportProfileTests(unittest.TestCase):
     @classmethod
@@ -52,7 +54,7 @@ class ManagedJavaTests(unittest.TestCase):
             self.skipTest('JDK compiler unavailable')
         base=JAVA_SUPPORT[:JAVA_SUPPORT.index('    private ThresholdPart threshold')]
         guards=JAVA_SUPPORT[JAVA_SUPPORT.index('    private List<Region> preparedRegions'):JAVA_SUPPORT.index('    private void markBoundaryRoles')]
-        grouping=JAVA_SUPPORT[JAVA_SUPPORT.index('    private void groupManaged'):JAVA_SUPPORT.index('    private String csv')]
+        grouping=GROUP_SUPPORT + PHYSICS_SUPPORT[PHYSICS_SUPPORT.index('    private boolean meshOnlyReport'):]
         harness='''import java.util.*;
 class CheckManaged {
 HELPERS
@@ -71,9 +73,14 @@ public static class TagManager {
     public void setTags(NamedObject o,List<Tag> t) { o.tagGroup.tags=new ArrayList<>(t); }
 }
 public static class Report extends NamedObject {}
+public static class NativeGroup extends NamedObject {
+    NativeGroups groups=new NativeGroups();public NativeGroups getGroupsManager() { return groups; }
+}
 public static class NativeGroups {
-    Map<String,List<?>> grouped=new HashMap<>();
-    public void groupObjects(String name,Collection<?> values,boolean flag) { grouped.put(name,new ArrayList<>(values)); }
+    Map<String,List<?>> grouped=new HashMap<>(); Map<String,NativeGroup> folders=new HashMap<>();
+    public NativeGroup getObject(String name) { return folders.get(name); }
+    public NativeGroup createGroup(String name) { NativeGroup g=new NativeGroup();g.name=name;folders.put(name,g);return g; }
+    public void groupObjects(String name,Collection<?> values,boolean flag) { grouped.put(name,new ArrayList<>(values));if(!folders.containsKey(name))createGroup(name); }
 }
 public static class NeoObjectVector { public NeoObjectVector(Object[] o) {} }
 public static class ReportManager {
@@ -106,7 +113,23 @@ public static void main(String[] args) {
     Report b=c.ownedReport(sim,"Quality_Min_Test",Report.class);
     if (a!=b || sim.rm.reports.size()!=2 || !c.tagged(a,"UserCustomTag")) throw new AssertionError("duplicate or lost user tags");
     c.groupManaged(sim,sim.rm,"Reports");c.groupManaged(sim,sim.rm,"Reports");
-    if (sim.rm.groups.grouped.get("meshBuilder_Quality").size()!=1 || c.tagged(manual,OWNER)) throw new AssertionError("group changed user object");
+    if (sim.rm.groups.getObject("meshBuilder_Reports").groups.grouped.get("MeshQuality").size()!=1 || c.tagged(manual,OWNER)) throw new AssertionError("group changed user object");
+    Report property=c.ownedReport(sim,"rho",Report.class);
+    Report initial=c.ownedReport(sim,"P_init",Report.class);
+    c.groupManaged(sim,sim.rm,"Parameters");
+    NativeGroups parameterFolders=sim.rm.groups.getObject("meshBuilder_Parameters").groups;
+    if (!parameterFolders.grouped.get("Properties").contains(property) || !parameterFolders.grouped.get("Initial").contains(initial)) throw new AssertionError("parameter buckets");
+    if (parameterFolders.grouped.values().stream().anyMatch(v -> v.contains(manual))) throw new AssertionError("grouped manual parameter");
+    Report alias=c.ownedReport(sim,"CellQuality",Report.class);
+    Report coordinate=c.ownedReport(sim,"ZFraction",Report.class);
+    c.groupManaged(sim,sim.rm,"FieldFunctions");
+    NativeGroups fieldFolders=sim.rm.groups.getObject("meshBuilder_FieldFunctions").groups;
+    if (!fieldFolders.grouped.get("MeshQuality").contains(alias) || !fieldFolders.grouped.get("Coordinates").contains(coordinate)) throw new AssertionError("field buckets");
+    Report mean=c.ownedReport(sim,"TimeMean_Velocity",Report.class);
+    Report balance=c.ownedReport(sim,"Imbalance_Energy",Report.class);
+    c.groupManaged(sim,sim.rm,"Monitors");
+    NativeGroups monitorFolders=sim.rm.groups.getObject("meshBuilder_Monitors").groups;
+    if (!monitorFolders.grouped.get("MeanFields").contains(mean) || !monitorFolders.grouped.get("Balances").contains(balance)) throw new AssertionError("monitor buckets");
     Report legacy=new Report();legacy.name="MB_Legacy";sim.rm.reports.add(legacy);c.mark(sim,legacy,OWNER);
     if (c.findOwned(sim,sim.rm,"MB_Legacy",Report.class)!=legacy || !legacy.name.equals("Legacy")) throw new AssertionError("legacy display migration");
     if (c.findOwned(sim,sim.rm,"MB_Legacy",Report.class)!=legacy) throw new AssertionError("clean display not reused");

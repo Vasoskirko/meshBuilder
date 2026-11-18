@@ -26,8 +26,8 @@ class PhysicalSetupTests(unittest.TestCase):
         self.assertIn('if (false)',execute)
         self.assertIn('initializeFirstSolution(sim,reuse,false',self.macro(initialize_solution=False))
         self.assertIn('sim.getSolution().isInitialized()',code)
-        self.assertLess(code.index('if (!initialized && !meshOnlyReport'),code.index('double value=report.getReportMonitorValue()'))
-        self.assertIn('deferred: solution not initialized',code)
+        self.assertLess(code.index('String reason=auditDeferral(name,evaluateSolution,initialized,progressed)'),code.index('double value=auditReportValue(sim,report'))
+        self.assertIn('solution not initialized',code)
     def test_initialization_checkbox_profile_roundtrip(self):
         from starccm_export_dialog import StarCcmExportDialog
         d=StarCcmExportDialog(mesh_result=fused.FusedExportTests.result)

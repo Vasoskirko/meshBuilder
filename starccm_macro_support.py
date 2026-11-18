@@ -142,37 +142,8 @@ JAVA_SUPPORT = r'''
             ff.setDimensions(Dimensions.Builder().mass(1).length(-2).time(-1).build());
         } catch (Exception e) { warn(sim,"  [!] Mass flux: " + e.getMessage()); }
     }
-    private void groupManaged(Simulation sim, Object manager, String category) {
-        Map<String,List<NamedObject>> groups=new TreeMap<>();
-        for (Object candidate : objects(manager)) {
-            if (!(candidate instanceof NamedObject)) continue;
-            NamedObject object=(NamedObject)candidate;
-            if (!tagged(object,OWNER)) continue;
-            String name=object.getPresentationName();
-            String detail = name.startsWith("Quality_") || name.startsWith("Bad_") ? "Quality"
-                : name.startsWith("Gap_") || name.startsWith("MassFlow_Gap_") ? "Gaps"
-                : name.startsWith("Subchannel_") ? "Subchannels"
-                : name.startsWith("Section_") || name.startsWith("Probe_") ? "Sections"
-                : category;
-            groups.computeIfAbsent("meshBuilder_"+detail,k -> new ArrayList<>()).add(object);
-        }
-        for (Map.Entry<String,List<NamedObject>> entry : groups.entrySet()) {
-            try {
-                Object managerGroups=manager.getClass().getMethod("getGroupsManager").invoke(manager);
-                boolean success=false;
-                for (java.lang.reflect.Method method : managerGroups.getClass().getMethods()) {
-                    if (!method.getName().equals("groupObjects") || method.getParameterCount()!=3) continue;
-                    Object collection=method.getParameterTypes()[1].isAssignableFrom(ArrayList.class)
-                        ? new ArrayList<>(entry.getValue()) : new NeoObjectVector(entry.getValue().toArray());
-                    try { method.invoke(managerGroups,entry.getKey(),collection,true); success=true;break; }
-                    catch (IllegalArgumentException mismatch) { /* Try another supported overload. */ }
-                }
-                if (!success) throw new IllegalStateException("groupObjects API unavailable");
-            } catch (Exception e) { warn(sim,"  [!] Group " + entry.getKey() + ": " + e.getMessage()); }
-        }
-    }
     private String csv(String value) { return "\"" + value.replace("\"","\"\"") + "\""; }
-    private void writeSummary(Simulation sim, List<Region> regions, String fingerprint, long expectedCells) {
+    private void writeSummary(Simulation sim, List<Region> regions, String fingerprint, long expectedCells, boolean evaluateSolution) {
         List<String[]> rows=new ArrayList<>();
         rows.add(new String[]{"export","signature",fingerprint,"","info"});
         rows.add(new String[]{"export","settings",exportSettings,"JSON","requested"});
@@ -182,21 +153,27 @@ JAVA_SUPPORT = r'''
         rows.add(new String[]{"mesh","regions",Integer.toString(regions.size()),"","info"});
         sim.println("=== meshBuilder audit: expected " + expectedCells + " cells, " + regions.size() + " regions ===");
         boolean initialized=sim.getSolution().isInitialized();
-        for (Report report : sim.getReportManager().getObjects()) if (tagged(report,OWNER)) {
-            if (!initialized && !meshOnlyReport(report.getPresentationName())) {
-                rows.add(new String[]{"report",report.getPresentationName(),"","","deferred: solution not initialized"});
-                sim.println("Deferred until initialization: " + report.getPresentationName());
-                continue;
+        boolean progressed=sim.getSimulationIterator().getCurrentIteration()>0;
+        Map<String,Double> evaluated=new HashMap<>();Map<String,String> unavailable=new HashMap<>();
+        int deferred=0;
+        for (Report report : new ArrayList<Report>(sim.getReportManager().getObjects())) if (tagged(report,OWNER)) {
+            String name=report.getPresentationName();
+            String reason=auditDeferral(name,evaluateSolution,initialized,progressed);
+            if (reason!=null) {
+                rows.add(new String[]{"report",name,"","","deferred: "+reason});deferred++;continue;
             }
             try {
-                double value=report.getReportMonitorValue();
-                if (!Double.isFinite(value)) throw new IllegalStateException("Nonfinite report value");
-                rows.add(new String[]{"report",report.getPresentationName(),Double.toString(value),report.getUnits()==null?"":report.getUnits().getPresentationName(),"evaluated"});
-                sim.println(report.getPresentationName()+" = "+value);
-                if (report.getPresentationName().equals("Quality_TotalCellCount") && Math.abs(value-expectedCells)>.5)
+                double value=auditReportValue(sim,report,evaluated,unavailable,new HashSet<String>());
+                rows.add(new String[]{"report",name,Double.toString(value),report.getUnits()==null?"":report.getUnits().getPresentationName(),"evaluated"});
+                sim.println(name+" = "+value);
+                if (name.equals("Quality_TotalCellCount") && Math.abs(value-expectedCells)>.5)
                     warn(sim,"  [!] Imported cell count differs from the exported mesh");
-            } catch (Exception e) { warn(sim,"  [!] Audit report " + report.getPresentationName() + ": " + e.getMessage()); }
+            } catch (Exception e) {
+                rows.add(new String[]{"report",name,"","","unavailable: "+e.getMessage()});
+                warn(sim,"  [!] Audit report " + name + ": " + e.getMessage());
+            }
         }
+        if (deferred>0) sim.println("Deferred physical reports: "+deferred+". Set BCs and solve before evaluating; see CSV status.");
         Object[] managers={sim.getPartManager(),sim.getReportManager(),sim.getMonitorManager(),
             sim.getPlotManager(),sim.getSceneManager(),sim.getFieldFunctionManager()};
         String[] categories={"parts","reports","monitors","plots","scenes","field_functions"};

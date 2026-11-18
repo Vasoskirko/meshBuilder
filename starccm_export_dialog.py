@@ -8,7 +8,7 @@ try:
     from PySide6.QtWidgets import (
         QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLineEdit,
         QSpinBox, QCheckBox, QPushButton, QLabel, QFileDialog,
-        QMessageBox, QRadioButton, QButtonGroup, QDialog, QTabWidget, QPlainTextEdit, QScrollArea, QGridLayout, QSizePolicy
+        QMessageBox, QRadioButton, QButtonGroup, QDialog, QTabWidget, QPlainTextEdit, QScrollArea, QGridLayout, QSizePolicy, QComboBox
     )
     HAS_QT = True
 except ImportError:
@@ -153,9 +153,15 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         self.chk_thermal.setChecked(True)
         l_ep.addWidget(self.chk_thermal)
 
-        self.chk_gravity = QCheckBox("Учитывать гравитацию (GravityModel: g = -9.81 м/с² по оси Z)", grp_extra_phys)
+        self.chk_gravity = QCheckBox("Учитывать гравитацию (|g| = 9.81 м/с²)", grp_extra_phys)
         self.chk_gravity.setChecked(False)
         l_ep.addWidget(self.chk_gravity)
+        gravity_row = QHBoxLayout(); gravity_row.addWidget(QLabel("Направление в лабораторной системе:", grp_extra_phys))
+        self.combo_gravity = QComboBox(grp_extra_phys)
+        self.combo_gravity.addItems(["-X", "+X", "-Y", "+Y", "-Z", "+Z"])
+        self.combo_gravity.setCurrentText("-Z"); self.combo_gravity.setEnabled(False)
+        self.chk_gravity.toggled.connect(self.combo_gravity.setEnabled)
+        gravity_row.addWidget(self.combo_gravity); l_ep.addLayout(gravity_row)
         l_tab2.addWidget(grp_extra_phys)
         init_info = QLabel(
             f"Reference Pressure (абсолютное): {self.fluid_props.get('p_ref_mpa', 15.0):g} МПа. "
@@ -315,11 +321,14 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         self.chk_group_objects = QCheckBox("Группировать объекты meshBuilder", tab_mesh)
         self.chk_group_objects.setChecked(True)
         l_tab1.insertWidget(l_tab1.count()-1, self.chk_group_objects)
-        fields_group = QGroupBox("3. Дополнительные функции поля", tab_mon)
+        fields_group = QGroupBox("3. Поля для сцен, графиков и анализа", tab_mon)
         fields_layout = QVBoxLayout(fields_group)
-        self.chk_field_functions = QCheckBox("Создавать выбранные дополнительные поля", fields_group)
+        self.chk_field_functions = QCheckBox("Создать выбранные вычисляемые величины в Field Functions", fields_group)
         self.chk_field_functions.setChecked(True)
         fields_layout.addWidget(self.chk_field_functions)
+        fields_explanation = QLabel("Функции поля задают величину в каждой точке сетки. Их можно выбрать в сцене или графике. "
+            "Это не отдельные отчёты и не мониторы; создание полей не запускает расчёт.", fields_group)
+        fields_explanation.setWordWrap(True); fields_layout.addWidget(fields_explanation)
         self.field_checkboxes = {}
         for key, label in FIELD_CHOICES.items():
             cb = QCheckBox(label, fields_group); cb.setChecked(True)
@@ -334,6 +343,10 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         self.chk_bad_cells.setChecked(True); quality_layout.addWidget(self.chk_bad_cells)
         self.chk_summary = QCheckBox("Итоговая сводка и CSV-отчёт рядом с симуляцией", tab_quality)
         self.chk_summary.setChecked(True); l_tab3.insertWidget(l_tab3.count()-1, self.chk_summary)
+        self.chk_evaluate_solution = QCheckBox("Вычислять физические отчёты в сводке после настройки границ и расчёта", tab_mon)
+        self.chk_evaluate_solution.setToolTip("По умолчанию сводка вычисляет только геометрию и качество. Нужны итерации решения; нулевой расход не допускает среднемассового усреднения.")
+        l_tab3.insertWidget(l_tab3.count()-1,self.chk_evaluate_solution)
+        self.chk_summary.toggled.connect(self.chk_evaluate_solution.setEnabled)
         check_button = QPushButton("Проверить текущую сетку в программе", tab_quality)
         check_button.clicked.connect(self.check_export_mesh)
         quality_layout.addWidget(check_button)
@@ -484,6 +497,8 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
             "use_iapws": self.rb_eos_iapws.isChecked(),
             "enable_thermal": self.chk_thermal.isChecked(),
             "enable_gravity": self.chk_gravity.isChecked(),
+            "gravity_axis": self.combo_gravity.currentText(),
+            "evaluate_solution_reports": self.chk_evaluate_solution.isChecked(),
             "create_parameters": self.chk_params.isChecked(),
             "create_physics": True,
             "initialize_solution": self.chk_initialize.isChecked(),
@@ -515,7 +530,7 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         self.rb_inter_intf.setChecked(not values['inter_fuse'])
         self.on_topology_mode_changed()
         for key, attr in dict(initialize_solution='chk_initialize', import_mesh='chk_import', use_iapws='rb_eos_iapws',
-            enable_thermal='chk_thermal', enable_gravity='chk_gravity', create_parameters='chk_params',
+            enable_thermal='chk_thermal', enable_gravity='chk_gravity', evaluate_solution_reports='chk_evaluate_solution', create_parameters='chk_params',
             create_mass_reports='chk_reports', create_quality_scene='chk_scene',
             create_quality_histograms='chk_histograms', gap_sections='chk_gap_sections',
             key_planes='chk_g_key_planes', sub_planes='chk_sub_planes', axis_probes='chk_axis_probes',
@@ -528,6 +543,7 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         self.rb_wall_by_rod.setChecked(values['rod_wall_mode']=='by_rod')
         self.rb_wall_60.setChecked(values['rod_wall_mode']=='sectors_60')
         self.rb_wall_rod.setChecked(values['rod_wall_mode']=='monolithic')
+        self.combo_gravity.setCurrentText(values['gravity_axis'])
         self.spin_quality_bins.setValue(values['quality_bins'])
         self.chk_g_n_planes.setChecked(values['n_planes']!=0)
         self.chk_sub_n_planes.setChecked(values['n_sub_planes']!=0)

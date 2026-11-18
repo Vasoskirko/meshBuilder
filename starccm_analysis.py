@@ -118,7 +118,7 @@ ANALYSIS_SUPPORT = r'''
             FieldFunction field=analysisField(sim,fieldName);
             FieldMeanMonitor monitor=findOwned(sim,sim.getMonitorManager(),name,FieldMeanMonitor.class);
             if (monitor!=null) {
-                sim.println("  • Preserve accumulated field statistics: "+name); return;
+                sim.println("  • Preserve accumulated field statistics: "+name.substring(3)); return;
             }
             PhysicalTimeMonitor clock=null;
             for (Object candidate : objects(sim.getMonitorManager()))
@@ -136,7 +136,7 @@ ANALYSIS_SUPPORT = r'''
             monitor.setObjects(new ArrayList<NamedObject>(parts)); monitor.setFieldFunction(field);
             monitor.getStarUpdate().getUpdateModeOption().setSelected(StarUpdateModeOption.Type.EVENT);
             monitor.getStarUpdate().getEventUpdateFrequency().setUpdateEvent(event);
-            sim.println("  • Field mean "+name+": one sample per time step, constant dt required, start="+start);
+            sim.println("  • Field mean "+name.substring(3)+": one sample per time step, constant dt required, start="+start);
         } catch (Exception e) { warn(sim,"  [!] Field mean " + name + ": " + e.getMessage()); }
     }
 '''

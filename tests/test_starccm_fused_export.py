@@ -136,6 +136,8 @@ class FusedExportTests(unittest.TestCase):
         end=macro.index('    private void registerReport',start)
         method=macro[start:end].replace('private int classifyBoundary','private static int classifyBoundary')
         reports=macro[end:macro.index('    private void createHeatReport',end)]
+        from starccm_physics_support import PHYSICS_SUPPORT
+        reports += PHYSICS_SUPPORT[PHYSICS_SUPPORT.index('    private boolean meshOnlyReport'):]
         signatures,domains=export_geometry(self.result,self.model)
         rows=',\n'.join('{'+','.join(format(float(v),'.16e') for v in row)+'}' for row in signatures)
         # Execute the exact emitted classifier, including the fourth fused gap.
@@ -185,7 +187,9 @@ public static void main(String[] args) throws Exception {
     check.createMassFlowReport(sim,"MassFlow_Inlet_Total",List.of(),counts);
     check.createMassFlowReport(sim,"MassFlow_Outlet_Total",List.of(),counts);
     check.createExpressionReport(sim,"Imbalance_MassFlow","0",counts);
-    if (counts[0]!=3 || counts[1]!=0 || sim.errors.size()!=3) throw new AssertionError("monitor failure suppressed reports");
+    check.createMassFlowReport(sim,"Quality_Min_Test",List.of(),counts);
+    check.createExpressionReport(sim,"Sub1_Area_In","1",counts);
+    if (counts[0]!=5 || counts[1]!=0 || sim.errors.size()!=3) throw new AssertionError("monitor failure suppressed reports");
     JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
     DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
     try (StandardJavaFileManager fm = compiler.getStandardFileManager(diagnostics,null,null)) {
