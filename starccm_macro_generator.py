@@ -7,6 +7,14 @@ from typing import Dict, Any, List
 from pathlib import Path
 import numpy as np
 
+QUALITY_METRICS = (
+    ("CellQuality", "Cell Quality", "lt_1e-5", "< 1e-5"),
+    ("FaceValidity", "Face Validity", "lt_1", "< 1"),
+    ("VolumeChange", "Volume Change", "le_0.01", "<= 0.01"),
+    ("SkewnessAngle", "Skewness Angle", "gt_85deg", "> 85 deg"),
+)
+
+
 def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_props, yplus_data, options):
     p = mesh_result.params
     yplus_data = export_yplus_data(yplus_data, default_h1=p.h1)
@@ -487,12 +495,12 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
         c.append(f'            qualitySurfaces.add((PlaneSection) sim.getPartManager().getObject("{middle_name}"));')
         c.append('        } catch (Exception e) { sim.println("  [!] Сечение качества: " + e.getMessage()); }')
     if create_scene or create_histograms:
-        for metric, label in [("CellQuality", "Cell Quality"), ("FaceValidity", "Face Validity"), ("VolumeChange", "Volume Change"), ("SkewnessAngle", "Skewness Angle")]:
+        for metric, label, suffix, criterion in QUALITY_METRICS:
             c.append('        try {')
             c.append(f'            FieldFunction metric = qualityField(sim, "{metric}", "{label}");')
             c.append(f'            createQualityExtrema(sim, subchannelRegions, metric, "{metric}", reportCounts);')
             if create_histograms:
-                c.append(f'            createQualityHistogram(sim, subchannelRegions, metric, "Quality_Histogram_{metric}", {quality_bins}); qualityCounts[0]++;')
+                c.append(f'            createQualityHistogram(sim, subchannelRegions, metric, "Quality_Histogram_{metric}__bad_{suffix}", "{criterion}", {quality_bins}); qualityCounts[0]++;')
             c.append('        } catch (Exception e) { sim.println("  [!] Качество ' + metric + ': " + e.getMessage()); }')
             if create_scene:
                 c.append('        try {')
@@ -650,7 +658,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
 """.strip('\n').splitlines())
     if create_histograms:
         c.extend(r"""
-    private void createQualityHistogram(Simulation sim, List<Region> regions, FieldFunction metric, String name, int bins) {
+    private void createQualityHistogram(Simulation sim, List<Region> regions, FieldFunction metric, String name, String criterion, int bins) {
         ArrayList<NamedObject> inputs = new ArrayList<>(regions);
         PlotAxisInput quantity = new PlotAxisInput(VariableType.SCALAR,
                 new PlotAxisInput.ScalarFunctionInput(metric));
@@ -659,7 +667,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
                 new PlotAxisInput(VariableType.SCALAR), WeightingMode.FREQUENCY);
         Cartesian2DPlot plot = sim.getPlotManager().createCartesian2DPlot(name,
                 List.of(XyPlotTypeEnum.HISTOGRAM), series);
-        plot.setPresentationName(name); plot.setTitle(metric.getPresentationName() + " - cell count");
+        plot.setPresentationName(name); plot.setTitle(metric.getPresentationName() + " | bad: " + criterion + " | cell count");
         boolean configured = false;
         for (Object entry : plot.getDataSeriesOrder()) {
             if (entry instanceof PartGroupDataSet) {

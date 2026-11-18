@@ -221,8 +221,12 @@ public static void main(String[] args) throws Exception {
         self.assertNotIn('"Gap_Sub1_Sub2"',self.macro(gap_sections=False))
     def test_histograms_and_scenes_are_configured_with_real_fields_and_parts(self):
         macro=self.macro(quality_bins=37)
-        for metric in ('CellQuality','FaceValidity','VolumeChange','SkewnessAngle'):
-            self.assertIn(f'"Quality_Histogram_{metric}", 37',macro)
+        for metric, suffix, criterion in (
+                ('CellQuality','lt_1e-5','< 1e-5'),
+                ('FaceValidity','lt_1','< 1'),
+                ('VolumeChange','le_0.01','<= 0.01'),
+                ('SkewnessAngle','gt_85deg','> 85 deg')):
+            self.assertIn(f'"Quality_Histogram_{metric}__bad_{suffix}", "{criterion}", 37',macro)
             self.assertIn(f'"Quality_{metric}"',macro)
         self.assertIn('WeightingMode.FREQUENCY',macro)
         self.assertIn('axis.hasBinningDescriptor().setNumberOfBins(bins)',macro)
@@ -313,9 +317,9 @@ static class AxisTypeManager {
 }
 static class PartGroupDataSet { AxisTypeManager axes=new AxisTypeManager(); AxisTypeManager getAxisTypeManager() { return axes; } }
 static class Cartesian2DPlot {
-    String name; PartGroupDataSet data=new PartGroupDataSet(); HistogramDataSeriesConfig series;
+    String name, title; PartGroupDataSet data=new PartGroupDataSet(); HistogramDataSeriesConfig series;
     void setPresentationName(String n) { name=n; }
-    void setTitle(String t) {}
+    void setTitle(String t) { title=t; }
     List<?> getDataSeriesOrder() { return List.of(data); }
 }
 static class PlotManager {
@@ -337,8 +341,9 @@ public static void main(String[] args) {
     check.createQualityScene(sim,surfaces,ff,"quality");
     ScalarDisplayer scalar=sim.scenes.scene.dm.scalar;
     if (scalar.input.parts!=surfaces || scalar.quantity.ff!=ff || scalar.fill!=ScalarFillMode.NATIVE || scalar.rep==null) throw new AssertionError("empty scene");
-    check.createQualityHistogram(sim,regions,ff,"hist",37);
+    check.createQualityHistogram(sim,regions,ff,"hist","< 1e-5",37);
     Cartesian2DPlot plot=sim.plots.plot;
+    if (!plot.title.contains("bad: < 1e-5")) throw new AssertionError("missing threshold label");
     if (!plot.series.parts.equals(regions) || plot.series.axis.ff!=ff || plot.series.weighting!=WeightingMode.FREQUENCY || plot.data.axes.axis.bins.bins!=37) throw new AssertionError("unconfigured histogram");
     try { check.createQualityScene(sim,List.of(),ff,"empty"); throw new AssertionError("accepted empty surface list"); }
     catch (IllegalStateException expected) {}
