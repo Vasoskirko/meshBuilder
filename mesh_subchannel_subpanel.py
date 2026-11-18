@@ -548,7 +548,12 @@ class MeshSubpanel(QWidget if HAS_QT else object):
             return
         self.update_live_advisor_hint()
         self.update_core_preview()
-        self.save_current_ui_to_active_scope()
+        try:
+            self.save_current_ui_to_active_scope()
+        except ValueError as exc:
+            self.parent_window.validate_mesh_inputs()
+            self.lbl_status.setText(f"Проверьте ввод: {exc}")
+            return
         self.parent_window.validate_mesh_inputs()
         self.update_tree_status()
 
