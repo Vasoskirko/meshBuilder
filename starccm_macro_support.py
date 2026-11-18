@@ -176,7 +176,13 @@ JAVA_SUPPORT = r'''
         rows.add(new String[]{"mesh","expected_cells",Long.toString(expectedCells),"cells","info"});
         rows.add(new String[]{"mesh","regions",Integer.toString(regions.size()),"","info"});
         sim.println("=== meshBuilder audit: expected " + expectedCells + " cells, " + regions.size() + " regions ===");
+        boolean initialized=sim.getSolution().isInitialized();
         for (Report report : sim.getReportManager().getObjects()) if (tagged(report,OWNER)) {
+            if (!initialized && !meshOnlyReport(report.getPresentationName())) {
+                rows.add(new String[]{"report",report.getPresentationName(),"","","deferred: solution not initialized"});
+                sim.println("Deferred until initialization: " + report.getPresentationName());
+                continue;
+            }
             try {
                 double value=report.getReportMonitorValue();
                 if (!Double.isFinite(value)) throw new IllegalStateException("Nonfinite report value");

@@ -27,7 +27,7 @@ DEFAULTS = dict(import_mesh=True, inner_fuse=True, inter_fuse=False,
     create_mass_reports=True, create_quality_scene=True, create_quality_histograms=True,
     quality_bins=50, gap_sections=False, n_planes=11, n_sub_planes=11,
     key_planes=True, sub_planes=True, axis_probes=True, selected_subchannels=[],
-    create_bad_cells=True, group_objects=True, create_summary=True, create_field_functions=True,
+    create_bad_cells=True, group_objects=True, create_summary=True, create_field_functions=True, initialize_solution=True,
     field_functions=list(FIELD_CHOICES), subchannel_reports=[], time_mean_fields=[], mean_start_step=1)
 ENUMS = dict(region_mode=('by_subchannel','monolithic'), inlet_outlet_mode=('by_subchannel','single'),
     rod_wall_mode=('by_rod','sectors_60','monolithic'), turbulence_model=('rst','hybrid_srh'))

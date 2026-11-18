@@ -6,6 +6,7 @@ import json
 import re
 from starccm_macro_support import JAVA_SUPPORT
 from starccm_analysis import ANALYSIS_SUPPORT
+from starccm_physics_support import PHYSICS_SUPPORT
 from starccm_export_profile import FIELD_CHOICES, REPORT_CHOICES, MEAN_CHOICES
 from yplus_calculator import export_yplus_data
 from starccm_export_geometry import export_geometry, plane_positions, domain_expression, plane_label, shared_gap_sections
@@ -63,8 +64,15 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     t_ref_k = float(fluid_props.get("t_ref_c", 300.0)) + 273.15
     p_ref_pa = float(fluid_props.get("p_ref_mpa", 15.0)) * 1e6
 
+    required_values = dict(density=rho, viscosity=mu, temperature=t_ref_k, pressure=p_ref_pa)
+    if options.get("enable_thermal", True):
+        required_values.update(cp=cp, conductivity=lam)
+    if any(not math.isfinite(value) or value <= 0 for value in required_values.values()):
+        raise ValueError("Физические свойства, абсолютные температура и давление должны быть конечными и положительными")
     re_in = float(yplus_data.get("reynolds", 200000.0)) if yplus_data else 200000.0
     w_inlet = float(yplus_data.get("velocity", 5.62)) if yplus_data else 5.62
+    if not math.isfinite(w_inlet):
+        raise ValueError("Начальная скорость должна быть конечным числом")
     yplus_tgt = float(yplus_data.get("y_plus", 1.0)) if yplus_data else 1.0
     h1_m = float(yplus_data.get("delta_y1_m", 2.5e-6)) if yplus_data else float(p.h1)
 
@@ -79,6 +87,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     use_iapws = options.get("use_iapws", False)
     enable_thermal = options.get("enable_thermal", True)
     enable_gravity = options.get("enable_gravity", False)
+    initialize_solution = options.get("initialize_solution", True)
     create_params = options.get("create_parameters", True)
     create_reports = options.get("create_mass_reports", True)
     create_scene = options.get("create_quality_scene", True)
@@ -147,6 +156,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('import star.segregatedenergy.*;')
     c.append('import star.realgas.*;')
     c.append('import star.material.*;')
+    c.append('import star.energy.*;')
     c.append('import star.base.report.*;')
     c.append('import star.turbulence.*;')
     c.append('import star.rsturb.*;')
@@ -181,6 +191,8 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('        RegionManager regMgr = sim.getRegionManager();')
     c.append('        List<Region> subchannelRegions = preparedRegions(sim,exportFingerprint,' + str(1 if inter_fuse else subchannels_count) + ');')
     c.append('        boolean reuse = !subchannelRegions.isEmpty();')
+    c.append('        PhysicsContinuum setupPhysics = null;')
+    c.append('        boolean physicalValuesConfigured = false;')
     c.append('        List<Boundary> allInlets = new ArrayList<>(), allOutlets = new ArrayList<>(), allRods = new ArrayList<>();')
     c.append('        class GapCandidate {')
     c.append('            Region reg; Boundary bnd; double cx; double cy; int subNum; boolean paired = false;')
@@ -289,6 +301,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
         c.append('            phys.enable(EbRsTurbModel.class);')
         c.append('            phys.enable(EbRsAllYplusWallTreatment.class);')
         c.append('            sim.println("  • Турбулентность: Reynolds Stress EB + All y+ Wall Treatment (Steady)");')
+    c.append('            setupPhysics = phys; own(sim,phys);')
     c.append('            sim.println("  • Физический континуум [Physics 1] полностью активирован!");')
     c.append('        } catch (Exception e) {')
     c.append('            sim.println("  [!] Ошибка активации физики: " + e.getMessage());')
@@ -453,33 +466,39 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('            }')
     c.append('            for (Object object : objects(sim.getInterfaceManager())) if (object instanceof NamedObject && tagged((NamedObject)object,OWNER)) { pairCount++; pairedNames.add(((NamedObject)object).getPresentationName()); }')
     c.append('        }')
-    if create_params:
-        c.append('        if (!reuse) {')
-        c.append('        // 7. Создание глобальных параметров с корректными размерностями (Tools > Parameters)')
-        c.append('        sim.println(">>> [6/7] Создание параметров в Tools > Parameters...");')
-        c.append('        GlobalParameterManager gpm = sim.get(GlobalParameterManager.class);')
-        c.append('')
-        c.append('        createParam(sim, gpm, null, "rho", ' + f"{rho:.3f}" + ', "kg/m^3", Dimensions.Builder().mass(1).length(-3).build(), null);')
-        c.append('        createParam(sim, gpm, null, "Cp", ' + f"{cp:.1f}" + ', "J/kg-K", Dimensions.Builder().mass(-1).temperature(-1).energy(1).build(), null);')
-        c.append('        createParam(sim, gpm, null, "dynvis", ' + f"{mu:.6e}" + ', "Pa-s", Dimensions.Builder().mass(1).length(-1).time(-1).build(), null);')
-        c.append('        createParam(sim, gpm, null, "kinvis", ' + f"{nu:.6e}" + ', "m^2/s", Dimensions.Builder().length(2).time(-1).build(), null);')
-        c.append('        createParam(sim, gpm, null, "lambda", ' + f"{lam:.3f}" + ', "W/m-K", Dimensions.Builder().mass(1).length(1).time(-3).temperature(-1).build(), null);')
-        c.append('        createParam(sim, gpm, null, "Pr", ' + f"{pr:.3f}" + ', "", null, null);')
-        c.append('        createParam(sim, gpm, null, "T_ref", ' + f"{t_ref_k:.2f}" + ', "K", Dimensions.Builder().temperature(1).build(), null);')
-        c.append('        createParam(sim, gpm, null, "P_ref", ' + f"{p_ref_pa:.1f}" + ', "Pa", Dimensions.Builder().mass(1).length(-1).time(-2).build(), null);')
-        c.append('')
-        c.append('        createParam(sim, gpm, null, "Re_in", ' + f"{re_in:.1f}" + ', "", null, null);')
-        c.append('        createParam(sim, gpm, null, "P_wet", ' + f"{p_wet_total:.8e}" + ', "m", Dimensions.Builder().length(1).build(), null);')
-        c.append('        createParam(sim, gpm, null, "S_in", ' + f"{s_in_total:.8e}" + ', "m^2", Dimensions.Builder().length(2).build(), null);')
-        c.append('        createParam(sim, gpm, null, "D_hyd", 0.0, "m", Dimensions.Builder().length(1).build(), "4*${S_in}/${P_wet}");')
-        c.append('        createParam(sim, gpm, null, "rhoW_in", 0.0, "kg/m^2-s", Dimensions.Builder().mass(1).length(-2).time(-1).build(), "${Re_in}*${dynvis}/${D_hyd}");')
-        c.append('        createParam(sim, gpm, null, "U_b", 0.0, "m/s", Dimensions.Builder().length(1).time(-1).build(), "${rhoW_in}/${rho}");')
-        c.append('        createParam(sim, gpm, null, "G_subchannel", 0.0, "kg/s", Dimensions.Builder().mass(1).time(-1).build(), "${rho}*${U_b}*${S_in}");')
-        c.append('')
-        c.append('        createParam(sim, gpm, null, "y_plus_target", ' + f"{yplus_tgt:.2f}" + ', "", null, null);')
-        c.append('        createParam(sim, gpm, null, "h1_wall", ' + f"{h1_m:.3e}" + ', "m", Dimensions.Builder().length(1).build(), null);')
-        c.append('')
-        c.append('        }')
+    c.append('        if (!reuse) {')
+    c.append('        // 7. Создание глобальных параметров с корректными размерностями (Tools > Parameters)')
+    c.append('        sim.println(">>> [6/7] Создание параметров в Tools > Parameters...");')
+    c.append('        GlobalParameterManager gpm = sim.get(GlobalParameterManager.class);')
+    c.append('')
+    c.append('        createParam(sim, gpm, null, "rho", ' + f"{rho:.16e}" + ', "kg/m^3", Dimensions.Builder().mass(1).length(-3).build(), null);')
+    c.append('        createParam(sim, gpm, null, "Cp", ' + f"{cp:.16e}" + ', "J/kg-K", Dimensions.Builder().mass(-1).temperature(-1).energy(1).build(), null);')
+    c.append('        createParam(sim, gpm, null, "dynvis", ' + f"{mu:.16e}" + ', "Pa-s", Dimensions.Builder().mass(1).length(-1).time(-1).build(), null);')
+    c.append('        createParam(sim, gpm, null, "kinvis", ' + f"{nu:.6e}" + ', "m^2/s", Dimensions.Builder().length(2).time(-1).build(), null);')
+    c.append('        createParam(sim, gpm, null, "lambda", ' + f"{lam:.16e}" + ', "W/m-K", Dimensions.Builder().mass(1).length(1).time(-3).temperature(-1).build(), null);')
+    c.append('        createParam(sim, gpm, null, "Pr", ' + f"{pr:.16e}" + ', "", null, null);')
+    c.append('        createParam(sim, gpm, null, "T_ref", ' + f"{t_ref_k:.16e}" + ', "K", Dimensions.Builder().temperature(1).build(), null);')
+    c.append('        createParam(sim, gpm, null, "P_ref", ' + f"{p_ref_pa:.16e}" + ', "Pa", Dimensions.Builder().mass(1).length(-1).time(-2).build(), null);')
+    c.append('')
+    c.append('        createParam(sim,gpm,null,"P_init",0.0,"Pa",Dimensions.Builder().mass(1).length(-1).time(-2).build(),null);')
+    c.append('        createParam(sim,gpm,null,"T_init",0.0,"K",Dimensions.Builder().temperature(1).build(),"${T_ref}");')
+    c.append('        createParam(sim,gpm,null,"U_init",' + f'{w_inlet:.16e}' + ',"m/s",Dimensions.Builder().length(1).time(-1).build(),null);')
+    c.append('        if (' + str(create_params).lower() + ') {')
+    c.append('        createParam(sim, gpm, null, "Re_in", ' + f"{re_in:.1f}" + ', "", null, null);')
+    c.append('        createParam(sim, gpm, null, "P_wet", ' + f"{p_wet_total:.8e}" + ', "m", Dimensions.Builder().length(1).build(), null);')
+    c.append('        createParam(sim, gpm, null, "S_in", ' + f"{s_in_total:.8e}" + ', "m^2", Dimensions.Builder().length(2).build(), null);')
+    c.append('        createParam(sim, gpm, null, "D_hyd", 0.0, "m", Dimensions.Builder().length(1).build(), "4*${S_in}/${P_wet}");')
+    c.append('        createParam(sim, gpm, null, "rhoW_in", 0.0, "kg/m^2-s", Dimensions.Builder().mass(1).length(-2).time(-1).build(), "${Re_in}*${dynvis}/${D_hyd}");')
+    c.append('        createParam(sim, gpm, null, "U_b", 0.0, "m/s", Dimensions.Builder().length(1).time(-1).build(), "${rhoW_in}/${rho}");')
+    c.append('        createParam(sim, gpm, null, "G_subchannel", 0.0, "kg/s", Dimensions.Builder().mass(1).time(-1).build(), "${rho}*${U_b}*${S_in}");')
+    c.append('')
+    c.append('        createParam(sim, gpm, null, "y_plus_target", ' + f"{yplus_tgt:.2f}" + ', "", null, null);')
+    c.append('        createParam(sim, gpm, null, "h1_wall", ' + f"{h1_m:.3e}" + ', "m", Dimensions.Builder().length(1).build(), null);')
+    c.append('')
+    c.append('        }')
+    c.append('        physicalValuesConfigured = configurePhysicalValues(sim,setupPhysics,subchannelRegions,' + str(use_iapws).lower() + ',' + str(enable_thermal or use_iapws).lower() + ');')
+    c.append('        }')
+    c.append('        initializeFirstSolution(sim,reuse,' + str(initialize_solution).lower() + ',physicalValuesConfigured);')
     if create_field_functions:
         c.append('        supportFunctions(sim,' + f'{lz_m:.16e}' + ', Arrays.asList(' + ','.join(json.dumps(v) for v in field_choices) + '));')
     # 9. Создание Derived Parts (PlaneSection и LineSection) по точному рекордеру 21.02.007:
@@ -835,6 +854,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('            }')
     c.append('        } catch (Exception e) { warn(sim,"  [!] Parameter " + name + ": " + e.getMessage()); }')
     c.append('    }')
+    c.extend(PHYSICS_SUPPORT.strip('\n').splitlines())
     c.extend(ANALYSIS_SUPPORT.strip('\n').splitlines())
     c.extend(JAVA_SUPPORT.strip('\n').splitlines())
     c.append('}')

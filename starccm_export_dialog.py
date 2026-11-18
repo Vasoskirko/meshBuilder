@@ -157,6 +157,16 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         self.chk_gravity.setChecked(False)
         l_ep.addWidget(self.chk_gravity)
         l_tab2.addWidget(grp_extra_phys)
+        init_info = QLabel(
+            f"Reference Pressure (абсолютное): {self.fluid_props.get('p_ref_mpa', 15.0):g} МПа. "
+            f"Initial Pressure (избыточное): 0 Па; температура: {self.fluid_props.get('t_ref_c', 300.0)+273.15:g} K; "
+            f"скорость: (0, 0, {self.yplus_data.get('velocity', 5.62):g}) м/с. "
+            "Свойства и начальные поля связаны с параметрами. Условия на границах задаются вручную.", tab_phys)
+        init_info.setWordWrap(True); l_tab2.addWidget(init_info)
+        self.chk_initialize = QCheckBox("Инициализировать начальные поля при первом запуске (без итераций решателя)", tab_phys)
+        self.chk_initialize.setChecked(True)
+        self.chk_initialize.setToolTip("Сначала настраиваются свойства, Reference Pressure и Initial Conditions. Повторный запуск не сбрасывает решение.")
+        l_tab2.addWidget(self.chk_initialize)
         l_tab2.addStretch()
         self.tabs.addTab(tab_phys, "2. Физика и свойства среды")
 
@@ -168,6 +178,7 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         l_p = QVBoxLayout(grp_param)
         self.chk_params = QCheckBox("Создать переменные: rho, Cp, dynvis, kinvis, lambda, Pr, T_ref, P_ref, Re_in, D_hyd, Ub, G...", tab_mon)
         self.chk_params.setChecked(True)
+        self.chk_params.setToolTip("Базовые параметры свойств и начальных условий обязательны и создаются независимо от этого флажка.")
         l_p.addWidget(self.chk_params)
         lbl_p_info = QLabel(
             f"Текущие значения: ρ = {self.fluid_props.get('density', 725.553):.2f} кг/м³, "
@@ -444,6 +455,7 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
             "enable_gravity": self.chk_gravity.isChecked(),
             "create_parameters": self.chk_params.isChecked(),
             "create_physics": True,
+            "initialize_solution": self.chk_initialize.isChecked(),
             "create_mass_reports": self.chk_reports.isChecked(),
             "create_quality_scene": self.chk_scene.isChecked(),
             "create_quality_histograms": self.chk_histograms.isChecked(),
@@ -471,7 +483,7 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         self.rb_inter_fuse.setChecked(values['inter_fuse'])
         self.rb_inter_intf.setChecked(not values['inter_fuse'])
         self.on_topology_mode_changed()
-        for key, attr in dict(import_mesh='chk_import', use_iapws='rb_eos_iapws',
+        for key, attr in dict(initialize_solution='chk_initialize', import_mesh='chk_import', use_iapws='rb_eos_iapws',
             enable_thermal='chk_thermal', enable_gravity='chk_gravity', create_parameters='chk_params',
             create_mass_reports='chk_reports', create_quality_scene='chk_scene',
             create_quality_histograms='chk_histograms', gap_sections='chk_gap_sections',
