@@ -19,7 +19,7 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         if not HAS_QT:
             return
         super().__init__(parent)
-        self.setWindowTitle("Экспорт для Simcenter STAR-CCM+ (Plot3D + Java Macro v21.02+)")
+        self.setWindowTitle("Экспорт для Simcenter STAR-CCM+ (Plot3D + Java Macro 2602)")
         self.resize(700, 840)
 
         self.mesh_result = mesh_result
@@ -188,9 +188,20 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
 
         grp_qual = QGroupBox("3. Контроль качества сетки", tab_mon)
         l_q = QVBoxLayout(grp_qual)
-        self.chk_scene = QCheckBox("Создать 3D-сцену контроля качества сетки (Quality_VolumeChange_Scene)", grp_qual)
+        self.chk_scene = QCheckBox("Создать скалярные сцены качества на среднем поперечном сечении", grp_qual)
         self.chk_scene.setChecked(True)
         l_q.addWidget(self.chk_scene)
+        self.chk_histograms = QCheckBox("Гистограммы качества (число ячеек) и отчеты min/max", grp_qual)
+        self.chk_histograms.setChecked(True)
+        l_q.addWidget(self.chk_histograms)
+        bins_row = QHBoxLayout()
+        bins_row.addWidget(QLabel("Интервалов гистограммы:", grp_qual))
+        self.spin_quality_bins = QSpinBox(grp_qual)
+        self.spin_quality_bins.setRange(5, 500)
+        self.spin_quality_bins.setValue(50)
+        self.chk_histograms.toggled.connect(self.spin_quality_bins.setEnabled)
+        bins_row.addWidget(self.spin_quality_bins)
+        l_q.addLayout(bins_row)
         l_tab3.addWidget(grp_qual)
         l_tab3.addStretch()
         self.tabs.addTab(tab_mon, "3. Мониторы и параметры")
@@ -267,6 +278,11 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         l_ss.addWidget(self.lbl_sub_dz_hint)
         l_tab4.addWidget(grp_sub_sec)
 
+        self.chk_gap_sections = QCheckBox("Продольные сечения зазоров между исходными подканалами (Fuse)", tab_parts)
+        self.chk_gap_sections.setChecked(True)
+        self.chk_gap_sections.setToolTip("Одна ориентированная поверхность на общий зазор; без создания стенки или интерфейса")
+        l_tab4.addWidget(self.chk_gap_sections)
+
         grp_probes = QGroupBox("3. Линейные зонды (Line Sections)", tab_parts)
         l_pr = QVBoxLayout(grp_probes)
         self.chk_axis_probes = QCheckBox("Создать осевые зонды по центру живого сечения каждой ячейки (Probe_Axis_Sub_N)", grp_probes)
@@ -293,6 +309,7 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
 
     def on_topology_mode_changed(self):
         is_intf = self.rb_inter_intf.isChecked()
+        self.chk_gap_sections.setEnabled(not is_intf)
         if is_intf:
             self.rb_io_split.setChecked(True)
             self.rb_io_split.setEnabled(True)
@@ -374,6 +391,9 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
             "create_physics": True,
             "create_mass_reports": self.chk_reports.isChecked(),
             "create_quality_scene": self.chk_scene.isChecked(),
+            "create_quality_histograms": self.chk_histograms.isChecked(),
+            "quality_bins": self.spin_quality_bins.value(),
+            "gap_sections": self.chk_gap_sections.isChecked() and self.chk_gap_sections.isEnabled(),
             "n_planes": self.spin_n_planes.value() if self.chk_g_n_planes.isChecked() else 0,
             "n_sub_planes": self.spin_sub_n_planes.value() if self.chk_sub_n_planes.isChecked() else 0,
             "key_planes": self.chk_g_key_planes.isChecked(),

@@ -191,3 +191,160 @@ public static void main(String[] args) throws Exception {
             check=Path(tmp)/'Check.java';check.write_text(harness,encoding='utf-8')
             result=subprocess.run([java,str(check),str(source)],capture_output=True,text=True,timeout=60)
             self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+    def test_compact_names_contain_physical_height_and_stay_unique(self):
+        from starccm_export_geometry import plane_label
+        self.assertEqual(plane_label('Section_Global',.5,.05),'Section_Global_Z_25mm')
+        for height in (1e-6,.05,1000):
+            positions=plane_positions(100,True)
+            names=[plane_label('Section',pos,height) for pos in positions]
+            self.assertEqual(len(names),len(set(names)))
+            self.assertTrue(all('000000000000' not in name for name in names))
+        macro=self.macro()
+        self.assertIn('"Section_Global_Z_25mm"',macro)
+        self.assertIn('"Subchannel_1_Section_Z_0mm"',macro)
+        self.assertNotIn('Section_Global_Z_0.500000000000',macro)
+        # Names are rounded, but geometry coordinates retain scientific precision.
+        self.assertIn('lz * 5.0000000000000000e-01',macro)
+    def test_gap_plane_uses_original_common_edge_and_one_source_side(self):
+        from starccm_export_geometry import shared_gap_sections
+        _,domains=export_geometry(self.result,self.model)
+        gaps=shared_gap_sections(domains)
+        self.assertEqual(len(gaps),1)
+        gap=gaps[0]
+        self.assertEqual((gap['a'],gap['b']),(1,2))
+        self.assertAlmostEqual(np.linalg.norm(gap['normal']),1)
+        common=[p for p in domains[0]['triangle'] if any(np.allclose(p,q,rtol=0,atol=1e-12) for q in domains[1]['triangle'])]
+        self.assertAlmostEqual(np.dot(common[1]-common[0],gap['normal']),0,places=12)
+        self.assertGreater(np.dot(domains[1]['center']-domains[0]['center'],gap['normal']),0)
+        macro=self.macro()
+        self.assertIn('createOrientedPlaneSection(sim, labCoord, uLen, sourceParts.get(0), "Gap_Sub1_Sub2"',macro)
+        self.assertNotIn('"Gap_Sub1_Sub2"',self.macro(gap_sections=False))
+    def test_histograms_and_scenes_are_configured_with_real_fields_and_parts(self):
+        macro=self.macro(quality_bins=37)
+        for metric in ('CellQuality','FaceValidity','VolumeChange','SkewnessAngle'):
+            self.assertIn(f'"Quality_Histogram_{metric}", 37',macro)
+            self.assertIn(f'"Quality_{metric}"',macro)
+        self.assertIn('WeightingMode.FREQUENCY',macro)
+        self.assertIn('axis.hasBinningDescriptor().setNumberOfBins(bins)',macro)
+        self.assertIn('scalar.getInputParts().setObjects(surfaces)',macro)
+        self.assertIn('scalar.getScalarDisplayQuantity().setFieldFunction(metric)',macro)
+        self.assertIn('scalar.setFillMode(ScalarFillMode.NATIVE)',macro)
+        self.assertIn('minimum.getParts().setObjects(regions)',macro)
+        self.assertNotIn('createScalarScene(',macro)
+        self.assertIn('if (surfaces.isEmpty()) throw',macro)
+        self.assertIn('[!] Качество CellQuality',macro)
+    def test_quality_options_and_missing_global_mid(self):
+        macro=self.macro(create_quality_histograms=False)
+        self.assertNotIn('HistogramDataSeriesConfig',macro)
+        self.assertNotIn('createQualityHistogram(',macro)
+        macro=self.macro(create_quality_scene=False,create_quality_histograms=False)
+        self.assertNotIn('createQualityExtrema(sim, subchannelRegions',macro)
+        self.assertNotIn('qualitySurfaces.add',macro)
+        macro=self.macro(n_planes=0,key_planes=False)
+        self.assertIn('"Quality_Section_Z_25mm"',macro)
+        for value in (0,501,True,1.2):
+            with self.assertRaises(ValueError):self.macro(quality_bins=value)
+    def test_quality_and_gap_controls_in_dialog(self):
+        dialog=StarCcmExportDialog(mesh_result=self.result,bundle_model=self.model)
+        try:
+            self.assertTrue(dialog.chk_histograms.isChecked())
+            self.assertEqual(dialog.spin_quality_bins.value(),50)
+            self.assertFalse(dialog.chk_gap_sections.isEnabled())
+            dialog.rb_inter_fuse.setChecked(True)
+            self.assertTrue(dialog.chk_gap_sections.isEnabled())
+            dialog.chk_histograms.setChecked(False)
+            self.assertFalse(dialog.spin_quality_bins.isEnabled())
+        finally:dialog.deleteLater()
+    def test_java_quality_helpers_assign_metric_parts_and_histogram_bins(self):
+        import shutil, subprocess, tempfile
+        java=shutil.which('java')
+        if not java or 'jdk.compiler' not in subprocess.run([java,'--list-modules'],capture_output=True,text=True).stdout:
+            self.skipTest('JDK compiler unavailable')
+        macro=self.macro()
+        methods=macro[macro.index('    private void createQualityScene'):macro.index('    private double measureArea')]
+        harness='''import java.util.*;
+class CheckQuality {
+METHODS
+static class NamedObject {}
+static class Region extends NamedObject {}
+static class FieldFunction { String getPresentationName() { return "Cell Quality"; } }
+static class FvRepresentation {}
+enum ScalarFillMode { NATIVE }
+static class Input { List<?> parts; void setObjects(List<?> p) { parts=p; } }
+static class Quantity { FieldFunction ff; void setFieldFunction(FieldFunction f) { ff=f; } }
+static class ScalarDisplayer {
+    Input input=new Input(); Quantity quantity=new Quantity(); ScalarFillMode fill; FvRepresentation rep;
+    void setRepresentation(FvRepresentation r) { rep=r; }
+    Input getInputParts() { return input; }
+    Quantity getScalarDisplayQuantity() { return quantity; }
+    void setFillMode(ScalarFillMode f) { fill=f; }
+}
+static class DisplayerManager {
+    ScalarDisplayer scalar=new ScalarDisplayer();
+    ScalarDisplayer createScalarDisplayer(String s) { return scalar; }
+}
+static class Scene {
+    DisplayerManager dm=new DisplayerManager(); String name;
+    void setPresentationName(String n) { name=n; }
+    DisplayerManager getDisplayerManager() { return dm; }
+    void resetCamera() {}
+}
+static class SceneManager { Scene scene; Scene createScene() { scene=new Scene(); return scene; } }
+static class RepresentationManager { Object getObject(String name) { return new FvRepresentation(); } }
+enum VariableType { SCALAR }
+enum SimDataSourceType { PARTS }
+enum WeightingMode { FREQUENCY }
+enum XyPlotTypeEnum { HISTOGRAM }
+static class PlotAxisInput {
+    static class ScalarFunctionInput { FieldFunction ff; ScalarFunctionInput(FieldFunction f) { ff=f; } }
+    FieldFunction ff;
+    PlotAxisInput(VariableType v) {}
+    PlotAxisInput(VariableType v, ScalarFunctionInput f) { ff=f.ff; }
+}
+static class HistogramDataSeriesConfig {
+    List<?> parts; PlotAxisInput axis; WeightingMode weighting;
+    HistogramDataSeriesConfig(SimDataSourceType t,List<?> p,Object none,PlotAxisInput a,PlotAxisInput w,WeightingMode mode) { parts=p;axis=a;weighting=mode; }
+}
+static class BinningDescriptor { int bins; void setNumberOfBins(int b) { bins=b; } }
+static class PartAxisType { BinningDescriptor bins=new BinningDescriptor(); BinningDescriptor hasBinningDescriptor() { return bins; } }
+static class AxisTypeManager {
+    PartAxisType axis=new PartAxisType();
+    PartAxisType getAxisType(String name) { if (!name.equals("Bottom Axis Binned Data")) throw new AssertionError(); return axis; }
+}
+static class PartGroupDataSet { AxisTypeManager axes=new AxisTypeManager(); AxisTypeManager getAxisTypeManager() { return axes; } }
+static class Cartesian2DPlot {
+    String name; PartGroupDataSet data=new PartGroupDataSet(); HistogramDataSeriesConfig series;
+    void setPresentationName(String n) { name=n; }
+    void setTitle(String t) {}
+    List<?> getDataSeriesOrder() { return List.of(data); }
+}
+static class PlotManager {
+    Cartesian2DPlot plot;
+    Cartesian2DPlot createCartesian2DPlot(String name,List<XyPlotTypeEnum> modes,HistogramDataSeriesConfig series) {
+        if (!modes.equals(List.of(XyPlotTypeEnum.HISTOGRAM))) throw new AssertionError();
+        plot=new Cartesian2DPlot(); plot.series=series; return plot;
+    }
+}
+static class Simulation {
+    SceneManager scenes=new SceneManager(); PlotManager plots=new PlotManager();
+    SceneManager getSceneManager() { return scenes; }
+    PlotManager getPlotManager() { return plots; }
+    RepresentationManager getRepresentationManager() { return new RepresentationManager(); }
+}
+public static void main(String[] args) {
+    CheckQuality check=new CheckQuality(); Simulation sim=new Simulation(); FieldFunction ff=new FieldFunction();
+    List<NamedObject> surfaces=List.of(new NamedObject()); List<Region> regions=List.of(new Region());
+    check.createQualityScene(sim,surfaces,ff,"quality");
+    ScalarDisplayer scalar=sim.scenes.scene.dm.scalar;
+    if (scalar.input.parts!=surfaces || scalar.quantity.ff!=ff || scalar.fill!=ScalarFillMode.NATIVE || scalar.rep==null) throw new AssertionError("empty scene");
+    check.createQualityHistogram(sim,regions,ff,"hist",37);
+    Cartesian2DPlot plot=sim.plots.plot;
+    if (!plot.series.parts.equals(regions) || plot.series.axis.ff!=ff || plot.series.weighting!=WeightingMode.FREQUENCY || plot.data.axes.axis.bins.bins!=37) throw new AssertionError("unconfigured histogram");
+    try { check.createQualityScene(sim,List.of(),ff,"empty"); throw new AssertionError("accepted empty surface list"); }
+    catch (IllegalStateException expected) {}
+}}
+'''.replace('METHODS',methods)
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'CheckQuality.java';path.write_text(harness,encoding='utf-8')
+            r=subprocess.run([java,str(path)],capture_output=True,text=True,timeout=60)
+            self.assertEqual(r.returncode,0,r.stdout+r.stderr)

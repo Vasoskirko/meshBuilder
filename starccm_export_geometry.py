@@ -96,3 +96,25 @@ def domain_expression(triangle):
         dx, dy = b-a
         terms.append(f'(({dx:.16e})*($$Centroid[1]-({a[1]:.16e}))-({dy:.16e})*($$Centroid[0]-({a[0]:.16e})))>=-1e-16')
     return '(' + ' && '.join(terms) + ') ? 1.0 : 0.0'
+
+
+def plane_label(prefix, fraction, height):
+    """Compact physical height in mm; geometry keeps full precision separately."""
+    z_mm = float(fraction) * float(height) * 1000
+    return f'{prefix}_Z_{z_mm:.8g}mm'
+
+
+def shared_gap_sections(domains):
+    """One oriented gap per adjacent pair; use one source side to avoid duplicates."""
+    gaps = []
+    for idx, a in enumerate(domains):
+        for b in domains[idx+1:]:
+            shared = [p for p in a['triangle'] if any(np.linalg.norm(p-q) < 1e-12 for q in b['triangle'])]
+            if len(shared) != 2:
+                continue
+            edge = shared[1] - shared[0]
+            normal = np.array([-edge[1], edge[0]]) / np.linalg.norm(edge)
+            if np.dot(normal, b['center'] - a['center']) < 0:
+                normal = -normal
+            gaps.append(dict(a=a['number'], b=b['number'], origin=(shared[0]+shared[1])/2, normal=normal))
+    return gaps
