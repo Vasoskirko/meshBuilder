@@ -2,13 +2,13 @@
 """Диалог экспорта сетки Plot3D и генерации Java-макроса для Simcenter STAR-CCM+."""
 from yplus_calculator import export_yplus_data
 from pathlib import Path
-from starccm_export_profile import save_profile, load_profile, validate_options
+from starccm_export_profile import save_profile, load_profile, validate_options, FIELD_CHOICES, REPORT_CHOICES, MEAN_CHOICES
 
 try:
     from PySide6.QtWidgets import (
         QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLineEdit,
         QSpinBox, QCheckBox, QPushButton, QLabel, QFileDialog,
-        QMessageBox, QRadioButton, QButtonGroup, QDialog, QTabWidget
+        QMessageBox, QRadioButton, QButtonGroup, QDialog, QTabWidget, QPlainTextEdit, QScrollArea
     )
     HAS_QT = True
 except ImportError:
@@ -203,7 +203,7 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         self.chk_histograms.toggled.connect(self.spin_quality_bins.setEnabled)
         bins_row.addWidget(self.spin_quality_bins)
         l_q.addLayout(bins_row)
-        l_tab3.addWidget(grp_qual)
+        # Quality controls are placed on their own fifth tab below.
         l_tab3.addStretch()
         self.tabs.addTab(tab_mon, "3. Мониторы и параметры")
 
@@ -293,18 +293,71 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         l_tab4.addStretch()
         self.tabs.addTab(tab_parts, "4. Derived Parts & Сечения")
 
-        grp_workflow = QGroupBox("Объекты и диагностика макроса", self)
-        workflow_layout = QVBoxLayout(grp_workflow)
-        for attr, text in (
-            ("chk_bad_cells", "Выделять плохие ячейки (Threshold), создавать количество и процент"),
-            ("chk_group_objects", "Группировать объекты meshBuilder"),
-            ("chk_summary", "Итоговая сводка и CSV-отчет рядом с симуляцией"),
-            ("chk_field_functions", "Создать дополнительные функции поля MB_* (координаты, поток, балансы)")):
-            checkbox = QCheckBox(text, grp_workflow)
-            checkbox.setChecked(True)
-            setattr(self, attr, checkbox)
-            workflow_layout.addWidget(checkbox)
-        main_lay.addWidget(grp_workflow)
+        # Move workflow controls into their relevant tabs.
+        self.chk_group_objects = QCheckBox("Группировать объекты meshBuilder", tab_mesh)
+        self.chk_group_objects.setChecked(True)
+        l_tab1.insertWidget(l_tab1.count()-1, self.chk_group_objects)
+        fields_group = QGroupBox("3. Дополнительные функции поля (MB = meshBuilder)", tab_mon)
+        fields_layout = QVBoxLayout(fields_group)
+        self.chk_field_functions = QCheckBox("Создавать выбранные дополнительные поля", fields_group)
+        self.chk_field_functions.setChecked(True)
+        fields_layout.addWidget(self.chk_field_functions)
+        self.field_checkboxes = {}
+        for key, label in FIELD_CHOICES.items():
+            cb = QCheckBox(label, fields_group); cb.setChecked(True)
+            self.field_checkboxes[key] = cb; fields_layout.addWidget(cb)
+            self.chk_field_functions.toggled.connect(cb.setEnabled)
+        fields_layout.addWidget(QLabel("Служебные координаты и маски, необходимые макросу, создаются независимо от выбора.", fields_group))
+        l_tab3.insertWidget(l_tab3.count()-1, fields_group)
+
+        tab_quality = QWidget(); quality_layout = QVBoxLayout(tab_quality)
+        quality_layout.addWidget(grp_qual)
+        self.chk_bad_cells = QCheckBox("Выделять плохие ячейки (Threshold), считать количество и процент", tab_quality)
+        self.chk_bad_cells.setChecked(True); quality_layout.addWidget(self.chk_bad_cells)
+        self.chk_summary = QCheckBox("Итоговая сводка и CSV-отчёт рядом с симуляцией", tab_quality)
+        self.chk_summary.setChecked(True); quality_layout.addWidget(self.chk_summary)
+        check_button = QPushButton("Проверить текущую сетку в программе", tab_quality)
+        check_button.clicked.connect(self.check_export_mesh)
+        quality_layout.addWidget(check_button)
+        self.local_quality_text = QPlainTextEdit(tab_quality); self.local_quality_text.setReadOnly(True)
+        self.local_quality_text.setPlainText("Проверка выполняется по кнопке. Метрики meshBuilder и STAR различаются; результаты STAR проверяйте после импорта.")
+        quality_layout.addWidget(self.local_quality_text)
+        self.tabs.addTab(tab_quality, "5. Качество сетки")
+
+        tab_analysis = QWidget(); analysis_layout = QVBoxLayout(tab_analysis)
+        info = QLabel("Отчёты по выбранным исходным подканалам (выбор на вкладке 4), включая Fuse. "
+            "Плотность и вязкость берутся из текущих полей STAR, в том числе при IAPWS. "
+            "Другие группы также создают необходимые геометрические отчёты. "
+            "Вычисления требуют инициализированного или рассчитанного решения.", tab_analysis)
+        info.setWordWrap(True); analysis_layout.addWidget(info)
+        self.report_checkboxes = {}
+        for key, label in REPORT_CHOICES.items():
+            cb = QCheckBox(label, tab_analysis); self.report_checkboxes[key] = cb
+            analysis_layout.addWidget(cb)
+        note = QLabel("Cf = τw / (ρin Ub²/2); Darcy по стенке = 4 Cf. Перепад давления включает ускорение и гравитацию: "
+            "он не считается чистыми потерями трения. Re = |ṁ| Dh / (A μin), свойства усредняются по площади входа.", tab_analysis)
+        note.setWordWrap(True); analysis_layout.addWidget(note)
+        self.mean_group = QGroupBox("HYBRID: накопление средних полей по временным шагам", tab_analysis)
+        means_layout = QVBoxLayout(self.mean_group); self.mean_checkboxes = {}
+        for key, label in MEAN_CHOICES.items():
+            cb = QCheckBox(label, self.mean_group); self.mean_checkboxes[key] = cb; means_layout.addWidget(cb)
+        start_row = QHBoxLayout(); start_row.addWidget(QLabel("Начальный временной шаг:", self.mean_group))
+        self.spin_mean_start = QSpinBox(self.mean_group); self.spin_mean_start.setRange(1, 1000000000)
+        start_row.addWidget(self.spin_mean_start); means_layout.addLayout(start_row)
+        mean_note = QLabel("Один отсчёт на временной шаг; используйте постоянный Δt. Начните после переходного процесса. "
+            "Повторный запуск сохраняет накопленную статистику; настройка шага применяется только к новым мониторам. "
+            "Решатель автоматически не запускается.", self.mean_group)
+        mean_note.setWordWrap(True); means_layout.addWidget(mean_note)
+        analysis_layout.addWidget(self.mean_group); analysis_layout.addStretch()
+        self.rb_turb_srh.toggled.connect(self.mean_group.setEnabled)
+        self.mean_group.setEnabled(self.rb_turb_srh.isChecked())
+        self.tabs.addTab(tab_analysis, "6. Расчётные величины")
+        # Scroll long tabs rather than growing the dialog beyond the screen.
+        for index in range(self.tabs.count()):
+            widget = self.tabs.widget(index); title = self.tabs.tabText(index)
+            self.tabs.removeTab(index)
+            scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setWidget(widget)
+            self.tabs.insertTab(index, scroll, title)
         profile_row = QHBoxLayout()
         save_button = QPushButton("Сохранить профиль экспорта…", self)
         load_button = QPushButton("Загрузить профиль экспорта…", self)
@@ -326,6 +379,15 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         btn_cancel.clicked.connect(self.reject)
         b_box.addWidget(btn_cancel)
         main_lay.addLayout(b_box)
+
+    def check_export_mesh(self):
+        from mesh_quality import analyse_result, format_report, DEFAULT_PROFILE
+        self.local_quality_text.setPlainText("Проверка…")
+        try:
+            report = analyse_result(self.mesh_result, profile=DEFAULT_PROFILE)
+            self.local_quality_text.setPlainText(format_report(report))
+        except Exception as exc:
+            self.local_quality_text.setPlainText(f"Проверка не завершена: {exc}")
 
     def on_topology_mode_changed(self):
         is_intf = self.rb_inter_intf.isChecked()
@@ -396,6 +458,10 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
             "group_objects": self.chk_group_objects.isChecked(),
             "create_summary": self.chk_summary.isChecked(),
             "create_field_functions": self.chk_field_functions.isChecked(),
+            "field_functions": [k for k, cb in self.field_checkboxes.items() if cb.isChecked()],
+            "subchannel_reports": [k for k, cb in self.report_checkboxes.items() if cb.isChecked()],
+            "time_mean_fields": [k for k, cb in self.mean_checkboxes.items() if cb.isChecked()],
+            "mean_start_step": self.spin_mean_start.value(),
             "selected_subchannels": sel_subs
         }
 
@@ -426,6 +492,9 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         if values['n_sub_planes']:self.spin_sub_n_planes.setValue(values['n_sub_planes'])
         for i, checkbox in enumerate(self.sub_checkboxes,1):
             checkbox.setChecked(i in values['selected_subchannels'])
+        for key, checkboxes in (('field_functions', self.field_checkboxes), ('subchannel_reports', self.report_checkboxes), ('time_mean_fields', self.mean_checkboxes)):
+            for name, checkbox in checkboxes.items(): checkbox.setChecked(name in values[key])
+        self.spin_mean_start.setValue(values['mean_start_step'])
         self.update_dz_hint()
 
     def save_export_profile(self):

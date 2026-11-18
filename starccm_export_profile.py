@@ -4,6 +4,22 @@ import os
 import tempfile
 from pathlib import Path
 
+FIELD_CHOICES = {
+    'z_fraction': 'Относительная высота MB_ZFraction',
+    'speed': 'Модуль скорости MB_Speed',
+    'mass_flux': 'Модуль массового потока MB_MassFluxMagnitude',
+    'quality': 'Ссылки на нативные поля качества MB_*',
+    'balances': 'Знаковые балансы массы и энергии MB_*',
+}
+REPORT_CHOICES = {
+    'geometry': 'Площади, объёмы, смоченный периметр и гидравлический диаметр',
+    'hydraulics': 'Расход, средняя осевая скорость, давление, перепад и Reynolds',
+    'wall': 'Напряжение трения на стенке, Cf и Darcy по трению',
+    'thermal': 'Среднемассовая температура, температура стенки и тепловая мощность',
+}
+MEAN_CHOICES = {'velocity': 'Вектор скорости', 'pressure': 'Давление',
+    'temperature': 'Температура', 'density': 'Плотность', 'viscosity': 'Динамическая вязкость',
+    'wall_shear': 'Вектор напряжения трения на стержнях', 'wall_heat_flux': 'Плотность теплового потока на стержнях'}
 DEFAULTS = dict(import_mesh=True, inner_fuse=True, inter_fuse=False,
     region_mode='by_subchannel', inlet_outlet_mode='by_subchannel', rename_boundaries=True,
     rod_wall_mode='by_rod', turbulence_model='rst', use_iapws=False,
@@ -11,7 +27,8 @@ DEFAULTS = dict(import_mesh=True, inner_fuse=True, inter_fuse=False,
     create_mass_reports=True, create_quality_scene=True, create_quality_histograms=True,
     quality_bins=50, gap_sections=False, n_planes=11, n_sub_planes=11,
     key_planes=True, sub_planes=True, axis_probes=True, selected_subchannels=[],
-    create_bad_cells=True, group_objects=True, create_summary=True, create_field_functions=True)
+    create_bad_cells=True, group_objects=True, create_summary=True, create_field_functions=True,
+    field_functions=list(FIELD_CHOICES), subchannel_reports=[], time_mean_fields=[], mean_start_step=1)
 ENUMS = dict(region_mode=('by_subchannel','monolithic'), inlet_outlet_mode=('by_subchannel','single'),
     rod_wall_mode=('by_rod','sectors_60','monolithic'), turbulence_model=('rst','hybrid_srh'))
 
@@ -26,6 +43,12 @@ def validate_options(options, sub_count=None):
             raise ValueError(f'{key}: неверный тип значения')
         if key in ENUMS and value not in ENUMS[key]:
             raise ValueError(f'{key}: неизвестный вариант')
+    for key, choices in (('field_functions', FIELD_CHOICES), ('subchannel_reports', REPORT_CHOICES), ('time_mean_fields', MEAN_CHOICES)):
+        selected = values[key]
+        if any(type(v) is not str or v not in choices for v in selected) or len(set(selected)) != len(selected):
+            raise ValueError(f'{key}: неизвестный или повторяющийся выбор')
+    if not 1 <= values['mean_start_step'] <= 1000000000:
+        raise ValueError('Начальный шаг усреднения должен быть положительным целым')
     if not 5<=values['quality_bins']<=500:
         raise ValueError('quality_bins: требуется значение 5…500')
     for key in ('n_planes','n_sub_planes'):

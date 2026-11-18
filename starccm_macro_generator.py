@@ -5,6 +5,8 @@ import hashlib
 import json
 import re
 from starccm_macro_support import JAVA_SUPPORT
+from starccm_analysis import ANALYSIS_SUPPORT
+from starccm_export_profile import FIELD_CHOICES, REPORT_CHOICES, MEAN_CHOICES
 from yplus_calculator import export_yplus_data
 from starccm_export_geometry import export_geometry, plane_positions, domain_expression, plane_label, shared_gap_sections
 from typing import Dict, Any, List
@@ -88,6 +90,15 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     group_objects = options.get("group_objects", True)
     create_summary = options.get("create_summary", True)
     create_field_functions = options.get("create_field_functions", True)
+    field_choices = options.get("field_functions", list(FIELD_CHOICES)) if create_field_functions else []
+    analysis_choices = options.get("subchannel_reports", [])
+    mean_choices = options.get("time_mean_fields", []) if turbulence_model == "hybrid_srh" else []
+    for selected, choices in ((field_choices, FIELD_CHOICES), (analysis_choices, REPORT_CHOICES), (mean_choices, MEAN_CHOICES)):
+        if not isinstance(selected, list) or any(type(v) is not str or v not in choices for v in selected) or len(set(selected)) != len(selected):
+            raise ValueError("Неизвестный или повторяющийся выбор полей/отчётов")
+    mean_start = options.get("mean_start_step", 1)
+    if type(mean_start) is not int or not 1 <= mean_start <= 1000000000:
+        raise ValueError("Неверный начальный шаг усреднения")
     gap_sections = inter_fuse and options.get("gap_sections", True)
     n_planes = int(options.get("n_planes", 11))
     n_sub_planes = int(options.get("n_sub_planes", n_planes))
@@ -289,6 +300,10 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('        UserFieldFunction coordXFF = getOrCreateFF(sim, "MB_X", "$$Centroid[0]");')
     c.append('        UserFieldFunction coordYFF = getOrCreateFF(sim, "MB_Y", "$$Centroid[1]");')
     c.append('        UserFieldFunction coordZFF = getOrCreateFF(sim, "MB_Z", "$$Centroid[2]");')
+    c.append('        unityFF.setDimensions(Dimensions.Builder().build());')
+    c.append('        coordXFF.setDimensions(Dimensions.Builder().length(1).build());')
+    c.append('        coordYFF.setDimensions(Dimensions.Builder().length(1).build());')
+    c.append('        coordZFF.setDimensions(Dimensions.Builder().length(1).build());')
     c.append('')
     c.append('        SurfaceIntegralReport areaRep = (SurfaceIntegralReport) sim.getReportManager().create("star.base.report.SurfaceIntegralReport");')
     c.append('        areaRep.setFieldFunction(unityFF);')
@@ -466,7 +481,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
         c.append('')
         c.append('        }')
     if create_field_functions:
-        c.append('        supportFunctions(sim,' + f'{lz_m:.16e}' + ');')
+        c.append('        supportFunctions(sim,' + f'{lz_m:.16e}' + ', Arrays.asList(' + ','.join(json.dumps(v) for v in field_choices) + '));')
     # 9. Создание Derived Parts (PlaneSection и LineSection) по точному рекордеру 21.02.007:
     c.append('        // 9. Создание сечений и зондов (Derived Parts) по рекордеру STAR-CCM+ 21.02.007:')
     c.append('        sim.println(">>> Создание производных деталей (Derived Parts)...");')
@@ -496,7 +511,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
         c.append(f'            createPlaneSection(sim, labCoord, uLen, subchannelRegions, "{label}", lz * {pos:.16e}); planesCreated++;')
     for number in range(1, subchannels_count + 1):
         positions = plane_positions(n_sub_planes, True) if sub_planes and number in selected_subchannels else []
-        if create_reports:
+        if create_reports or analysis_choices:
             positions = sorted(set(positions + [0., 1.]))
         for pos in positions:
             # A single source has the same domain as the global plane: reuse it.
@@ -507,6 +522,18 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
             if create_reports and pos in (0., 1.):
                 side = 'In' if pos == 0 else 'Out'
                 c.append(f'            createMassFlowReport(sim, "MassFlow_{side}_Sub{number}", Collections.singletonList((PlaneSection) sim.getPartManager().getObject("{name}")), reportCounts);')
+        if analysis_choices and number in selected_subchannels:
+            in_name = plane_label("Section_Global" if subchannels_count == 1 and 0. in plane_positions(n_planes,key_planes) else f"Subchannel_{number}_Section", 0., lz_m)
+            out_name = plane_label("Section_Global" if subchannels_count == 1 and 1. in plane_positions(n_planes,key_planes) else f"Subchannel_{number}_Section", 1., lz_m)
+            # Wall Threshold uses the original triangle, including shared rods after Fuse.
+            if domains:
+                expression = domain_expression(domains[number-1]["triangle"])
+                c.append(f'            UserFieldFunction wallMask{number}=getOrCreateFF(sim,"MB_WallMask_Sub{number}","{expression}");')
+                walls = f'Collections.singletonList(threshold(sim,allRods,wallMask{number},"Subchannel_{number}_RodWalls"))'
+            else:
+                walls = f'rodBoundaries(subchannelRegions.get({number-1}))'
+            categories = ','.join(json.dumps(v) for v in analysis_choices)
+            c.append(f'            createSubchannelAnalysis(sim,{number},sourceParts.get({number-1}),{walls},(PlaneSection)sim.getPartManager().getObject("{in_name}"),(PlaneSection)sim.getPartManager().getObject("{out_name}"),lz,Arrays.asList({categories}),{str(enable_thermal or use_iapws).lower()},reportCounts);')
     if gap_sections:
         for gap in shared_gap_sections(domains):
             a, b = gap['a'], gap['b']
@@ -522,6 +549,8 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('        } catch (Exception e) { sim.println("  [!] Ошибка при создании Derived Parts: " + e.getMessage()); }')
 
     if create_reports:
+        if turbulence_model == "hybrid_srh":
+            c.append('        warn(sim,"  [!] HYBRID: flux balances exclude dM/dt and dE/dt; they are not full transient conservation residuals.");')
         c.append('        createMassFlowReport(sim, "MassFlow_Inlet_Total", allInlets, reportCounts);')
         c.append('        createMassFlowReport(sim, "MassFlow_Outlet_Total", allOutlets, reportCounts);')
         c.append('        createExpressionReport(sim, "Imbalance_MassFlow", "abs(${MassFlow_Inlet_TotalReport} + ${MassFlow_Outlet_TotalReport}) / max(abs(${MassFlow_Inlet_TotalReport}), 1e-30) * 100", reportCounts);')
@@ -536,12 +565,18 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
             c.append('        createExpressionReport(sim, "Energy_Flow_Outlet_Total", "${MassFlow_Outlet_TotalReport} * ${TotalEnthalpy_OutletReport}", reportCounts);')
             c.append('        createExpressionReport(sim, "Imbalance_Energy", "abs(${Energy_Flow_Inlet_TotalReport} + ${Energy_Flow_Outlet_TotalReport} - ${Heat_Flux_Walls_TotalReport}) / max(max(abs(${Energy_Flow_Inlet_TotalReport}), abs(${Energy_Flow_Outlet_TotalReport})), max(abs(${Heat_Flux_Walls_TotalReport}), 1e-30)) * 100", reportCounts);')
 
-    if create_field_functions and create_reports:
+    if "balances" in field_choices and create_reports:
         c.append('        try { UserFieldFunction ff=getOrCreateFF(sim,"MB_MassBalanceSigned","${MassFlow_Inlet_TotalReport} + ${MassFlow_Outlet_TotalReport}"); ff.setDimensions(Dimensions.Builder().mass(1).time(-1).build()); }')
         c.append('        catch (Exception e) { warn(sim,"  [!] Mass balance field: " + e.getMessage()); }')
         if enable_thermal or use_iapws:
             c.append('        try { UserFieldFunction ff=getOrCreateFF(sim,"MB_EnergyBalanceSigned","${Energy_Flow_Inlet_TotalReport} + ${Energy_Flow_Outlet_TotalReport} - ${Heat_Flux_Walls_TotalReport}"); ff.setDimensions(Dimensions.Builder().mass(1).length(2).time(-3).build()); }')
             c.append('        catch (Exception e) { warn(sim,"  [!] Energy balance field: " + e.getMessage()); }')
+    for key in mean_choices:
+        if key in ('temperature','wall_heat_flux') and not (enable_thermal or use_iapws):
+            continue
+        native = dict(velocity='Velocity',pressure='Pressure',temperature='Temperature',density='Density',viscosity='DynamicViscosity',wall_shear='WallShearStress',wall_heat_flux='BoundaryHeatFlux')[key]
+        parts = 'allRods' if key in ('wall_shear','wall_heat_flux') else 'subchannelRegions'
+        c.append(f'        createTimeMean(sim,{parts},"{native}",{mean_start});')
     c.append('        int[] qualityCounts = new int[] {0, 0};')
     c.append('        List<UserFieldFunction> badMasks = new ArrayList<>();')
     if create_scene:
@@ -552,13 +587,14 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
             c.append(f'            createPlaneSection(sim, sim.getCoordinateSystemManager().getLabCoordinateSystem(), sim.getUnitsManager().getPreferredUnits(Dimensions.Builder().length(1).build()), subchannelRegions, "{middle_name}", {lz_m/2:.16e}); planesCreated++;')
         c.append(f'            qualitySurfaces.add((PlaneSection) sim.getPartManager().getObject("{middle_name}"));')
         c.append('        } catch (Exception e) { sim.println("  [!] Сечение качества: " + e.getMessage()); }')
-    if create_scene or create_histograms or create_bad_cells:
+    if create_scene or create_histograms or create_bad_cells or "quality" in field_choices:
         for metric, label, suffix, criterion in QUALITY_METRICS:
             c.append('        try {')
             c.append(f'            FieldFunction metric = qualityField(sim, "{metric}", "{label}");')
-            if create_field_functions:
+            if "quality" in field_choices:
                 c.append(f'            UserFieldFunction alias = getOrCreateFF(sim,"MB_{metric}","${{" + metric.getFunctionName() + "}}"); alias.setDimensions(metric.getDimensions());')
-            c.append(f'            createQualityExtrema(sim, subchannelRegions, metric, "{metric}", reportCounts);')
+            if create_scene or create_histograms or create_bad_cells:
+                c.append(f'            createQualityExtrema(sim, subchannelRegions, metric, "{metric}", reportCounts);')
             if create_bad_cells:
                 c.append(f'            UserFieldFunction bad = createBadCells(sim, subchannelRegions, metric, "{metric}", "{criterion.replace(" deg", "")}", reportCounts); if (bad != null) badMasks.add(bad);')
             if create_histograms:
@@ -799,6 +835,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('            }')
     c.append('        } catch (Exception e) { warn(sim,"  [!] Parameter " + name + ": " + e.getMessage()); }')
     c.append('    }')
+    c.extend(ANALYSIS_SUPPORT.strip('\n').splitlines())
     c.extend(JAVA_SUPPORT.strip('\n').splitlines())
     c.append('}')
     code = "\n".join(c) + "\n"

@@ -120,16 +120,22 @@ JAVA_SUPPORT = r'''
             createExpressionReport(sim,"Quality_BadPercent_Any","100 * ${Quality_BadCount_AnyReport} / max(${Quality_TotalCellCountReport},1)",counts);
         } catch (Exception e) { warn(sim,"  [!] Combined bad cells: "+e.getMessage()); }
     }
-    private void supportFunctions(Simulation sim, double height) {
-        String[] names={"MB_One","MB_X","MB_Y","MB_Z","MB_ZFraction","MB_Speed","MB_MassFluxMagnitude"};
-        String[] definitions={"1.0","$$Centroid[0]","$$Centroid[1]","$$Centroid[2]",
-            "${MB_Z} / (" + Double.toString(height) + " [m])","mag($$Velocity)","${Density} * mag($$Velocity)"};
-        Dimensions[] dimensions={Dimensions.Builder().build(),Dimensions.Builder().length(1).build(),
-            Dimensions.Builder().length(1).build(),Dimensions.Builder().length(1).build(),Dimensions.Builder().build(),
-            Dimensions.Builder().length(1).time(-1).build(),Dimensions.Builder().mass(1).length(-2).time(-1).build()};
-        for (int i=0;i<names.length;i++) try {
-            UserFieldFunction ff = getOrCreateFF(sim,names[i],definitions[i]); ff.setDimensions(dimensions[i]);
-        } catch (Exception e) { warn(sim,"  [!] Field function " + names[i] + ": " + e.getMessage()); }
+    private void supportFunctions(Simulation sim, double height, List<String> selected) {
+        if (selected.contains("z_fraction")) try {
+            // A dimensioned global parameter is valid STAR syntax; inline [m] literals are not.
+            exportHeight(sim,height);
+            getOrCreateFF(sim,"MB_Z","$$Centroid[2]").setDimensions(Dimensions.Builder().length(1).build());
+            UserFieldFunction ff=getOrCreateFF(sim,"MB_ZFraction","${MB_Z} / ${MB_ExportHeight}");
+            ff.setDimensions(Dimensions.Builder().build());
+        } catch (Exception e) { warn(sim,"  [!] Relative height: " + e.getMessage()); }
+        if (selected.contains("speed")) try {
+            UserFieldFunction ff=getOrCreateFF(sim,"MB_Speed","mag($$Velocity)");
+            ff.setDimensions(Dimensions.Builder().length(1).time(-1).build());
+        } catch (Exception e) { warn(sim,"  [!] Speed: " + e.getMessage()); }
+        if (selected.contains("mass_flux")) try {
+            UserFieldFunction ff=getOrCreateFF(sim,"MB_MassFluxMagnitude","${Density} * mag($$Velocity)");
+            ff.setDimensions(Dimensions.Builder().mass(1).length(-2).time(-1).build());
+        } catch (Exception e) { warn(sim,"  [!] Mass flux: " + e.getMessage()); }
     }
     private void groupManaged(Simulation sim, Object manager, String category) {
         Map<String,List<NamedObject>> groups=new TreeMap<>();

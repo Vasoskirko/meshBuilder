@@ -130,7 +130,8 @@ class FusedExportTests(unittest.TestCase):
         modules=subprocess.run([java,'--list-modules'],capture_output=True,text=True)
         if 'jdk.compiler' not in modules.stdout:
             self.skipTest('JDK compiler module unavailable')
-        macro=self.macro()
+        macro=self.macro(subchannel_reports=['geometry','hydraulics','wall','thermal'],
+            turbulence_model='hybrid_srh',time_mean_fields=['velocity','pressure','temperature','density','viscosity'])
         start=macro.index('    private int classifyBoundary')
         end=macro.index('    private void registerReport',start)
         method=macro[start:end].replace('private int classifyBoundary','private static int classifyBoundary')
