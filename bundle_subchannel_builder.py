@@ -122,7 +122,12 @@ class BundleBuilderWindow(BundleBuilderUiMixin, QMainWindow):
     def validate_mesh_inputs(self, *args):
         if self._layer_inputs is None and self._mesh_inputs is None:
             return
-        layer, core = self.mesh_inputs()
+        try:
+            layer, core = self.mesh_inputs()
+            # Read the active editor as well: an invalid draft was not saved.
+            self.mesh_subpanel.read_params()
+        except ValueError:
+            layer, core = None, None
         if self._layer_inputs is not None and layer != self._layer_inputs:
             self.current_layer_result = None
             self._layer_inputs = None
@@ -799,7 +804,12 @@ class BundleBuilderWindow(BundleBuilderUiMixin, QMainWindow):
     def on_build_layer_only(self):
         if not self.model.selected_subchannels:
             return
-        self.mesh_subpanel.save_current_ui_to_active_scope()
+        try:
+            self.mesh_subpanel.save_current_ui_to_active_scope()
+        except ValueError as exc:
+            self.validate_mesh_inputs()
+            QMessageBox.warning(self, "Проверьте ввод", str(exc))
+            return
         self.mesh_subpanel.update_tree_status()
         base_p = self.base_params
 
@@ -853,7 +863,12 @@ class BundleBuilderWindow(BundleBuilderUiMixin, QMainWindow):
     def on_build_multiblock_mesh(self):
         if not self.model.selected_subchannels:
             return
-        self.mesh_subpanel.save_current_ui_to_active_scope()
+        try:
+            self.mesh_subpanel.save_current_ui_to_active_scope()
+        except ValueError as exc:
+            self.validate_mesh_inputs()
+            QMessageBox.warning(self, "Проверьте ввод", str(exc))
+            return
         self.mesh_subpanel.update_tree_status()
         base_p = self.base_params
         is_layer_mode = base_p.law == "wall_core"
