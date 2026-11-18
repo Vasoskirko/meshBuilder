@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Генератор структурированной сетки подканалов со сбором поблочных профилей нормальных шагов."""
 import math, os, sys
+import tempfile
 from dataclasses import dataclass, field
 import numpy as np
 
@@ -587,14 +588,24 @@ def fill_subchannel_core(layer_result, bundle_model, growth=1.1, max_size=100e-6
     )
 
 def export_subchannel_plot3d(result, filename):
+    if not result.complete:
+        raise ValueError("Нельзя экспортировать неполную сетку: сначала заполните ядро")
     p, nz, z_len = result.params, result.params.nz, result.params.z_len
-    with open(filename, "w", encoding="ascii") as f:
-        f.write(f"{len(result.blocks)}\n")
-        for bx, by in result.blocks: f.write(f"{bx.shape[0]} {bx.shape[1]} {nz + 1}\n")
-        for x, y in result.blocks:
-            b_ni, b_nj = x.shape
-            for coord in (x, y, None):
-                for k in range(nz + 1):
-                    flat = coord.ravel(order="F") if coord is not None else np.full(b_ni * b_nj, z_len * k / nz)
-                    for start in range(0, len(flat), 6):
-                        f.write(" ".join(f"{v:.16e}" for v in flat[start:start + 6]) + "\n")
+    target = os.fspath(filename)
+    fd, temp = tempfile.mkstemp(prefix=".bundle_mesh_", suffix=".tmp", dir=os.path.dirname(os.path.abspath(target)))
+    os.close(fd)
+    try:
+        with open(temp, "w", encoding="ascii", newline="\n") as f:
+            f.write(f"{len(result.blocks)}\n")
+            for bx, by in result.blocks: f.write(f"{bx.shape[0]} {bx.shape[1]} {nz + 1}\n")
+            for x, y in result.blocks:
+                b_ni, b_nj = x.shape
+                for coord in (x, y, None):
+                    for k in range(nz + 1):
+                        flat = coord.ravel(order="F") if coord is not None else np.full(b_ni * b_nj, z_len * k / nz)
+                        for start in range(0, len(flat), 6):
+                            f.write(" ".join(f"{v:.16e}" for v in flat[start:start + 6]) + "\n")
+        os.replace(temp, target)
+    finally:
+        if os.path.exists(temp):
+            os.unlink(temp)
