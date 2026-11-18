@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
 """Генератор канонического Java-макроса автоматизации для Simcenter STAR-CCM+ (версии 21.02+)."""
 import math
+from yplus_calculator import export_yplus_data
 from typing import Dict, Any, List
 from pathlib import Path
 import numpy as np
 
 def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_props, yplus_data, options):
     p = mesh_result.params
+    yplus_data = export_yplus_data(yplus_data, default_h1=p.h1)
     blocks = mesh_result.blocks
     blocks_count = len(blocks)
     subchannels_count = getattr(mesh_result, "subchannels_count", max(1, blocks_count // 6))
@@ -38,7 +40,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
 
     rho = float(fluid_props.get("density", 725.553))
     mu = float(fluid_props.get("dyn_vis", 8.835e-5))
-    nu = float(fluid_props.get("kin_vis", 1.218e-7))
+    nu = float(fluid_props.get("kin_vis", mu / rho))
     cp = float(fluid_props.get("cp", 5476.0))
     lam = float(fluid_props.get("lambda", 0.557))
     pr = float(fluid_props.get("prandtl", 0.868))

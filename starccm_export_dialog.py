@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Диалог экспорта сетки Plot3D и генерации Java-макроса для Simcenter STAR-CCM+."""
+from yplus_calculator import export_yplus_data
 from pathlib import Path
 
 try:
@@ -24,7 +25,7 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         self.mesh_result = mesh_result
         self.bundle_model = bundle_model
         self.fluid_props = fluid_props or {}
-        self.yplus_data = yplus_data or {}
+        self.yplus_data = export_yplus_data(yplus_data, default_h1=getattr(getattr(mesh_result, "params", None), "h1", 2.5e-6))
 
         # Высота готовой сетки важнее ещё не применённых значений UI.
         self.lz_m = 0.050

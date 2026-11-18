@@ -52,9 +52,24 @@ def calculate_yplus_and_step(mode, value, rho, mu, dh_mm, area_mm2, y_plus=1.0, 
     y1_um = y1_m * 1e6
 
     return {
-        "re": re, "u": u, "mass_flow": rho * u * A, "mass_flux": rho * u,
+        "y_plus": y_plus, "re": re, "u": u, "mass_flow": rho * u * A, "mass_flux": rho * u,
         "cf": cf, "tau_w": tau, "u_tau": ut,
         "y1_um": y1_um, "delta_y1_um": d1_um,
         "h1_insert_um": round(d1_um, 3),
         "step_display_str": f"h1 = Δy₁ = {fmt_step_auto(d1_um)} | y₁ = {fmt_step_auto(y1_um)}"
     }
+
+
+def export_yplus_data(data, default_h1=2.5e-6):
+    """Normalize calculator output and older export keys to SI export values."""
+    result = dict(data or {})
+    result["reynolds"] = float(result.get("reynolds", result.get("re", 200000.0)))
+    result["velocity"] = float(result.get("velocity", result.get("u", 5.62)))
+    result["delta_y1_m"] = float(result.get("delta_y1_m",
+        float(result["delta_y1_um"]) * 1e-6 if "delta_y1_um" in result else default_h1))
+    result["delta_y1_um"] = result["delta_y1_m"] * 1e6
+    result["y_plus"] = float(result.get("y_plus", 1.0))
+    for key in ("reynolds", "velocity", "delta_y1_m", "y_plus"):
+        if not math.isfinite(result[key]) or result[key] <= 0:
+            raise ValueError(f"{key}: требуется положительное конечное число")
+    return result
