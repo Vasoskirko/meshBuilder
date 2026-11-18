@@ -120,11 +120,13 @@ class BundleMeshInvalidationTests(unittest.TestCase):
                 # Restore selection for the next real build.
                 sid = next(sid for sid, s in self.w.model.subchannels.items() if s.sub_type == 'interior')
                 self.w.model.selected_subchannels = {sid}
+                self.w.template_configs.clear()
+                self.w.block_custom_configs.clear()
 
     def test_reset_override_invalidates_but_empty_reset_does_not(self):
         self.p.radio_template.setChecked(True)
         tid = self.p.combo_templates.currentData()
-        self.w.template_configs[tid] = replace(self.w.base_params, ni=10)
+        self.w.template_configs[tid] = replace(self.w.base_params, filename="override.xyz")
         self.p.load_active_scope_to_ui()
         self.build()
         self.p.on_reset_override()

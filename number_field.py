@@ -44,18 +44,13 @@ class NumberField(QLineEdit if HAS_QT else object):
             self.setStyleSheet("border:1px solid #c33;")
 
     def value(self):
-        text = self.text().strip()
-        clean_text = text.rstrip(",.").replace(",", ".")
-        if not clean_text:
-            return self.model.raw
         try:
-            raw_val = float(clean_text) * self.model.factor
-            if math.isfinite(raw_val):
-                self.model.raw = raw_val
-                return raw_val
+            value = self.model.commit(self.text())
         except ValueError:
-            pass
-        return self.model.raw
+            self.setStyleSheet("border:1px solid #c33;")
+            raise
+        self.setStyleSheet("")
+        return value
 
     def setValue(self, value):
         self.setText(self.model.set_value(value))
