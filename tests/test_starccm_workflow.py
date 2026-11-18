@@ -107,6 +107,14 @@ public static void main(String[] args) {
     if (a!=b || sim.rm.reports.size()!=2 || !c.tagged(a,"UserCustomTag")) throw new AssertionError("duplicate or lost user tags");
     c.groupManaged(sim,sim.rm,"Reports");c.groupManaged(sim,sim.rm,"Reports");
     if (sim.rm.groups.grouped.get("meshBuilder_Quality").size()!=1 || c.tagged(manual,OWNER)) throw new AssertionError("group changed user object");
+    Report legacy=new Report();legacy.name="MB_Legacy";sim.rm.reports.add(legacy);c.mark(sim,legacy,OWNER);
+    if (c.findOwned(sim,sim.rm,"MB_Legacy",Report.class)!=legacy || !legacy.name.equals("Legacy")) throw new AssertionError("legacy display migration");
+    if (c.findOwned(sim,sim.rm,"MB_Legacy",Report.class)!=legacy) throw new AssertionError("clean display not reused");
+    Report conflict=new Report();conflict.name="MB_Collision";sim.rm.reports.add(conflict);c.mark(sim,conflict,OWNER);
+    Report user=new Report();user.name="Collision";sim.rm.reports.add(user);
+    try { c.findOwned(sim,sim.rm,"MB_Collision",Report.class);throw new AssertionError("accepted display collision"); }
+    catch (IllegalStateException expected) {}
+    if (!conflict.name.equals("MB_Collision") || !user.name.equals("Collision")) throw new AssertionError("collision mutated objects");
     Region r1=new Region(),r2=new Region();r1.name="User renamed 1";r2.name="User renamed 2";
     sim.regions.regions.add(r2);sim.regions.regions.add(r1);
     c.mark(sim,r1,"meshBuilder.Mesh.abc");c.mark(sim,r2,"meshBuilder.Mesh.abc");

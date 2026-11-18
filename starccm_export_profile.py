@@ -5,11 +5,11 @@ import tempfile
 from pathlib import Path
 
 FIELD_CHOICES = {
-    'z_fraction': 'Относительная высота MB_ZFraction',
-    'speed': 'Модуль скорости MB_Speed',
-    'mass_flux': 'Модуль массового потока MB_MassFluxMagnitude',
-    'quality': 'Ссылки на нативные поля качества MB_*',
-    'balances': 'Знаковые балансы массы и энергии MB_*',
+    'z_fraction': 'Относительная высота ZFraction',
+    'speed': 'Модуль скорости Speed',
+    'mass_flux': 'Модуль массового потока MassFluxMagnitude',
+    'quality': 'Ссылки на нативные поля качества',
+    'balances': 'Знаковые балансы массы и энергии',
 }
 REPORT_CHOICES = {
     'geometry': 'Площади, объёмы, смоченный периметр и гидравлический диаметр',

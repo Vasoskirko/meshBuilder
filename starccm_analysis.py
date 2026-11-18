@@ -3,10 +3,10 @@ ANALYSIS_SUPPORT = r'''
     private void exportHeight(Simulation sim, double length) {
         if (!Double.isFinite(length) || length<=0) throw new IllegalArgumentException("Invalid export height");
         GlobalParameterManager manager=sim.get(GlobalParameterManager.class);
-        ScalarGlobalParameter height=findOwned(sim,manager,"MB_ExportHeight",ScalarGlobalParameter.class);
+        ScalarGlobalParameter height=findOwned(sim,manager,"ExportHeight",ScalarGlobalParameter.class);
         if (height==null) {
             height=(ScalarGlobalParameter)manager.createGlobalParameter(ScalarGlobalParameter.class,"Scalar");
-            height.setPresentationName("MB_ExportHeight"); own(sim,height);
+            height.setPresentationName("ExportHeight"); own(sim,height);
         }
         height.setDimensions(Dimensions.Builder().length(1).build());
         height.getQuantity().setValueAndUnits(length,sim.getUnitsManager().getObject("m"));
@@ -66,7 +66,7 @@ ANALYSIS_SUPPORT = r'''
             scalarReport(sim,"volume",prefix+"Volume",domain,one,counts);
             scalarReport(sim,"surface",prefix+"RodArea",walls,one,counts);
             exportHeight(sim,length);
-            derivedReport(sim,prefix+"WettedPerimeter",reportRef(prefix+"RodArea")+" / ${MB_ExportHeight}",len,counts);
+            derivedReport(sim,prefix+"WettedPerimeter",reportRef(prefix+"RodArea")+" / ${ExportHeight}",len,counts);
             derivedReport(sim,prefix+"HydraulicDiameter","4 * "+reportRef(prefix+"Area_In")+" / "+reportRef(prefix+"WettedPerimeter"),len,counts);
         } catch (Exception e) { warn(sim,"  [!] Subchannel geometry " + number + ": " + e.getMessage()); }
         if (choices.contains("hydraulics") || choices.contains("wall")) try {

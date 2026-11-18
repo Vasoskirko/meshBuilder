@@ -2,6 +2,7 @@
 JAVA_SUPPORT = r'''
     private final List<String> issues = new ArrayList<>();
     private static final String OWNER = "meshBuilder.Managed";
+    private String displayName(String name) { return name.startsWith("MB_") ? name.substring(3) : name; }
     private void warn(Simulation sim, String message) {
         issues.add(message); sim.println(message);
     }
@@ -33,17 +34,21 @@ JAVA_SUPPORT = r'''
         if (!current.contains(t)) current.add(t);
         sim.get(TagManager.class).setTags(object, current);
     }
-    private void own(Simulation sim, NamedObject object) { mark(sim, object, OWNER); }
+    private void own(Simulation sim, NamedObject object) { mark(sim, object, OWNER); object.setPresentationName(displayName(object.getPresentationName())); }
     private <T extends NamedObject> T findOwned(Simulation sim, Object manager, String name, Class<T> type) {
+        T found=null;
         for (Object candidate : objects(manager)) {
             if (!(candidate instanceof NamedObject)) continue;
             NamedObject object = (NamedObject) candidate;
-            if (!name.equals(object.getPresentationName())) continue;
-            if (!tagged(object, OWNER)) throw new IllegalStateException("Name belongs to a user object: " + name);
-            if (!type.isInstance(object)) throw new IllegalStateException("Incompatible object type: " + name);
-            return type.cast(object);
+            String actual=object.getPresentationName();
+            if (!name.equals(actual) && !(name.startsWith("MB_") && displayName(name).equals(displayName(actual)))) continue;
+            if (!tagged(object, OWNER)) throw new IllegalStateException("Name belongs to a user object: " + actual);
+            if (!type.isInstance(object)) throw new IllegalStateException("Incompatible object type: " + actual);
+            if (found!=null) throw new IllegalStateException("Ambiguous managed name: " + name);
+            found=type.cast(object);
         }
-        return null;
+        if (found!=null && name.startsWith("MB_")) found.setPresentationName(displayName(name));
+        return found;
     }
     private <T extends Report> T ownedReport(Simulation sim, String name, Class<T> type) {
         T report = findOwned(sim, sim.getReportManager(), name, type);
@@ -125,7 +130,7 @@ JAVA_SUPPORT = r'''
             // A dimensioned global parameter is valid STAR syntax; inline [m] literals are not.
             exportHeight(sim,height);
             getOrCreateFF(sim,"MB_Z","$$Centroid[2]").setDimensions(Dimensions.Builder().length(1).build());
-            UserFieldFunction ff=getOrCreateFF(sim,"MB_ZFraction","${MB_Z} / ${MB_ExportHeight}");
+            UserFieldFunction ff=getOrCreateFF(sim,"MB_ZFraction","${MB_Z} / ${ExportHeight}");
             ff.setDimensions(Dimensions.Builder().build());
         } catch (Exception e) { warn(sim,"  [!] Relative height: " + e.getMessage()); }
         if (selected.contains("speed")) try {
@@ -144,7 +149,7 @@ JAVA_SUPPORT = r'''
             NamedObject object=(NamedObject)candidate;
             if (!tagged(object,OWNER)) continue;
             String name=object.getPresentationName();
-            String detail = name.startsWith("Quality_") || name.startsWith("MB_Bad_") ? "Quality"
+            String detail = name.startsWith("Quality_") || name.startsWith("Bad_") ? "Quality"
                 : name.startsWith("Gap_") || name.startsWith("MassFlow_Gap_") ? "Gaps"
                 : name.startsWith("Subchannel_") ? "Subchannels"
                 : name.startsWith("Section_") || name.startsWith("Probe_") ? "Sections"
@@ -214,5 +219,16 @@ JAVA_SUPPORT = r'''
             sim.println("Audit CSV: "+output);
         } catch (Exception e) { warn(sim,"  [!] Audit CSV: "+e.getMessage()); }
         sim.println("Audit warnings: "+issues.size()+". Inspect boundary conditions and initialize/evaluate diagnostics before accepting results.");
+    }
+    private void cleanManagedDisplayNames(Simulation sim) {
+        Object[] managers={sim.getFieldFunctionManager(),sim.getMonitorManager()};
+        for (Object manager : managers) for (Object candidate : objects(manager)) {
+            if (!(candidate instanceof NamedObject)) continue;
+            NamedObject object=(NamedObject)candidate;
+            String name=object.getPresentationName();
+            if (!name.startsWith("MB_") || !tagged(object,OWNER)) continue;
+            try { findOwned(sim,manager,name,NamedObject.class); }
+            catch (Exception e) { warn(sim,"  [!] Display name " + name + ": " + e.getMessage()); }
+        }
     }
 '''

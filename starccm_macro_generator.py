@@ -466,6 +466,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('            }')
     c.append('            for (Object object : objects(sim.getInterfaceManager())) if (object instanceof NamedObject && tagged((NamedObject)object,OWNER)) { pairCount++; pairedNames.add(((NamedObject)object).getPresentationName()); }')
     c.append('        }')
+    c.append('        cleanManagedDisplayNames(sim);')
     c.append('        if (!reuse) {')
     c.append('        // 7. Создание глобальных параметров с корректными размерностями (Tools > Parameters)')
     c.append('        sim.println(">>> [6/7] Создание параметров в Tools > Parameters...");')
@@ -538,7 +539,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
             name = plane_label("Section_Global" if reuse else f"Subchannel_{number}_Section", pos, lz_m)
             if not reuse:
                 c.append(f'            createPlaneSection(sim, labCoord, uLen, sourceParts.get({number-1}), "{name}", lz * {pos:.16e}); planesCreated++;')
-            if create_reports and pos in (0., 1.):
+            if create_reports and pos in (0., 1.) and not (number in selected_subchannels and any(k in analysis_choices for k in ('hydraulics','wall'))):
                 side = 'In' if pos == 0 else 'Out'
                 c.append(f'            createMassFlowReport(sim, "MassFlow_{side}_Sub{number}", Collections.singletonList((PlaneSection) sim.getPartManager().getObject("{name}")), reportCounts);')
         if analysis_choices and number in selected_subchannels:
@@ -839,6 +840,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
         if (ff==null) {
             ff=sim.getFieldFunctionManager().createFieldFunction(); ff.setPresentationName(name); own(sim,ff);
         }
+        ff.setPresentationName(displayName(name));
         ff.setFunctionName(name); ff.setDefinition(definition); return ff;
     }
 """.strip('\n').splitlines())

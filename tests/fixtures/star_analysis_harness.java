@@ -141,7 +141,7 @@ class CheckAnalysis {
         int n=s.reports.entries.size();
         c.createSubchannelAnalysis(s,2,List.of(region),List.of(wall),in,out,.05,options,true,counts);
         require(s.reports.entries.size()==n,"duplicate reports on rerun");
-        ScalarGlobalParameter height=(ScalarGlobalParameter)s.parameters.entries.get("MB_ExportHeight");
+        ScalarGlobalParameter height=(ScalarGlobalParameter)s.parameters.entries.get("ExportHeight");
         require(height.quantity.value==.05 && height.quantity.units.equals("m"),"height must carry SI units");
         c.derivedReport(s,"MissingDependency","${DoesNotExistReport}",Dimensions.Builder(),counts);
         require(!s.reports.entries.containsKey("MissingDependency"),"invalid expression dependency accepted");
