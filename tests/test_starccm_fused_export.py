@@ -62,7 +62,7 @@ class FusedExportTests(unittest.TestCase):
             self.assertIn(f'MassFlow_Out_Sub{number}',macro)
         self.assertNotIn('TVS_Assembly_Section',macro)
         self.assertNotIn('if (2 <= subchannelRegions.size())',macro)
-        self.assertEqual(macro.count('createThresholdPart('),2)
+        self.assertEqual(macro.count('= threshold(sim, subchannelRegions, mask'),2)
     def test_source_masks_recover_original_cells_after_fuse(self):
         _,domains=export_geometry(self.result,self.model)
         centers=[]
@@ -118,7 +118,7 @@ class FusedExportTests(unittest.TestCase):
         finally:dialog.deleteLater()
     def test_nonfused_mode_does_not_create_thresholds(self):
         macro=generate_starccm_java_macro('mesh.xyz',self.result,self.model,{}, {},{})
-        self.assertNotIn('createThresholdPart(',macro)
+        self.assertNotIn('= threshold(sim, subchannelRegions, mask',macro)
         self.assertIn('for (Region region : subchannelRegions)',macro)
         with self.assertRaisesRegex(ValueError,'геометрия'):
             generate_starccm_java_macro('mesh.xyz',self.result,None,{}, {},{'inter_fuse':True})
@@ -145,6 +145,14 @@ import com.sun.source.util.JavacTask;
 class Check {
 METHOD
 REPORT_METHODS
+<T extends Report> T ownedReport(Simulation sim,String name,Class<T> type) throws Exception {
+    return sim.getReportManager().createReport(type);
+}
+void own(Simulation sim,Object object) {}
+void warn(Simulation sim,String message) { sim.println(message); }
+static class ReportMonitor { Report getReport() { return null; } }
+static class MonitorManager { <T> List<T> getObjectsOf(Class<T> type) { return List.of(); } }
+
 static class NamedObject {}
 static class Parts { void setObjects(List<? extends NamedObject> parts) {} }
 static class Report extends NamedObject {
@@ -152,7 +160,7 @@ static class Report extends NamedObject {
     void setPresentationName(String s) { name=s; }
     String getPresentationName() { return name; }
     Parts getParts() { return new Parts(); }
-    void createMonitor() { throw new IllegalStateException("simulated monitor failure"); }
+    ReportMonitor createMonitor() { throw new IllegalStateException("simulated monitor failure"); }
 }
 static class MassFlowReport extends Report {}
 static class ExpressionReport extends Report { void setDefinition(String s) {} }
@@ -163,6 +171,7 @@ static class Simulation {
     List<String> errors=new ArrayList<>();
     void println(String s) { errors.add(s); }
     ReportManager getReportManager() { return new ReportManager(); }
+    MonitorManager getMonitorManager() { return new MonitorManager(); }
 }
 public static void main(String[] args) throws Exception {
     double[][] rows = new double[][] { ROWS };
@@ -241,7 +250,7 @@ public static void main(String[] args) throws Exception {
         macro=self.macro(create_quality_histograms=False)
         self.assertNotIn('HistogramDataSeriesConfig',macro)
         self.assertNotIn('createQualityHistogram(',macro)
-        macro=self.macro(create_quality_scene=False,create_quality_histograms=False)
+        macro=self.macro(create_quality_scene=False,create_quality_histograms=False,create_bad_cells=False)
         self.assertNotIn('createQualityExtrema(sim, subchannelRegions',macro)
         self.assertNotIn('qualitySurfaces.add',macro)
         macro=self.macro(n_planes=0,key_planes=False)
@@ -269,6 +278,8 @@ public static void main(String[] args) throws Exception {
         harness='''import java.util.*;
 class CheckQuality {
 METHODS
+<T> T findOwned(Simulation sim,Object manager,String name,Class<T> type) { return null; }
+void own(Simulation sim,Object object) {}
 static class NamedObject {}
 static class Region extends NamedObject {}
 static class FieldFunction { String getPresentationName() { return "Cell Quality"; } }
@@ -278,6 +289,7 @@ static class Input { List<?> parts; void setObjects(List<?> p) { parts=p; } }
 static class Quantity { FieldFunction ff; void setFieldFunction(FieldFunction f) { ff=f; } }
 static class ScalarDisplayer {
     Input input=new Input(); Quantity quantity=new Quantity(); ScalarFillMode fill; FvRepresentation rep;
+    void setPresentationName(String n) {}
     void setRepresentation(FvRepresentation r) { rep=r; }
     Input getInputParts() { return input; }
     Quantity getScalarDisplayQuantity() { return quantity; }

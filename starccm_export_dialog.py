@@ -2,6 +2,7 @@
 """Диалог экспорта сетки Plot3D и генерации Java-макроса для Simcenter STAR-CCM+."""
 from yplus_calculator import export_yplus_data
 from pathlib import Path
+from starccm_export_profile import save_profile, load_profile, validate_options
 
 try:
     from PySide6.QtWidgets import (
@@ -292,6 +293,25 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         l_tab4.addStretch()
         self.tabs.addTab(tab_parts, "4. Derived Parts & Сечения")
 
+        grp_workflow = QGroupBox("Объекты и диагностика макроса", self)
+        workflow_layout = QVBoxLayout(grp_workflow)
+        for attr, text in (
+            ("chk_bad_cells", "Выделять плохие ячейки (Threshold), создавать количество и процент"),
+            ("chk_group_objects", "Группировать объекты meshBuilder"),
+            ("chk_summary", "Итоговая сводка и CSV-отчет рядом с симуляцией"),
+            ("chk_field_functions", "Создать дополнительные функции поля MB_* (координаты, поток, балансы)")):
+            checkbox = QCheckBox(text, grp_workflow)
+            checkbox.setChecked(True)
+            setattr(self, attr, checkbox)
+            workflow_layout.addWidget(checkbox)
+        main_lay.addWidget(grp_workflow)
+        profile_row = QHBoxLayout()
+        save_button = QPushButton("Сохранить профиль экспорта…", self)
+        load_button = QPushButton("Загрузить профиль экспорта…", self)
+        save_button.clicked.connect(self.save_export_profile)
+        load_button.clicked.connect(self.load_export_profile)
+        profile_row.addWidget(save_button); profile_row.addWidget(load_button)
+        main_lay.addLayout(profile_row)
         main_lay.addWidget(self.tabs)
         self.on_topology_mode_changed()
         self.update_dz_hint()
@@ -339,6 +359,87 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
             dz_sub_mm = (self.lz_m / (m - 1)) * 1000.0
             self.lbl_sub_dz_hint.setText(f"• Шаг между сечениями ячейки при M = {m}: Δz_sub = {dz_sub_mm:.2f} мм")
 
+    def read_options(self):
+        w_mode = "by_rod"
+        if self.rb_wall_60.isChecked():
+            w_mode = "sectors_60"
+        elif self.rb_wall_rod.isChecked():
+            w_mode = "monolithic"
+
+        sel_subs = [idx + 1 for idx, cb in enumerate(self.sub_checkboxes) if cb.isChecked()]
+
+        return {
+            "import_mesh": self.chk_import.isChecked(),
+            "inner_fuse": True,
+            "inter_fuse": self.rb_inter_fuse.isChecked(),
+            "region_mode": "by_subchannel" if not self.rb_inter_fuse.isChecked() else "monolithic",
+            "inlet_outlet_mode": "single" if self.rb_io_single.isChecked() else "by_subchannel",
+            "rename_boundaries": True,
+            "rod_wall_mode": w_mode,
+            "turbulence_model": "hybrid_srh" if self.rb_turb_srh.isChecked() else "rst",
+            "use_iapws": self.rb_eos_iapws.isChecked(),
+            "enable_thermal": self.chk_thermal.isChecked(),
+            "enable_gravity": self.chk_gravity.isChecked(),
+            "create_parameters": self.chk_params.isChecked(),
+            "create_physics": True,
+            "create_mass_reports": self.chk_reports.isChecked(),
+            "create_quality_scene": self.chk_scene.isChecked(),
+            "create_quality_histograms": self.chk_histograms.isChecked(),
+            "quality_bins": self.spin_quality_bins.value(),
+            "gap_sections": self.chk_gap_sections.isChecked() and self.chk_gap_sections.isEnabled(),
+            "n_planes": self.spin_n_planes.value() if self.chk_g_n_planes.isChecked() else 0,
+            "n_sub_planes": self.spin_sub_n_planes.value() if self.chk_sub_n_planes.isChecked() else 0,
+            "key_planes": self.chk_g_key_planes.isChecked(),
+            "sub_planes": self.chk_sub_planes.isChecked(),
+            "axis_probes": self.chk_axis_probes.isChecked(),
+            "create_bad_cells": self.chk_bad_cells.isChecked(),
+            "group_objects": self.chk_group_objects.isChecked(),
+            "create_summary": self.chk_summary.isChecked(),
+            "create_field_functions": self.chk_field_functions.isChecked(),
+            "selected_subchannels": sel_subs
+        }
+
+    def apply_options(self, options):
+        values = validate_options(options, self.sub_count)
+        # Validate everything before changing the GUI.
+        self.rb_inter_fuse.setChecked(values['inter_fuse'])
+        self.rb_inter_intf.setChecked(not values['inter_fuse'])
+        self.on_topology_mode_changed()
+        for key, attr in dict(import_mesh='chk_import', use_iapws='rb_eos_iapws',
+            enable_thermal='chk_thermal', enable_gravity='chk_gravity', create_parameters='chk_params',
+            create_mass_reports='chk_reports', create_quality_scene='chk_scene',
+            create_quality_histograms='chk_histograms', gap_sections='chk_gap_sections',
+            key_planes='chk_g_key_planes', sub_planes='chk_sub_planes', axis_probes='chk_axis_probes',
+            create_bad_cells='chk_bad_cells', group_objects='chk_group_objects',
+            create_summary='chk_summary', create_field_functions='chk_field_functions').items():
+            getattr(self, attr).setChecked(values[key])
+        self.rb_eos_const.setChecked(not values['use_iapws'])
+        self.rb_turb_srh.setChecked(values['turbulence_model']=='hybrid_srh')
+        self.rb_turb_rst.setChecked(values['turbulence_model']=='rst')
+        self.rb_wall_by_rod.setChecked(values['rod_wall_mode']=='by_rod')
+        self.rb_wall_60.setChecked(values['rod_wall_mode']=='sectors_60')
+        self.rb_wall_rod.setChecked(values['rod_wall_mode']=='monolithic')
+        self.spin_quality_bins.setValue(values['quality_bins'])
+        self.chk_g_n_planes.setChecked(values['n_planes']!=0)
+        self.chk_sub_n_planes.setChecked(values['n_sub_planes']!=0)
+        if values['n_planes']:self.spin_n_planes.setValue(values['n_planes'])
+        if values['n_sub_planes']:self.spin_sub_n_planes.setValue(values['n_sub_planes'])
+        for i, checkbox in enumerate(self.sub_checkboxes,1):
+            checkbox.setChecked(i in values['selected_subchannels'])
+        self.update_dz_hint()
+
+    def save_export_profile(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Сохранить профиль экспорта", "star_export.json", "JSON (*.json)")
+        if path:
+            try:save_profile(self.read_options(), path)
+            except (OSError, ValueError) as exc:QMessageBox.warning(self, "Профиль экспорта", str(exc))
+
+    def load_export_profile(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Загрузить профиль экспорта", "", "JSON (*.json)")
+        if path:
+            try:self.apply_options(load_profile(path, self.sub_count))
+            except (OSError, ValueError) as exc:QMessageBox.warning(self, "Профиль экспорта", str(exc))
+
     def generate_and_save(self):
         import starccm_macro_generator as smg
         import mesh_subchannel as ms
@@ -367,40 +468,7 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
             QMessageBox.critical(self, "Ошибка сохранения сетки", f"Не удалось экспортировать файл сетки:\n{exc}")
             return
 
-        w_mode = "by_rod"
-        if self.rb_wall_60.isChecked():
-            w_mode = "sectors_60"
-        elif self.rb_wall_rod.isChecked():
-            w_mode = "monolithic"
-
-        sel_subs = [idx + 1 for idx, cb in enumerate(self.sub_checkboxes) if cb.isChecked()]
-
-        opts = {
-            "import_mesh": self.chk_import.isChecked(),
-            "inner_fuse": True,
-            "inter_fuse": self.rb_inter_fuse.isChecked(),
-            "region_mode": "by_subchannel" if not self.rb_inter_fuse.isChecked() else "monolithic",
-            "inlet_outlet_mode": "single" if self.rb_io_single.isChecked() else "by_subchannel",
-            "rename_boundaries": True,
-            "rod_wall_mode": w_mode,
-            "turbulence_model": "hybrid_srh" if self.rb_turb_srh.isChecked() else "rst",
-            "use_iapws": self.rb_eos_iapws.isChecked(),
-            "enable_thermal": self.chk_thermal.isChecked(),
-            "enable_gravity": self.chk_gravity.isChecked(),
-            "create_parameters": self.chk_params.isChecked(),
-            "create_physics": True,
-            "create_mass_reports": self.chk_reports.isChecked(),
-            "create_quality_scene": self.chk_scene.isChecked(),
-            "create_quality_histograms": self.chk_histograms.isChecked(),
-            "quality_bins": self.spin_quality_bins.value(),
-            "gap_sections": self.chk_gap_sections.isChecked() and self.chk_gap_sections.isEnabled(),
-            "n_planes": self.spin_n_planes.value() if self.chk_g_n_planes.isChecked() else 0,
-            "n_sub_planes": self.spin_sub_n_planes.value() if self.chk_sub_n_planes.isChecked() else 0,
-            "key_planes": self.chk_g_key_planes.isChecked(),
-            "sub_planes": self.chk_sub_planes.isChecked(),
-            "axis_probes": self.chk_axis_probes.isChecked(),
-            "selected_subchannels": sel_subs
-        }
+        opts = self.read_options()
 
         try:
             java_code = smg.generate_starccm_java_macro(
