@@ -14,6 +14,7 @@ os.environ["QT_API"] = "pyside6"
 import json
 import math
 import sys
+from copy import deepcopy
 from pathlib import Path
 
 import numpy as np
@@ -73,6 +74,8 @@ class BundleBuilderWindow(BundleBuilderUiMixin, QMainWindow):
         self.current_mesh_result = None
         self.current_layer_result = None
         self.current_quality_report = None
+        self._layer_inputs = None
+        self._mesh_inputs = None
         self.base_params = mc.MeshParams(law="geometric", mode="first_count", h1=2.5e-6, nj=100)
         self.template_configs = {}
         self.block_custom_configs = {}
@@ -89,8 +92,62 @@ class BundleBuilderWindow(BundleBuilderUiMixin, QMainWindow):
         self.setStyleSheet(SCIENTIFIC_QSS)
         self.init_ui()
         self.on_rebuild_geometry(silent=True)
+        for spin in self.geometry_controls():
+            spin.valueChanged.connect(self.validate_mesh_inputs)
 
+    def geometry_controls(self):
+        return (self.s_flat_spin, self.pitch_spin, self.d_fuel_spin,
+                self.d_guide_spin, self.d_inst_spin)
 
+    def mesh_inputs(self):
+        """Snapshot build inputs, excluding selection/highlight of the editor target."""
+        panel = self.mesh_subpanel
+        layer = deepcopy((
+            tuple(w.value() for w in self.geometry_controls()),
+            (self.model.s_flat, self.model.pitch, self.model.d_fuel,
+             self.model.d_guide, self.model.d_instrument),
+            sorted((rid, r.x, r.y, r.diameter, r.rod_type)
+                   for rid, r in self.model.rods.items()),
+            set(self.model.selected_subchannels), self.base_params,
+            self.template_configs, self.block_custom_configs,
+            panel.combo_center_method.currentData(),
+            panel.chk_hermite_tfi.isChecked(),
+        ))
+        core = (panel.combo_core_mode.currentData(),
+                tuple(panel.fields[k].value() for k in
+                      ("core_growth", "core_max_size", "core_max_cells",
+                       "core_transition", "core_layers")))
+        return layer, core
+
+    def validate_mesh_inputs(self, *args):
+        if self._layer_inputs is None and self._mesh_inputs is None:
+            return
+        layer, core = self.mesh_inputs()
+        if self._layer_inputs is not None and layer != self._layer_inputs:
+            self.current_layer_result = None
+            self._layer_inputs = None
+        if self._mesh_inputs is not None and (layer, core) != self._mesh_inputs:
+            self.current_mesh_result = None
+            self.current_quality_report = None
+            self._mesh_inputs = None
+            panel = self.mesh_subpanel
+            panel.btn_export.setEnabled(False)
+            panel.btn_export_star.setEnabled(False)
+            panel.btn_quality.setEnabled(False)
+            panel.lbl_status.setText("Параметры изменены. Перестройте сетку или заполните актуальный слой.")
+        self.mesh_subpanel.btn_fill_core.setEnabled(self.current_layer_result is not None)
+
+    def accept_mesh_inputs(self, result, *, filled=False):
+        layer, core = self.mesh_inputs()
+        if not filled:
+            self.current_layer_result = result if not result.complete else None
+            self._layer_inputs = layer if not result.complete else None
+        self._mesh_inputs = (layer, core)
+
+    def can_export_mesh(self):
+        self.validate_mesh_inputs()
+        return (self._mesh_inputs is not None and self.current_mesh_result is not None
+                and self.current_mesh_result.complete)
 
     def on_canvas_resize(self, event):
         if self._custom_limits is None:
@@ -439,6 +496,7 @@ class BundleBuilderWindow(BundleBuilderUiMixin, QMainWindow):
         self.inspect_label.setText("Кликните на подканал (+) или на стержень для настройки.")
 
     def rebuild_view(self):
+        self.validate_mesh_inputs()
         if self._custom_limits is None and hasattr(self, "ax"):
             r_base = (self.model.s_flat / 2.0) / math.cos(math.radians(30)) * 1.08
             self._custom_limits = (-r_base, r_base, -r_base, r_base)
@@ -769,13 +827,13 @@ class BundleBuilderWindow(BundleBuilderUiMixin, QMainWindow):
             b3d = mq.extrude_blocks(res.blocks, z_nodes)
             rep = mq.analyse_blocks(b3d)
 
-            self.current_layer_result = res if not res.complete else None
             self.current_mesh_result = res
+            self.accept_mesh_inputs(res)
             self.current_quality_report = rep
             self.mesh_subpanel.btn_quality.setEnabled(True)
             self.mesh_subpanel.btn_export.setEnabled(False)
             self.mesh_subpanel.btn_export_star.setEnabled(False)
-            self.mesh_subpanel.btn_fill_core.setEnabled(True)
+            self.mesh_subpanel.btn_fill_core.setEnabled(self.current_layer_result is not None)
 
             d = res.diagnostics
             skipped = d.get("skipped_peripheral", 0)
@@ -825,11 +883,12 @@ class BundleBuilderWindow(BundleBuilderUiMixin, QMainWindow):
             rep = mq.analyse_blocks(b3d)
 
             self.current_mesh_result = res
+            self.accept_mesh_inputs(res)
             self.current_quality_report = rep
             self.mesh_subpanel.btn_quality.setEnabled(True)
             self.mesh_subpanel.btn_export.setEnabled(res.complete)
             self.mesh_subpanel.btn_export_star.setEnabled(res.complete)
-            self.mesh_subpanel.btn_fill_core.setEnabled(base_p.law == "wall_core" and not res.complete)
+            self.mesh_subpanel.btn_fill_core.setEnabled(self.current_layer_result is not None)
 
             d = res.diagnostics
             skipped = d.get("skipped_peripheral", 0)
@@ -846,9 +905,8 @@ class BundleBuilderWindow(BundleBuilderUiMixin, QMainWindow):
             QMessageBox.critical(self, "Ошибка построения сетки", user_msg)
 
     def on_fill_core_clicked(self):
-        layer_src = getattr(self, "current_layer_result", None)
-        if layer_src is None and self.current_mesh_result is not None and not self.current_mesh_result.complete:
-            layer_src = self.current_mesh_result
+        self.validate_mesh_inputs()
+        layer_src = self.current_layer_result
         if layer_src is None:
             return
         try:
@@ -887,6 +945,8 @@ class BundleBuilderWindow(BundleBuilderUiMixin, QMainWindow):
             rep = mq.analyse_blocks(b3d)
 
             self.current_mesh_result = full_res
+            self.accept_mesh_inputs(full_res, filled=True)
+            self.mesh_subpanel.btn_quality.setEnabled(True)
             self.current_quality_report = rep
             self.mesh_subpanel.btn_fill_core.setEnabled(True)
             self.mesh_subpanel.btn_export.setEnabled(True)
@@ -1228,8 +1288,8 @@ class BundleBuilderWindow(BundleBuilderUiMixin, QMainWindow):
             QMessageBox.critical(self, "Ошибка контроля качества", f"Не удалось открыть окно контроля качества:\n{exc}")
 
     def on_export_starccm_dialog(self):
-        if self.current_mesh_result is None or not self.current_mesh_result.complete:
-            QMessageBox.warning(self, "Предупреждение", "Сетка не заполнена! Сначала заполните ядро подканала.")
+        if not self.can_export_mesh():
+            QMessageBox.warning(self, "Предупреждение", "Нет актуальной полной сетки. Перестройте сетку или заполните актуальный слой.")
             return
         try:
             from starccm_export_dialog import StarCcmExportDialog
@@ -1248,8 +1308,8 @@ class BundleBuilderWindow(BundleBuilderUiMixin, QMainWindow):
             QMessageBox.critical(self, "Ошибка", f"Не удалось открыть окно экспорта STAR-CCM+:\n{exc}")
 
     def on_export_plot3d(self):
-        if self.current_mesh_result is None or not self.current_mesh_result.complete:
-            QMessageBox.warning(self, "Предупреждение", "Нельзя экспортировать неполную сетку! Сначала заполните ядро сетки.")
+        if not self.can_export_mesh():
+            QMessageBox.warning(self, "Предупреждение", "Нет актуальной полной сетки. Перестройте сетку или заполните актуальный слой.")
             return
         path, _ = QFileDialog.getSaveFileName(self, "Сохранить сетку Plot3D", "bundle_subchannels.xyz", "Plot3D (*.xyz)")
         if path:

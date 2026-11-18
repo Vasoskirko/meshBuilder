@@ -39,13 +39,14 @@ class BundleUiExtractionTests(unittest.TestCase):
             with self.subTest(method=name):
                 self.assertEqual(ast.dump(before[name], include_attributes=False), ast.dump(after[name], include_attributes=False))
 
-    def test_remaining_source_ast_is_unchanged_except_wiring(self):
+    def test_extraction_commit_preserved_remaining_source(self):
         expected = copy.deepcopy(self.original)
         cls = find_class(expected, 'BundleBuilderWindow')
         cls.body = [n for n in cls.body if not (isinstance(n, ast.FunctionDef) and n.name in MOVED)]
         cls.bases.insert(0, ast.Name(id='BundleBuilderUiMixin', ctx=ast.Load()))
         expected.body.insert(expected.body.index(cls), ast.parse('from bundle_builder_ui import BundleBuilderUiMixin').body[0])
-        actual = ast.parse((ROOT / 'bundle_subchannel_builder.py').read_text(encoding='utf-8'))
+        actual = ast.parse(subprocess.check_output(
+            ['git', 'show', 'e2f362c:bundle_subchannel_builder.py'], cwd=ROOT).decode('utf-8'))
         self.assertEqual(ast.dump(expected, include_attributes=False), ast.dump(actual, include_attributes=False))
 
     def test_legacy_import_exposes_inherited_methods(self):
