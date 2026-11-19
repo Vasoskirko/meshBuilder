@@ -661,9 +661,9 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         dlg = YPlusDialog(self, d_hyd_mm=dh, a_fluid_mm2=af, target_field=self.fields["h1"], state_dict=self.yplus_saved_state)
         dlg.exec()
         for _attr in ("current_fluid_props", "last_yplus_result"):
-            _val = getattr(dlg, _attr, None)
-            if _val: setattr(self, _attr, _val)
+            setattr(self, _attr, getattr(dlg, _attr, None) or {})
         self.on_field_changed()
+        self.parent_window.report_viscous_units()
 
     def change_cell_unit(self, u):
         if self.updating:

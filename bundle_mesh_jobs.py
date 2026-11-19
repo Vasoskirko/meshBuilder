@@ -46,6 +46,7 @@ class BundleMeshJobsMixin:
         # Interactive windows always use the worker; no QWidget is touched there.
         if not self.isVisible():
             result=compute(lambda value,text:None);completed(result);return
+        self.append_mesh_message(title+": запуск")
         captured=self.mesh_inputs()
         thread=QThread(self);worker=MeshWorker(compute);worker.moveToThread(thread)
         dialog=QProgressDialog(title,'Отменить',0,100,self)
@@ -106,15 +107,20 @@ class BundleMeshJobsMixin:
             result,error=outcome
             if error is not None:
                 from mesh_advisor import format_friendly_error
+                self.append_mesh_message("Ошибка: "+format_friendly_error(error))
                 QMessageBox.critical(self,self._mesh_error_title,format_friendly_error(error))
             else:
                 try:
                     if self.mesh_inputs()!=self._mesh_job_inputs:
                         self.mesh_subpanel.lbl_status.setText('Параметры изменились; результат построения отброшен.')
+                        self.append_mesh_message('Параметры изменились; результат построения отброшен.')
                     else:self._mesh_completion(result)
                 except Exception as exc:
+                    self.append_mesh_message("Ошибка применения результата: "+str(exc))
                     QMessageBox.critical(self,self._mesh_error_title,str(exc))
-        else:self.mesh_subpanel.lbl_status.setText('Построение отменено. Новый результат не применяется.')
+        else:
+            self.mesh_subpanel.lbl_status.setText('Построение отменено. Новый результат не применяется.')
+            self.append_mesh_message('Построение отменено. Новый результат не применяется.')
         self._mesh_completion=None;self._mesh_job_result=None
         if getattr(self,'_close_after_mesh_job',False):self.close()
 
@@ -128,6 +134,8 @@ def analyse_subchannel_result(result, progress):
     """Reuse validated builder topology instead of detecting 3D face pairs again."""
     import numpy as np
     import mesh_quality as quality
+    from mesh_viscous_units import edge_ranges
+    result.diagnostics["edge_ranges_m"]=edge_ranges(result)
     z=np.linspace(0,result.params.z_len,result.params.nz+1)
     blocks=[]
     for n,block in enumerate(result.blocks):

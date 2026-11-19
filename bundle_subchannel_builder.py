@@ -96,6 +96,27 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
         for spin in self.geometry_controls():
             spin.valueChanged.connect(self.validate_mesh_inputs)
 
+    def append_mesh_message(self, text):
+        from datetime import datetime
+        self.mesh_console.appendPlainText(f'[{datetime.now():%H:%M:%S}] {text}')
+
+    def report_viscous_units(self):
+        result=self.current_mesh_result
+        if result is None:
+            self.append_mesh_message('Нет актуальной сетки для оценки вязких размеров.')
+            return
+        ranges=result.diagnostics.get('edge_ranges_m')
+        if ranges is None:
+            self.append_mesh_message('Размеры рёбер ещё не измерены; выполните построение.')
+            return
+        from mesh_viscous_units import format_wall_units
+        try:
+            message=format_wall_units(ranges,getattr(self.mesh_subpanel,'last_yplus_result',None))
+        except (ValueError,TypeError,KeyError) as exc:
+            message=f'Вязкие размеры недоступны: {exc}. Откройте калькулятор y+ и выполните корректный расчёт.'
+        state='Полная сетка' if result.complete else 'Только пристеночный слой (ядро не заполнено)'
+        self.append_mesh_message(state+'\n'+message)
+
     def geometry_controls(self):
         return (self.s_flat_spin, self.pitch_spin, self.d_fuel_spin,
                 self.d_guide_spin, self.d_inst_spin)
@@ -142,6 +163,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
             panel.btn_export_star.setEnabled(False)
             panel.btn_quality.setEnabled(False)
             panel.lbl_status.setText("Параметры изменены. Перестройте сетку или заполните актуальный слой.")
+            self.append_mesh_message("Сетка устарела: параметры изменены. Предыдущие размеры в журнале относятся к прежнему построению; экспорт заблокирован.")
         self.mesh_subpanel.btn_fill_core.setEnabled(self.current_layer_result is not None)
 
     def accept_mesh_inputs(self, result, *, filled=False):
@@ -858,12 +880,15 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
                     f"Ядро не заполнено. Настройте блок «5. Заполнение ядра» и нажмите «Заполнить ядро сетки».{skip_txt}"
                 )
                 self.mesh_subpanel.lbl_status.setText(txt)
+                self.append_mesh_message(txt)
+                self.report_viscous_units()
                 self.mesh_subpanel.update_core_preview()
                 self.redraw_mesh_views()
                 self.populate_blocks_table()
             self._run_mesh_task("Построение пристеночного слоя",compute,completed,"Ошибка построения слоя")
         except Exception as exc:
             user_msg = format_friendly_error(exc)
+            self.append_mesh_message("Ошибка построения слоя: "+user_msg)
             QMessageBox.critical(self, "Ошибка построения слоя", user_msg)
 
     def on_build_multiblock_mesh(self):
@@ -922,11 +947,14 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
                     f"Интерфейсов: {d.get('matched_interfaces', 0)}, Min Jacobian: {rep['metrics']['scaled_jacobian']['min']:.3f}.{skip_txt}"
                 )
                 self.mesh_subpanel.lbl_status.setText(txt)
+                self.append_mesh_message(txt)
+                self.report_viscous_units()
                 self.redraw_mesh_views()
                 self.populate_blocks_table()
             self._run_mesh_task("Построение сетки",compute,completed,"Ошибка построения сетки")
         except Exception as exc:
             user_msg = format_friendly_error(exc)
+            self.append_mesh_message("Ошибка построения сетки: "+user_msg)
             QMessageBox.critical(self, "Ошибка построения сетки", user_msg)
 
     def on_fill_core_clicked(self):
@@ -998,6 +1026,8 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
                 if d.get('core_alignment'):
                     a=d['core_alignment']
                     self.mesh_subpanel.lbl_status.setText(self.mesh_subpanel.lbl_status.text()+f"\nВыравнивание ядра: отношение сторон ≥1, идеально 1; медиана {a['median']:.2f}, 95-й процентиль {a['p95']:.2f}, максимум {a['maximum']:.2f}. Доля ≤1.5: {a['fraction_under_1_5']:.0%} (внешняя половина ядра).")
+                self.append_mesh_message(self.mesh_subpanel.lbl_status.text())
+                self.report_viscous_units()
                 self.mesh_subpanel.update_core_preview()
                 self.redraw_mesh_views()
                 self.populate_blocks_table()
@@ -1009,6 +1039,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
             self._run_mesh_task("Заполнение ядра",compute,completed,"Не удалось заполнить ядро")
         except Exception as exc:
             user_msg = format_friendly_error(exc)
+            self.append_mesh_message("Не удалось заполнить ядро: "+user_msg)
             QMessageBox.critical(self, "Не удалось заполнить ядро", user_msg)
 
     def populate_blocks_table(self):

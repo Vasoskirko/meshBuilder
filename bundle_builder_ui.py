@@ -3,7 +3,7 @@
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from matplotlib.figure import Figure
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QComboBox, QDoubleSpinBox, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QPushButton, QScrollArea, QSplitter, QStackedWidget, QTableWidget, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QPlainTextEdit, QComboBox, QDoubleSpinBox, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QPushButton, QScrollArea, QSplitter, QStackedWidget, QTableWidget, QTabWidget, QVBoxLayout, QWidget
 from mesh_subchannel_subpanel import MeshSubpanel
 
 
@@ -225,7 +225,28 @@ class BundleBuilderUiMixin:
         bar_mesh.addWidget(self.btn_ruler)
         lay_canvas.addLayout(bar_mesh)
 
-        lay_canvas.addWidget(self.canvas_mesh, 1)
+        mesh_output_splitter=QSplitter(Qt.Vertical,self)
+        mesh_output_splitter.addWidget(self.canvas_mesh)
+        output_widget=QWidget(self)
+        output_layout=QVBoxLayout(output_widget)
+        output_layout.setContentsMargins(0,0,0,0)
+        output_bar=QHBoxLayout()
+        output_bar.addWidget(QLabel('Журнал сообщений и размеры в вязких единицах',self),1)
+        clear_output=QPushButton('Очистить',self)
+        clear_output.setMaximumWidth(100)
+        output_bar.addWidget(clear_output)
+        output_layout.addLayout(output_bar)
+        self.mesh_console=QPlainTextEdit(self)
+        self.mesh_console.setReadOnly(True)
+        self.mesh_console.setMaximumBlockCount(600)
+        self.mesh_console.setMinimumHeight(95)
+        self.mesh_console.setPlaceholderText('Здесь появятся сообщения построения и размеры Δs+, Δz+, Δn+. Для вязких единиц откройте калькулятор y+.')
+        clear_output.clicked.connect(self.mesh_console.clear)
+        output_layout.addWidget(self.mesh_console)
+        mesh_output_splitter.addWidget(output_widget)
+        mesh_output_splitter.setSizes([550,230])
+        mesh_output_splitter.setStretchFactor(0,1)
+        lay_canvas.addWidget(mesh_output_splitter, 1)
         self.mesh_splitter.addWidget(left_canvas_widget)
 
         right_table_widget = QWidget()

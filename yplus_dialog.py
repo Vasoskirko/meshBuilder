@@ -298,12 +298,16 @@ class YPlusDialog(QDialog if HAS_QT else object):
                 f"Re = {res['re']:,.0f} | U_bulk = {res['u']:.3f} м/с | Q = {res['mass_flow']:.4f} кг/с"
             )
             self.lbl_tau_summary.setText(
-                f"Cf = {res['cf']:.5f} | τ_w = {res['tau_w']:.2f} Па | u_τ = {res['u_tau']:.4f} м/с"
+                f"Cf = {res['cf']:.5f} | τ_w = {res['tau_w']:.2f} Па | u_τ = {res['u_tau']:.4f} м/с\nℓν = ν/uτ = {res['viscous_length_m']*1e6:.4g} мкм"
             )
             self.lbl_step_res.setText(res["step_display_str"])
             self.btn_apply.setEnabled(True)
             self.save_state()
         except Exception as exc:
+            self.last_yplus_result = None
+            self.calculated_delta_y1_um = 0
+            self.lbl_flow_summary.clear()
+            self.lbl_tau_summary.clear()
             if not properties_ready:
                 self.current_fluid_props = {}
                 self.show_property_values({})
