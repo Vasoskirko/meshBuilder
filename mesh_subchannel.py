@@ -555,8 +555,14 @@ def fill_subchannel_core(layer_result, bundle_model, growth=1.1, max_size=100e-6
     combined_rem = np.concatenate(all_rem_lines)
     h0_combined = np.full(len(combined_rem), last_w, dtype=float)
 
+    if core_mode == 'controlled_growth':
+        h0_combined = np.concatenate([np.asarray(layer_result.all_block_widths[i])[:,-1]
+            if i<len(layer_result.all_block_widths) else np.full(ni,last_w) for i in range(len(blocks))])
     h0_first = last_w * float(transition_ratio)
-    if core_mode == "isotropic":
+    if core_mode == 'controlled_growth':
+        effective_max_size=float(max_size)
+        global_dist=mc.controlled_distribution(combined_rem,h0_combined,growth,effective_max_size,max_cells,transition_ratio=transition_ratio)
+    elif core_mode == "isotropic":
         opp_steps = [float(g["ds_opp"]) for g in geom_data if "ds_opp" in g]
         if opp_steps:
             effective_max_size = max(min(opp_steps), h0_first * 1.01)

@@ -6,8 +6,8 @@ from iapws import IAPWS97
 from iapws._iapws import _ThCond
 
 WATER_CONDUCTIVITY_MODELS = {
-    "background": "Без критического усиления (согласование со STAR)",
-    "full": "С критическим усилением (промышленная IAPWS 2011)",
+    "background": "Базовая теплопроводность λ (без добавочного вклада)",
+    "full": "Теплопроводность λ с добавочным вкладом около критической точки",
 }
 
 def _saturation_pressure_mpa(T):

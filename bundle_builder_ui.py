@@ -256,13 +256,13 @@ class BundleBuilderUiMixin:
         self.table_blocks.itemSelectionChanged.connect(self.on_table_block_selected)
         lay_tbl.addWidget(self.table_blocks, 1)
 
-        self.mesh_splitter.addWidget(right_table_widget)
+        # Block table belongs with the normal-step plots on tab 3.
         self.mesh_splitter.setStretchFactor(0, 6)
         self.mesh_splitter.setStretchFactor(1, 4)
         self.mesh_splitter.setSizes([600, 420])
 
         lay_mesh.addWidget(self.mesh_splitter, 1)
-        self.tabs.addTab(tab_mesh, "2. Сетка в сечении и таблица блоков")
+        self.tabs.addTab(tab_mesh, "2. Сетка в сечении")
 
         self.canvas_mesh.mpl_connect("button_press_event", self.on_ruler_click)
         self.canvas_mesh.mpl_connect("motion_notify_event", self.on_ruler_motion)
@@ -275,8 +275,16 @@ class BundleBuilderUiMixin:
         self.canvas_layers = FigureCanvasQTAgg(self.fig_layers)
         self.ax_layers = self.fig_layers.add_subplot(111)
         self.toolbar_layers = NavigationToolbar2QT(self.canvas_layers, self)
-        lay_layers.addWidget(self.toolbar_layers)
-        lay_layers.addWidget(self.canvas_layers, 1)
+        layer_plot_widget = QWidget()
+        layer_plot_layout = QVBoxLayout(layer_plot_widget)
+        layer_plot_layout.setContentsMargins(0,0,0,0)
+        layer_plot_layout.addWidget(self.toolbar_layers)
+        layer_plot_layout.addWidget(self.canvas_layers, 1)
+        self.layers_splitter = QSplitter(Qt.Horizontal, self)
+        self.layers_splitter.addWidget(right_table_widget)
+        self.layers_splitter.addWidget(layer_plot_widget)
+        self.layers_splitter.setSizes([450,650])
+        lay_layers.addWidget(self.layers_splitter,1)
         self.tabs.addTab(tab_layers, "3. Шаги по нормали к стенке")
 
         splitter.addWidget(self.tabs)

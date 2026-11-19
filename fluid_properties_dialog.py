@@ -22,13 +22,13 @@ class FluidPropertiesDialog(QDialog if HAS_QT else object):
         scroll = QScrollArea(self); scroll.setWidgetResizable(True)
         content = QWidget(); layout = QVBoxLayout(content); scroll.setWidget(content)
         outer.addWidget(scroll)
-        self.model_group = QGroupBox('Модель теплопроводности воды', self)
+        self.model_group = QGroupBox('Расчёт теплопроводности λ (вязкость μ не меняется)', self)
         model_layout = QVBoxLayout(self.model_group)
         self.combo_conductivity = QComboBox(self)
         for key, label in WATER_CONDUCTIVITY_MODELS.items():
             self.combo_conductivity.addItem(label, key)
         self.combo_conductivity.setCurrentIndex(max(0,self.combo_conductivity.findData(conductivity_model)))
-        self.combo_conductivity.setToolTip('При 300 °C / 15 МПа: без усиления λ≈0.557437; с усилением λ≈0.563209 Вт/(м·К). Не влияет на ρ, μ и расчёт y+.')
+        self.combo_conductivity.setToolTip('При 300 °C / 15 МПа: без усиления λ≈0.557437; с усилением λ≈0.563209 Вт/(м·К). Дополнительный вклад относится только к теплопроводности; критическая точка воды ≈374 °C и 22.064 МПа. Не влияет на ρ, μ и расчёт y+.')
         model_layout.addWidget(self.combo_conductivity); layout.addWidget(self.model_group)
         properties = QGroupBox('Свойства текущего состояния', self)
         form = QFormLayout(properties); self.property_fields = {}
