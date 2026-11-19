@@ -135,8 +135,10 @@ class MeshSubpanel(QWidget if HAS_QT else object):
 
         row_z = QHBoxLayout()
         lbl_z = QLabel("Z (мм):")
+        lbl_z.setToolTip("Общая высота всей сетки; не переопределяется шаблоном или блоком.")
         w_z = self.number("z_len", 0.05, 1e-3, 1e-18, 1000.0, onchange=self.on_field_changed)
         lbl_nz = QLabel("nz (слоёв):")
+        lbl_nz.setToolTip("Общее число осевых ячеек для всех блоков.")
         w_nz = self.integer("nz", 10, 1, 1000000, onchange=self.on_field_changed)
         row_z.addWidget(lbl_z)
         row_z.addWidget(w_z, 1)
@@ -690,6 +692,9 @@ class MeshSubpanel(QWidget if HAS_QT else object):
 
     def read_params(self):
         f = self.fields
+        if not f['nz'].hasAcceptableInput():
+            raise ValueError('nz: требуется положительное целое число осевых ячеек')
+        with QSignalBlocker(f['nz']):f['nz'].interpretText()
         law = self.current_law()
         mode = self.goal.currentData() or "first_count"
 
@@ -763,8 +768,18 @@ class MeshSubpanel(QWidget if HAS_QT else object):
             self.updating = False
         self.refresh_controls()
 
+    def sync_global_axial(self, p):
+        # Z/nz describe one extrusion, never a template/block-local setting.
+        owner=self.parent_window
+        owner.base_params=mc.replace(owner.base_params,z_len=p.z_len,nz=p.nz)
+        for mapping in (owner.template_configs,owner.block_custom_configs):
+            for key,value in list(mapping.items()):
+                if value.z_len != p.z_len or value.nz != p.nz:
+                    mapping[key]=mc.replace(value,z_len=p.z_len,nz=p.nz)
+
     def save_current_ui_to_active_scope(self):
         p = self.read_params()
+        self.sync_global_axial(p)
         if self.scope_mode == "all":
             self.parent_window.base_params = p
         elif self.scope_mode == "template":
@@ -790,6 +805,7 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         else:
             p = self.parent_window.base_params
 
+        p=mc.replace(p,z_len=self.parent_window.base_params.z_len,nz=self.parent_window.base_params.nz)
         self.apply_params(p)
 
     def on_scope_changed(self):

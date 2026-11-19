@@ -2,6 +2,7 @@
 """Диалог экспорта сетки Plot3D и генерации Java-макроса для Simcenter STAR-CCM+."""
 from yplus_calculator import export_yplus_data
 from pathlib import Path
+from number_field import NumberField
 from starccm_export_profile import save_profile, load_profile, validate_options, FIELD_CHOICES, REPORT_CHOICES, MEAN_CHOICES
 
 try:
@@ -95,7 +96,7 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         self.bg_wall = QButtonGroup(self)
         self.rb_wall_by_rod = QRadioButton("По отдельным стержням: rod_1, rod_2, rod_3 (каждый ТВЭЛ — своя стенка)", grp_wall)
         self.rb_wall_by_rod.setChecked(True)
-        self.rb_wall_60 = QRadioButton("Секторы по 60°: rod_{sub}_{sec} (для анализа азимутального профиля q'')", grp_wall)
+        self.rb_wall_60 = QRadioButton("Исходные секторы по 60° — отдельно для каждого подканала", grp_wall)
         self.rb_wall_rod = QRadioButton("Монолитная стенка ячейки: rod_{sub} (все стержни ячейки в один контур)", grp_wall)
         self.bg_wall.addButton(self.rb_wall_by_rod)
         self.bg_wall.addButton(self.rb_wall_60)
@@ -372,11 +373,15 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         means_layout = QVBoxLayout(self.mean_group); self.mean_checkboxes = {}
         for key, label in MEAN_CHOICES.items():
             cb = QCheckBox(label, self.mean_group); self.mean_checkboxes[key] = cb; means_layout.addWidget(cb)
-        start_row = QHBoxLayout(); start_row.addWidget(QLabel("Начальный временной шаг:", self.mean_group))
+        start_row = QHBoxLayout(); start_row.addWidget(QLabel("Номер шага начала усреднения (целый):", self.mean_group))
         self.spin_mean_start = QSpinBox(self.mean_group); self.spin_mean_start.setRange(1, 1000000000)
         start_row.addWidget(self.spin_mean_start); means_layout.addLayout(start_row)
+        dt_row=QHBoxLayout();dt_row.addWidget(QLabel('Шаг времени Δt (с), параметр TimeStep:',self))
+        self.field_time_step=NumberField(1e-4,minimum=1e-15,maximum=1e12)
+        self.field_time_step.setToolTip('Положительное число секунд, например 0.0001 или 1e-4. Создаётся параметр TimeStep и связь с решателем. При повторном запуске существующий TimeStep сохраняется; если его ещё нет, параметр добавляется со значением из этого поля без переинициализации.')
+        dt_row.addWidget(self.field_time_step);means_layout.addLayout(dt_row)
         mean_note = QLabel("Один отсчёт на временной шаг; используйте постоянный Δt. Начните после переходного процесса. "
-            "Повторный запуск сохраняет накопленную статистику; настройка шага применяется только к новым мониторам. "
+            "Повторный запуск сохраняет накопленную статистику; номер начала усреднения применяется только к новым мониторам. "
             "Решатель автоматически не запускается.", self.mean_group)
         mean_note.setWordWrap(True); means_layout.addWidget(mean_note)
         analysis_layout.addWidget(self.mean_group); analysis_layout.addStretch()
@@ -451,7 +456,7 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
             self.rb_io_split.setChecked(True)
             self.rb_io_split.setEnabled(True)
             self.rb_io_single.setEnabled(False)
-            self.rb_wall_by_rod.setChecked(True)
+            if self.rb_wall_rod.isChecked():self.rb_wall_by_rod.setChecked(True)
             self.rb_wall_by_rod.setEnabled(True)
             self.rb_wall_60.setEnabled(True)
             self.rb_wall_60.setToolTip("")
@@ -460,10 +465,9 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
             self.rb_io_single.setChecked(True)
             self.rb_io_single.setEnabled(True)
             self.rb_io_split.setEnabled(False)
-            self.rb_wall_by_rod.setChecked(True)
             self.rb_wall_by_rod.setEnabled(True)
-            self.rb_wall_60.setEnabled(False)
-            self.rb_wall_60.setToolTip("После Fuse исходные секторы 60° не сохраняются; доступна группировка по стержням.")
+            self.rb_wall_60.setEnabled(True)
+            self.rb_wall_60.setToolTip("Сохранить исходные секторы перед Fuse; сливаются регионы, а не rod-секторы.")
             self.rb_wall_rod.setEnabled(True)
 
     def update_dz_hint(self):
@@ -520,6 +524,7 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
             "subchannel_reports": [k for k, cb in self.report_checkboxes.items() if cb.isChecked()],
             "time_mean_fields": [k for k, cb in self.mean_checkboxes.items() if cb.isChecked()],
             "mean_start_step": self.spin_mean_start.value(),
+            "time_step": self.field_time_step.value(),
             "selected_subchannels": sel_subs
         }
 
@@ -554,6 +559,7 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         for key, checkboxes in (('field_functions', self.field_checkboxes), ('subchannel_reports', self.report_checkboxes), ('time_mean_fields', self.mean_checkboxes)):
             for name, checkbox in checkboxes.items(): checkbox.setChecked(name in values[key])
         self.spin_mean_start.setValue(values['mean_start_step'])
+        self.field_time_step.setValue(values['time_step'])
         self.update_dz_hint()
         self.update_dependencies()
 

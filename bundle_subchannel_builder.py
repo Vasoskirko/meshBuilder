@@ -146,9 +146,9 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
         if self._layer_inputs is None and self._mesh_inputs is None:
             return
         try:
+            # Commit axial drafts even if focus/editingFinished has not fired.
+            self.mesh_subpanel.sync_global_axial(self.mesh_subpanel.read_params())
             layer, core = self.mesh_inputs()
-            # Read the active editor as well: an invalid draft was not saved.
-            self.mesh_subpanel.read_params()
         except ValueError:
             layer, core = None, None
         if self._layer_inputs is not None and layer != self._layer_inputs:
