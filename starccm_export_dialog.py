@@ -2,12 +2,13 @@
 """Диалог экспорта сетки Plot3D и генерации Java-макроса для Simcenter STAR-CCM+."""
 from yplus_calculator import export_yplus_data
 from pathlib import Path
+from starccm_export_profile import save_profile, load_profile, validate_options, FIELD_CHOICES, REPORT_CHOICES, MEAN_CHOICES
 
 try:
     from PySide6.QtWidgets import (
         QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLineEdit,
         QSpinBox, QCheckBox, QPushButton, QLabel, QFileDialog,
-        QMessageBox, QRadioButton, QButtonGroup, QDialog, QTabWidget
+        QMessageBox, QRadioButton, QButtonGroup, QDialog, QTabWidget, QPlainTextEdit, QScrollArea, QGridLayout, QSizePolicy, QComboBox
     )
     HAS_QT = True
 except ImportError:
@@ -19,8 +20,8 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         if not HAS_QT:
             return
         super().__init__(parent)
-        self.setWindowTitle("Экспорт для Simcenter STAR-CCM+ (Plot3D + Java Macro v21.02+)")
-        self.resize(700, 840)
+        self.setWindowTitle("Экспорт для Simcenter STAR-CCM+ (Plot3D + Java Macro 2602)")
+        self.resize(800, 840)
 
         self.mesh_result = mesh_result
         self.bundle_model = bundle_model
@@ -44,9 +45,9 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         main_lay = QVBoxLayout(self)
 
         lbl_header = QLabel(
-            "<b>Комплексный генератор расчетной сцены Simcenter STAR-CCM+ (v3.15.0)</b><br>"
-            "Автоматический импорт Plot3D-сетки, сопряжение интерфейсов (Centroids), настройка физики "
-            "(RST / Hybrid SRH + IAPWS-IF97), глобальные параметры и паспорт гидравлики ячеек.",
+            "<b>Экспорт сетки и настройка STAR-CCM+ 2602</b><br>"
+            "Настройте физику, выберите анализ и сохраните сетку вместе с макросом. "
+            "Условия на границах задаются вручную в STAR-CCM+.",
             self
         )
         lbl_header.setStyleSheet("background: #f1f5f9; color: #1e3a5f; padding: 10px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 11px;")
@@ -116,7 +117,7 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         l_io.addWidget(self.rb_io_single)
         l_tab1.addWidget(grp_io)
         l_tab1.addStretch()
-        self.tabs.addTab(tab_mesh, "1. Сетка и топология")
+        self.tabs.addTab(tab_mesh, "1. Сетка")
 
         # ----------------- ВКЛАДКА 2: Физика и свойства среды -----------------
         tab_phys = QWidget()
@@ -152,12 +153,28 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         self.chk_thermal.setChecked(True)
         l_ep.addWidget(self.chk_thermal)
 
-        self.chk_gravity = QCheckBox("Учитывать гравитацию (GravityModel: g = -9.81 м/с² по оси Z)", grp_extra_phys)
+        self.chk_gravity = QCheckBox("Учитывать гравитацию (|g| = 9.81 м/с²)", grp_extra_phys)
         self.chk_gravity.setChecked(False)
         l_ep.addWidget(self.chk_gravity)
+        gravity_row = QHBoxLayout(); gravity_row.addWidget(QLabel("Направление в лабораторной системе:", grp_extra_phys))
+        self.combo_gravity = QComboBox(grp_extra_phys)
+        self.combo_gravity.addItems(["-X", "+X", "-Y", "+Y", "-Z", "+Z"])
+        self.combo_gravity.setCurrentText("-Z"); self.combo_gravity.setEnabled(False)
+        self.chk_gravity.toggled.connect(self.combo_gravity.setEnabled)
+        gravity_row.addWidget(self.combo_gravity); l_ep.addLayout(gravity_row)
         l_tab2.addWidget(grp_extra_phys)
+        init_info = QLabel(
+            f"Reference Pressure (абсолютное): {self.fluid_props.get('p_ref_mpa', 15.0):g} МПа. "
+            f"Initial Pressure (избыточное): 0 Па; температура: {self.fluid_props.get('t_ref_c', 300.0)+273.15:g} K; "
+            f"скорость: (0, 0, {self.yplus_data.get('velocity', 5.62):g}) м/с. "
+            "Свойства и начальные поля связаны с параметрами. Условия на границах задаются вручную.", tab_phys)
+        init_info.setWordWrap(True); l_tab2.addWidget(init_info)
+        self.chk_initialize = QCheckBox("Инициализировать начальные поля при первом запуске (без итераций решателя)", tab_phys)
+        self.chk_initialize.setChecked(True)
+        self.chk_initialize.setToolTip("Сначала настраиваются свойства, Reference Pressure и Initial Conditions. Повторный запуск не сбрасывает решение.")
+        l_tab2.addWidget(self.chk_initialize)
         l_tab2.addStretch()
-        self.tabs.addTab(tab_phys, "2. Физика и свойства среды")
+        self.tabs.addTab(tab_phys, "2. Физика")
 
         # ----------------- ВКЛАДКА 3: Мониторы и параметры -----------------
         tab_mon = QWidget()
@@ -167,6 +184,7 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         l_p = QVBoxLayout(grp_param)
         self.chk_params = QCheckBox("Создать переменные: rho, Cp, dynvis, kinvis, lambda, Pr, T_ref, P_ref, Re_in, D_hyd, Ub, G...", tab_mon)
         self.chk_params.setChecked(True)
+        self.chk_params.setToolTip("Базовые параметры свойств и начальных условий обязательны и создаются независимо от этого флажка.")
         l_p.addWidget(self.chk_params)
         lbl_p_info = QLabel(
             f"Текущие значения: ρ = {self.fluid_props.get('density', 725.553):.2f} кг/м³, "
@@ -179,21 +197,32 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         l_p.addWidget(lbl_p_info)
         l_tab3.addWidget(grp_param)
 
-        grp_rep = QGroupBox("2. Отчеты расхода и баланса (сохраняются в дереве)", tab_mon)
+        grp_rep = QGroupBox("2. Отчеты расхода и энергии (сохраняются в дереве)", tab_mon)
         l_r = QVBoxLayout(grp_rep)
-        self.chk_reports = QCheckBox("Создать отчеты баланса расхода (MassFlow_Inlet/Outlet_Total, Imbalance_MassFlow %)", grp_rep)
+        self.chk_reports = QCheckBox("Создать отчеты расхода и невязки; при включенной энергии — тепловой баланс", grp_rep)
         self.chk_reports.setChecked(True)
         l_r.addWidget(self.chk_reports)
         l_tab3.addWidget(grp_rep)
 
-        grp_qual = QGroupBox("3. Контроль качества сетки", tab_mon)
+        grp_qual = QGroupBox("Диагностика в STAR-CCM+", tab_mon)
         l_q = QVBoxLayout(grp_qual)
-        self.chk_scene = QCheckBox("Создать 3D-сцену контроля качества сетки (Quality_VolumeChange_Scene)", grp_qual)
+        self.chk_scene = QCheckBox("Создать скалярные сцены качества на среднем поперечном сечении", grp_qual)
         self.chk_scene.setChecked(True)
         l_q.addWidget(self.chk_scene)
-        l_tab3.addWidget(grp_qual)
+        self.chk_histograms = QCheckBox("Гистограммы качества (число ячеек) и отчеты min/max", grp_qual)
+        self.chk_histograms.setChecked(True)
+        l_q.addWidget(self.chk_histograms)
+        bins_row = QHBoxLayout()
+        bins_row.addWidget(QLabel("Интервалов гистограммы:", grp_qual))
+        self.spin_quality_bins = QSpinBox(grp_qual)
+        self.spin_quality_bins.setRange(5, 500)
+        self.spin_quality_bins.setValue(50)
+        self.chk_histograms.toggled.connect(self.spin_quality_bins.setEnabled)
+        bins_row.addWidget(self.spin_quality_bins)
+        l_q.addLayout(bins_row)
+        # Quality controls are placed on their own fifth tab below.
         l_tab3.addStretch()
-        self.tabs.addTab(tab_mon, "3. Мониторы и параметры")
+        self.tabs.addTab(tab_mon, "3. Параметры")
 
         # ----------------- ВКЛАДКА 4: Derived Parts & Сечения -----------------
         tab_parts = QWidget()
@@ -224,19 +253,26 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
 
         grp_sub_sec = QGroupBox("2. Индивидуальные сечения по подканалам", tab_parts)
         l_ss = QVBoxLayout(grp_sub_sec)
-        self.chk_sub_planes = QCheckBox("Генерировать сечения раздельно для выбранных подканалов:", grp_sub_sec)
+        self.chk_sub_planes = QCheckBox("Создать сечения выбранных подканалов (общий выбор над вкладками)", grp_sub_sec)
         self.chk_sub_planes.setChecked(True)
         l_ss.addWidget(self.chk_sub_planes)
 
         # Выбор подканалов чекбоксами:
         self.sub_checkboxes = []
-        grid_subs = QHBoxLayout()
+        self.grp_sources = QGroupBox("Подканалы для сечений, зондов и расчётных отчётов", self)
+        self.grp_sources.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+        sources_layout = QVBoxLayout(self.grp_sources)
+        sources_scroll = QScrollArea(); sources_scroll.setWidgetResizable(True)
+        sources_scroll.setFixedHeight(min(100, max(48, 28*((self.sub_count+3)//4)+12)))
+        sources_content = QWidget(); grid_subs = QGridLayout(sources_content)
+        sources_scroll.setWidget(sources_content); sources_layout.addWidget(sources_scroll)
+        main_lay.addWidget(self.grp_sources)
         for s in range(1, self.sub_count + 1):
-            cb = QCheckBox(f"Subchannel_{s}", grp_sub_sec)
+            cb = QCheckBox(f"Подканал {s}", sources_content)
             cb.setChecked(True)
             self.sub_checkboxes.append(cb)
-            grid_subs.addWidget(cb)
-        l_ss.addLayout(grid_subs)
+            grid_subs.addWidget(cb, (s-1)//4, (s-1)%4)
+
 
         row_sel_btns = QHBoxLayout()
         btn_sel_all = QPushButton("Выбрать все", grp_sub_sec)
@@ -248,7 +284,7 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         row_sel_btns.addWidget(btn_sel_all)
         row_sel_btns.addWidget(btn_clear_all)
         row_sel_btns.addStretch()
-        l_ss.addLayout(row_sel_btns)
+        sources_layout.addLayout(row_sel_btns)
 
         row_sub_n = QHBoxLayout()
         self.chk_sub_n_planes = QCheckBox("Серия из M плоскостей по высоте ячейки:", grp_sub_sec)
@@ -267,6 +303,11 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         l_ss.addWidget(self.lbl_sub_dz_hint)
         l_tab4.addWidget(grp_sub_sec)
 
+        self.chk_gap_sections = QCheckBox("Продольные сечения зазоров между исходными подканалами (Fuse)", tab_parts)
+        self.chk_gap_sections.setChecked(True)
+        self.chk_gap_sections.setToolTip("Одна ориентированная поверхность на общий зазор; без создания стенки или интерфейса")
+        l_tab4.addWidget(self.chk_gap_sections)
+
         grp_probes = QGroupBox("3. Линейные зонды (Line Sections)", tab_parts)
         l_pr = QVBoxLayout(grp_probes)
         self.chk_axis_probes = QCheckBox("Создать осевые зонды по центру живого сечения каждой ячейки (Probe_Axis_Sub_N)", grp_probes)
@@ -274,11 +315,96 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         l_pr.addWidget(self.chk_axis_probes)
         l_tab4.addWidget(grp_probes)
         l_tab4.addStretch()
-        self.tabs.addTab(tab_parts, "4. Derived Parts & Сечения")
+        self.tabs.addTab(tab_parts, "4. Сечения")
 
-        main_lay.addWidget(self.tabs)
+        # Move workflow controls into their relevant tabs.
+        self.chk_group_objects = QCheckBox("Группировать объекты meshBuilder", tab_mesh)
+        self.chk_group_objects.setChecked(True)
+        l_tab1.insertWidget(l_tab1.count()-1, self.chk_group_objects)
+        fields_group = QGroupBox("3. Поля для сцен, графиков и анализа", tab_mon)
+        fields_layout = QVBoxLayout(fields_group)
+        self.chk_field_functions = QCheckBox("Создать выбранные вычисляемые величины в Field Functions", fields_group)
+        self.chk_field_functions.setChecked(True)
+        fields_layout.addWidget(self.chk_field_functions)
+        fields_explanation = QLabel("Функции поля задают величину в каждой точке сетки. Их можно выбрать в сцене или графике. "
+            "Это не отдельные отчёты и не мониторы; создание полей не запускает расчёт.", fields_group)
+        fields_explanation.setWordWrap(True); fields_layout.addWidget(fields_explanation)
+        self.field_checkboxes = {}
+        for key, label in FIELD_CHOICES.items():
+            cb = QCheckBox(label, fields_group); cb.setChecked(True)
+            self.field_checkboxes[key] = cb; fields_layout.addWidget(cb)
+            self.chk_field_functions.toggled.connect(cb.setEnabled)
+        fields_layout.addWidget(QLabel("Служебные координаты и маски, необходимые макросу, создаются независимо от выбора.", fields_group))
+        l_tab3.insertWidget(l_tab3.count()-1, fields_group)
+
+        tab_quality = QWidget(); quality_layout = QVBoxLayout(tab_quality)
+        quality_layout.addWidget(grp_qual)
+        self.chk_bad_cells = QCheckBox("Выделять плохие ячейки (Threshold), считать количество и процент", tab_quality)
+        self.chk_bad_cells.setChecked(True); quality_layout.addWidget(self.chk_bad_cells)
+        self.chk_summary = QCheckBox("Итоговая сводка и CSV-отчёт рядом с симуляцией", tab_quality)
+        self.chk_summary.setChecked(True); l_tab3.insertWidget(l_tab3.count()-1, self.chk_summary)
+        self.chk_evaluate_solution = QCheckBox("Вычислять физические отчёты в сводке после настройки границ и расчёта", tab_mon)
+        self.chk_evaluate_solution.setToolTip("По умолчанию сводка вычисляет только геометрию и качество. Нужны итерации решения; нулевой расход не допускает среднемассового усреднения.")
+        l_tab3.insertWidget(l_tab3.count()-1,self.chk_evaluate_solution)
+        self.chk_summary.toggled.connect(self.chk_evaluate_solution.setEnabled)
+        check_button = QPushButton("Проверить текущую сетку в программе", tab_quality)
+        check_button.clicked.connect(self.check_export_mesh)
+        quality_layout.addWidget(check_button)
+        self.local_quality_text = QPlainTextEdit(tab_quality); self.local_quality_text.setReadOnly(True)
+        self.local_quality_text.setPlainText("Проверка выполняется по кнопке. Метрики meshBuilder и STAR различаются; результаты STAR проверяйте после импорта.")
+        quality_layout.addWidget(self.local_quality_text)
+        self.tabs.addTab(tab_quality, "5. Качество")
+
+        tab_analysis = QWidget(); analysis_layout = QVBoxLayout(tab_analysis)
+        info = QLabel("Отчёты по выбранным выше исходным подканалам, включая Fuse. "
+            "Плотность и вязкость берутся из текущих полей STAR, в том числе при IAPWS. "
+            "Другие группы также создают необходимые геометрические отчёты. "
+            "Вычисления требуют инициализированного или рассчитанного решения.", tab_analysis)
+        info.setWordWrap(True); analysis_layout.addWidget(info)
+        self.report_checkboxes = {}
+        for key, label in REPORT_CHOICES.items():
+            cb = QCheckBox(label, tab_analysis); self.report_checkboxes[key] = cb
+            analysis_layout.addWidget(cb)
+        note = QLabel("Cf = τw / (ρin Ub²/2); Darcy по стенке = 4 Cf. Перепад давления включает ускорение и гравитацию: "
+            "он не считается чистыми потерями трения. Re = |ṁ| Dh / (A μin), свойства усредняются по площади входа.", tab_analysis)
+        note.setWordWrap(True); analysis_layout.addWidget(note)
+        self.mean_group = QGroupBox("HYBRID: накопление средних полей по временным шагам", tab_analysis)
+        means_layout = QVBoxLayout(self.mean_group); self.mean_checkboxes = {}
+        for key, label in MEAN_CHOICES.items():
+            cb = QCheckBox(label, self.mean_group); self.mean_checkboxes[key] = cb; means_layout.addWidget(cb)
+        start_row = QHBoxLayout(); start_row.addWidget(QLabel("Начальный временной шаг:", self.mean_group))
+        self.spin_mean_start = QSpinBox(self.mean_group); self.spin_mean_start.setRange(1, 1000000000)
+        start_row.addWidget(self.spin_mean_start); means_layout.addLayout(start_row)
+        mean_note = QLabel("Один отсчёт на временной шаг; используйте постоянный Δt. Начните после переходного процесса. "
+            "Повторный запуск сохраняет накопленную статистику; настройка шага применяется только к новым мониторам. "
+            "Решатель автоматически не запускается.", self.mean_group)
+        mean_note.setWordWrap(True); means_layout.addWidget(mean_note)
+        analysis_layout.addWidget(self.mean_group); analysis_layout.addStretch()
+        self.rb_turb_srh.toggled.connect(self.mean_group.setEnabled)
+        self.mean_group.setEnabled(self.rb_turb_srh.isChecked())
+        self.tabs.addTab(tab_analysis, "6. Анализ")
+        # Scroll long tabs rather than growing the dialog beyond the screen.
+        for index in range(self.tabs.count()):
+            widget = self.tabs.widget(index); title = self.tabs.tabText(index)
+            self.tabs.removeTab(index)
+            scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setWidget(widget)
+            self.tabs.insertTab(index, scroll, title)
+        self.tabs.setCurrentIndex(0)
+        profile_row = QHBoxLayout()
+        save_button = QPushButton("Сохранить профиль экспорта…", self)
+        load_button = QPushButton("Загрузить профиль экспорта…", self)
+        save_button.clicked.connect(self.save_export_profile)
+        load_button.clicked.connect(self.load_export_profile)
+        profile_row.addWidget(save_button); profile_row.addWidget(load_button)
+        main_lay.addLayout(profile_row)
+        main_lay.addWidget(self.tabs, 1)
         self.on_topology_mode_changed()
         self.update_dz_hint()
+        self.selection_hint = QLabel(self); self.selection_hint.setWordWrap(True)
+        main_lay.addWidget(self.selection_hint)
+        for control in (self.chk_g_n_planes,self.chk_sub_n_planes,self.chk_sub_planes,self.chk_thermal,self.rb_eos_iapws,self.rb_turb_srh,*self.sub_checkboxes):
+            control.toggled.connect(self.update_dependencies)
+        self.update_dependencies()
 
         b_box = QHBoxLayout()
         btn_gen = QPushButton("🚀 Сгенерировать макрос (.java) и сетку Plot3D…", self)
@@ -291,8 +417,36 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         b_box.addWidget(btn_cancel)
         main_lay.addLayout(b_box)
 
+    def update_dependencies(self):
+        self.spin_n_planes.setEnabled(self.chk_g_n_planes.isChecked())
+        self.lbl_dz_hint.setEnabled(self.chk_g_n_planes.isChecked())
+        selected = sum(cb.isChecked() for cb in self.sub_checkboxes)
+        sub_series = self.chk_sub_planes.isChecked() and self.chk_sub_n_planes.isChecked() and selected > 0
+        self.spin_sub_n_planes.setEnabled(sub_series); self.lbl_sub_dz_hint.setEnabled(sub_series)
+        self.chk_sub_n_planes.setEnabled(self.chk_sub_planes.isChecked() and selected > 0)
+        thermal = self.chk_thermal.isChecked() or self.rb_eos_iapws.isChecked()
+        self.chk_thermal.setEnabled(not self.rb_eos_iapws.isChecked())
+        self.chk_thermal.setToolTip("IAPWS требует энергии независимо от сохранённого положения флажка.")
+        self.report_checkboxes['thermal'].setEnabled(thermal)
+        for key in ('temperature','wall_heat_flux'): self.mean_checkboxes[key].setEnabled(thermal)
+        self.mean_group.setEnabled(self.rb_turb_srh.isChecked())
+        text = f"Подканалы анализа: {selected}/{self.sub_count}. "
+        if not selected: text += "Индивидуальные сечения, зонды и расчётные отчёты не создаются. "
+        text += "Повторный запуск сохраняет физику, граничные условия и решение."
+        self.selection_hint.setText(text)
+
+    def check_export_mesh(self):
+        from mesh_quality import analyse_result, format_report, DEFAULT_PROFILE
+        self.local_quality_text.setPlainText("Проверка…")
+        try:
+            report = analyse_result(self.mesh_result, profile=DEFAULT_PROFILE)
+            self.local_quality_text.setPlainText(format_report(report))
+        except Exception as exc:
+            self.local_quality_text.setPlainText(f"Проверка не завершена: {exc}")
+
     def on_topology_mode_changed(self):
         is_intf = self.rb_inter_intf.isChecked()
+        self.chk_gap_sections.setEnabled(not is_intf)
         if is_intf:
             self.rb_io_split.setChecked(True)
             self.rb_io_split.setEnabled(True)
@@ -300,6 +454,7 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
             self.rb_wall_by_rod.setChecked(True)
             self.rb_wall_by_rod.setEnabled(True)
             self.rb_wall_60.setEnabled(True)
+            self.rb_wall_60.setToolTip("")
             self.rb_wall_rod.setEnabled(False)
         else:
             self.rb_io_single.setChecked(True)
@@ -307,7 +462,8 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
             self.rb_io_split.setEnabled(False)
             self.rb_wall_by_rod.setChecked(True)
             self.rb_wall_by_rod.setEnabled(True)
-            self.rb_wall_60.setEnabled(True)
+            self.rb_wall_60.setEnabled(False)
+            self.rb_wall_60.setToolTip("После Fuse исходные секторы 60° не сохраняются; доступна группировка по стержням.")
             self.rb_wall_rod.setEnabled(True)
 
     def update_dz_hint(self):
@@ -319,6 +475,99 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         if m > 1:
             dz_sub_mm = (self.lz_m / (m - 1)) * 1000.0
             self.lbl_sub_dz_hint.setText(f"• Шаг между сечениями ячейки при M = {m}: Δz_sub = {dz_sub_mm:.2f} мм")
+
+    def read_options(self):
+        w_mode = "by_rod"
+        if self.rb_wall_60.isChecked():
+            w_mode = "sectors_60"
+        elif self.rb_wall_rod.isChecked():
+            w_mode = "monolithic"
+
+        sel_subs = [idx + 1 for idx, cb in enumerate(self.sub_checkboxes) if cb.isChecked()]
+
+        return {
+            "import_mesh": self.chk_import.isChecked(),
+            "inner_fuse": True,
+            "inter_fuse": self.rb_inter_fuse.isChecked(),
+            "region_mode": "by_subchannel" if not self.rb_inter_fuse.isChecked() else "monolithic",
+            "inlet_outlet_mode": "single" if self.rb_io_single.isChecked() else "by_subchannel",
+            "rename_boundaries": True,
+            "rod_wall_mode": w_mode,
+            "turbulence_model": "hybrid_srh" if self.rb_turb_srh.isChecked() else "rst",
+            "use_iapws": self.rb_eos_iapws.isChecked(),
+            "enable_thermal": self.chk_thermal.isChecked(),
+            "enable_gravity": self.chk_gravity.isChecked(),
+            "gravity_axis": self.combo_gravity.currentText(),
+            "evaluate_solution_reports": self.chk_evaluate_solution.isChecked(),
+            "create_parameters": self.chk_params.isChecked(),
+            "create_physics": True,
+            "initialize_solution": self.chk_initialize.isChecked(),
+            "create_mass_reports": self.chk_reports.isChecked(),
+            "create_quality_scene": self.chk_scene.isChecked(),
+            "create_quality_histograms": self.chk_histograms.isChecked(),
+            "quality_bins": self.spin_quality_bins.value(),
+            "gap_sections": self.chk_gap_sections.isChecked() and self.chk_gap_sections.isEnabled(),
+            "n_planes": self.spin_n_planes.value() if self.chk_g_n_planes.isChecked() else 0,
+            "n_sub_planes": self.spin_sub_n_planes.value() if self.chk_sub_n_planes.isChecked() else 0,
+            "key_planes": self.chk_g_key_planes.isChecked(),
+            "sub_planes": self.chk_sub_planes.isChecked(),
+            "axis_probes": self.chk_axis_probes.isChecked(),
+            "create_bad_cells": self.chk_bad_cells.isChecked(),
+            "group_objects": self.chk_group_objects.isChecked(),
+            "create_summary": self.chk_summary.isChecked(),
+            "create_field_functions": self.chk_field_functions.isChecked(),
+            "field_functions": [k for k, cb in self.field_checkboxes.items() if cb.isChecked()],
+            "subchannel_reports": [k for k, cb in self.report_checkboxes.items() if cb.isChecked()],
+            "time_mean_fields": [k for k, cb in self.mean_checkboxes.items() if cb.isChecked()],
+            "mean_start_step": self.spin_mean_start.value(),
+            "selected_subchannels": sel_subs
+        }
+
+    def apply_options(self, options):
+        values = validate_options(options, self.sub_count)
+        # Validate everything before changing the GUI.
+        self.rb_inter_fuse.setChecked(values['inter_fuse'])
+        self.rb_inter_intf.setChecked(not values['inter_fuse'])
+        self.on_topology_mode_changed()
+        for key, attr in dict(initialize_solution='chk_initialize', import_mesh='chk_import', use_iapws='rb_eos_iapws',
+            enable_thermal='chk_thermal', enable_gravity='chk_gravity', evaluate_solution_reports='chk_evaluate_solution', create_parameters='chk_params',
+            create_mass_reports='chk_reports', create_quality_scene='chk_scene',
+            create_quality_histograms='chk_histograms', gap_sections='chk_gap_sections',
+            key_planes='chk_g_key_planes', sub_planes='chk_sub_planes', axis_probes='chk_axis_probes',
+            create_bad_cells='chk_bad_cells', group_objects='chk_group_objects',
+            create_summary='chk_summary', create_field_functions='chk_field_functions').items():
+            getattr(self, attr).setChecked(values[key])
+        self.rb_eos_const.setChecked(not values['use_iapws'])
+        self.rb_turb_srh.setChecked(values['turbulence_model']=='hybrid_srh')
+        self.rb_turb_rst.setChecked(values['turbulence_model']=='rst')
+        self.rb_wall_by_rod.setChecked(values['rod_wall_mode']=='by_rod')
+        self.rb_wall_60.setChecked(values['rod_wall_mode']=='sectors_60')
+        self.rb_wall_rod.setChecked(values['rod_wall_mode']=='monolithic')
+        self.combo_gravity.setCurrentText(values['gravity_axis'])
+        self.spin_quality_bins.setValue(values['quality_bins'])
+        self.chk_g_n_planes.setChecked(values['n_planes']!=0)
+        self.chk_sub_n_planes.setChecked(values['n_sub_planes']!=0)
+        if values['n_planes']:self.spin_n_planes.setValue(values['n_planes'])
+        if values['n_sub_planes']:self.spin_sub_n_planes.setValue(values['n_sub_planes'])
+        for i, checkbox in enumerate(self.sub_checkboxes,1):
+            checkbox.setChecked(i in values['selected_subchannels'])
+        for key, checkboxes in (('field_functions', self.field_checkboxes), ('subchannel_reports', self.report_checkboxes), ('time_mean_fields', self.mean_checkboxes)):
+            for name, checkbox in checkboxes.items(): checkbox.setChecked(name in values[key])
+        self.spin_mean_start.setValue(values['mean_start_step'])
+        self.update_dz_hint()
+        self.update_dependencies()
+
+    def save_export_profile(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Сохранить профиль экспорта", "star_export.json", "JSON (*.json)")
+        if path:
+            try:save_profile(self.read_options(), path)
+            except (OSError, ValueError) as exc:QMessageBox.warning(self, "Профиль экспорта", str(exc))
+
+    def load_export_profile(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Загрузить профиль экспорта", "", "JSON (*.json)")
+        if path:
+            try:self.apply_options(load_profile(path, self.sub_count))
+            except (OSError, ValueError) as exc:QMessageBox.warning(self, "Профиль экспорта", str(exc))
 
     def generate_and_save(self):
         import starccm_macro_generator as smg
@@ -348,37 +597,7 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
             QMessageBox.critical(self, "Ошибка сохранения сетки", f"Не удалось экспортировать файл сетки:\n{exc}")
             return
 
-        w_mode = "by_rod"
-        if self.rb_wall_60.isChecked():
-            w_mode = "sectors_60"
-        elif self.rb_wall_rod.isChecked():
-            w_mode = "monolithic"
-
-        sel_subs = [idx + 1 for idx, cb in enumerate(self.sub_checkboxes) if cb.isChecked()]
-
-        opts = {
-            "import_mesh": self.chk_import.isChecked(),
-            "inner_fuse": True,
-            "inter_fuse": self.rb_inter_fuse.isChecked(),
-            "region_mode": "by_subchannel" if not self.rb_inter_fuse.isChecked() else "monolithic",
-            "inlet_outlet_mode": "single" if self.rb_io_single.isChecked() else "by_subchannel",
-            "rename_boundaries": True,
-            "rod_wall_mode": w_mode,
-            "turbulence_model": "hybrid_srh" if self.rb_turb_srh.isChecked() else "rst",
-            "use_iapws": self.rb_eos_iapws.isChecked(),
-            "enable_thermal": self.chk_thermal.isChecked(),
-            "enable_gravity": self.chk_gravity.isChecked(),
-            "create_parameters": self.chk_params.isChecked(),
-            "create_physics": True,
-            "create_mass_reports": self.chk_reports.isChecked(),
-            "create_quality_scene": self.chk_scene.isChecked(),
-            "n_planes": self.spin_n_planes.value() if self.chk_g_n_planes.isChecked() else 0,
-            "n_sub_planes": self.spin_sub_n_planes.value() if self.chk_sub_n_planes.isChecked() else 0,
-            "key_planes": self.chk_g_key_planes.isChecked(),
-            "sub_planes": self.chk_sub_planes.isChecked(),
-            "axis_probes": self.chk_axis_probes.isChecked(),
-            "selected_subchannels": sel_subs
-        }
+        opts = self.read_options()
 
         try:
             java_code = smg.generate_starccm_java_macro(
