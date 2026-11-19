@@ -28,7 +28,7 @@ class WaterTransportTests(unittest.TestCase):
                             (300,15,725.553275227173,8.834775720679453e-5,.5632092396757247),
                             (350,100,762.3345577040078,9.591501852295469e-5,.608499831337308)]:
             with self.subTest(t=t,p=p):
-                r=water_iapws97(t,p)
+                r=water_iapws97(t,p,conductivity_model="full")
                 self.assertAlmostEqual(r['density'],rho,delta=2e-9)
                 self.assertAlmostEqual(r['dyn_vis'],mu,delta=1e-14)
                 self.assertAlmostEqual(r['lambda'],k,delta=1e-11)
@@ -78,3 +78,39 @@ class WaterTransportTests(unittest.TestCase):
             match=re.search(r'"'+name+r'",\s*([\d.eE+-]+),',macro)
             self.assertIsNotNone(match,name)
             self.assertTrue(math.isclose(float(match.group(1)),value,rel_tol=rtol),(name,match.group(1),value))
+
+    def test_star_reported_point_background_and_full_modes_are_explicit(self):
+        r=water_iapws97(300,15)
+        self.assertEqual(r['conductivity_model'],'background')
+        self.assertAlmostEqual(r['lambda'],.557436764298241,delta=1e-12)
+        self.assertEqual(f"{r['lambda']:.3e}",'5.574e-01')
+        self.assertEqual(f"{r['dyn_vis']:.3e}",'8.835e-05')
+        self.assertEqual(f"{r['density']:.3f}",'725.553')
+        self.assertEqual(f"{r['cp']:.3f}",'5476.017')
+        full=water_iapws97(300,15,conductivity_model='full')
+        for key in ('density','dyn_vis','cp','kin_vis'):self.assertEqual(r[key],full[key])
+        self.assertAlmostEqual(full['lambda'],.5632092396757247,delta=1e-12)
+        self.assertNotEqual(r['prandtl'],full['prandtl'])
+        self.assertEqual(r['prandtl'],r['dyn_vis']*r['cp']/r['lambda'])
+        with self.assertRaises(ValueError):water_iapws97(300,15,conductivity_model='unknown')
+    def test_gui_conductivity_choice_persists_and_export_uses_selected_value(self):
+        from PySide6.QtWidgets import QApplication
+        from yplus_dialog import YPlusDialog
+        from mesh_core import MeshParams,generate_mesh
+        from starccm_macro_generator import generate_starccm_java_macro
+        app=QApplication.instance() or QApplication([])
+        state={'temp_c':'300','press_mpa':'15'}
+        d=YPlusDialog(state_dict=state);self.addCleanup(d.deleteLater)
+        self.assertEqual(d.current_fluid_props['conductivity_model'],'background')
+        d.combo_water_conductivity.setCurrentIndex(d.combo_water_conductivity.findData('full'))
+        self.assertEqual(state['conductivity_model'],'full')
+        restored=YPlusDialog(state_dict=state);self.addCleanup(restored.deleteLater)
+        self.assertEqual(restored.combo_water_conductivity.currentData(),'full')
+        mesh=generate_mesh(MeshParams(ni=8,nj=20,nz=1))
+        for key in ('full','background'):
+            restored.combo_water_conductivity.setCurrentIndex(restored.combo_water_conductivity.findData(key))
+            props=restored.current_fluid_props
+            self.assertAlmostEqual(props['lambda'],water_iapws97(300,15,conductivity_model=key)['lambda'],places=12)
+            code=generate_starccm_java_macro('water.xyz',mesh,None,props,restored.last_yplus_result,{})
+            value=float(re.search(r'"lambda",\s*([\d.eE+-]+),',code).group(1))
+            self.assertTrue(math.isclose(value,props['lambda'],rel_tol=1e-3))

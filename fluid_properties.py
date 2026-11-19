@@ -3,6 +3,12 @@
 import math
 
 from iapws import IAPWS97
+from iapws._iapws import _ThCond
+
+WATER_CONDUCTIVITY_MODELS = {
+    "background": "Без критического усиления (согласование со STAR)",
+    "full": "С критическим усилением (промышленная IAPWS 2011)",
+}
 
 def _saturation_pressure_mpa(T):
     """IF97 Region 4 saturation pressure; T is in kelvin."""
@@ -17,8 +23,10 @@ def _saturation_pressure_mpa(T):
     return (2 * C / (-B + math.sqrt(B * B - 4 * A * C))) ** 4
 
 
-def water_iapws97(t_c: float, p_mpa: float) -> dict:
+def water_iapws97(t_c: float, p_mpa: float, *, conductivity_model="background") -> dict:
     """Свойства воды: Регион 1 IAPWS-IF97 (жидкость при 0..350 °C, p до 100 МПа)."""
+    if conductivity_model not in WATER_CONDUCTIVITY_MODELS:
+        raise ValueError("Неизвестная модель теплопроводности воды")
     if not math.isfinite(t_c) or not math.isfinite(p_mpa):
         raise ValueError("Температура и давление должны быть конечными")
     T = t_c + 273.15
@@ -39,16 +47,19 @@ def water_iapws97(t_c: float, p_mpa: float) -> dict:
     if state.region != 1:
         raise ValueError("Требуется жидкая вода в регионе 1 IAPWS-IF97")
 
-    # iapws 1.5.5: mu uses R12-08, k uses R15-11 with the industrial
-    # enhancement computed from the IF97 phase derivatives. cp is kJ/(kg K).
-    rho, mu, cp_j, lam = map(float, (state.rho, state.mu, state.cp * 1000.0, state.k))
+    # R15-11 separates background conductivity lambda0*lambda1 from the
+    # additive critical enhancement. STAR's reported 300 C / 15 MPa value
+    # agrees with the background form; do not emulate it with a fitted factor.
+    # The pinned, documented _ThCond kernel omits enhancement without a phase.
+    conductivity = _ThCond(state.rho, state.T) if conductivity_model == "background" else state.k
+    rho, mu, cp_j, lam = map(float, (state.rho, state.mu, state.cp * 1000.0, conductivity))
     if any(not math.isfinite(value) or value <= 0 for value in (rho, mu, cp_j, lam)):
         raise ValueError("IAPWS вернул недопустимые свойства воды")
     return {
         "density": rho, "dyn_vis": mu, "kin_vis": mu / rho, "cp": cp_j,
         "lambda": lam, "prandtl": mu * cp_j / lam,
-        "t_ref_c": t_c, "p_ref_mpa": p_mpa,
-        "desc": f"Вода: IF97, μ — IAPWS 2008, λ — IAPWS 2011; T={t_c:.1f} °C, P={p_mpa:.2f} МПа"
+        "t_ref_c": t_c, "p_ref_mpa": p_mpa, "conductivity_model": conductivity_model,
+        "desc": f"Вода: IF97, μ — IAPWS 2008, λ — IAPWS 2011 ({WATER_CONDUCTIVITY_MODELS[conductivity_model]}); T={t_c:.1f} °C, P={p_mpa:.2f} МПа"
     }
 
 GASES = {

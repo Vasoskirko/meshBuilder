@@ -10,7 +10,7 @@ except ImportError:
     HAS_QT = False
 
 from yplus_calculator import calculate_yplus_and_step, FLUID_MODES
-from fluid_properties import water_iapws97, gas_properties, GAS_PRESETS
+from fluid_properties import water_iapws97, gas_properties, GAS_PRESETS, WATER_CONDUCTIVITY_MODELS
 
 
 class YPlusDialog(QDialog if HAS_QT else object):
@@ -58,6 +58,15 @@ class YPlusDialog(QDialog if HAS_QT else object):
             self.combo_gas.addItem(gname)
         self.combo_gas.currentIndexChanged.connect(self.recalc)
         f_fluid.addRow("Выбор газа:", self.combo_gas)
+
+        self.combo_water_conductivity = QComboBox(self)
+        for key, label in WATER_CONDUCTIVITY_MODELS.items():
+            self.combo_water_conductivity.addItem(label, key)
+        selected_model = self.combo_water_conductivity.findData(self.state_dict.get("conductivity_model", "background"))
+        self.combo_water_conductivity.setCurrentIndex(max(0, selected_model))
+        self.combo_water_conductivity.setToolTip("При 300 °C / 15 МПа: без усиления λ≈0.557437; с усилением λ≈0.563209 Вт/(м·К). Сверяйте с выбранным методом материала STAR.")
+        self.combo_water_conductivity.currentIndexChanged.connect(self.recalc)
+        f_fluid.addRow("Теплопроводность воды:", self.combo_water_conductivity)
 
         self.edit_density = QLineEdit(str(self.state_dict.get("density", "712.0")), self)
         self.edit_density.textEdited.connect(self.recalc)
@@ -171,12 +180,14 @@ class YPlusDialog(QDialog if HAS_QT else object):
         self.edit_temp.setEnabled(is_iapws or is_gas)
         self.edit_press.setEnabled(is_iapws or is_gas)
         self.combo_gas.setVisible(is_gas)
+        self.combo_water_conductivity.setEnabled(is_iapws)
 
         self.edit_density.setReadOnly(is_iapws or is_gas)
         self.edit_visc.setReadOnly(is_iapws or is_gas)
         self.recalc()
 
     def save_state(self):
+        self.state_dict["conductivity_model"] = self.combo_water_conductivity.currentData()
         self.state_dict["fluid_mode"] = self.combo_fluid_mode.currentText()
         self.state_dict["temp_c"] = self.edit_temp.text().strip()
         self.state_dict["press_mpa"] = self.edit_press.text().strip()
@@ -200,7 +211,7 @@ class YPlusDialog(QDialog if HAS_QT else object):
             p_mpa = float(self.edit_press.text().strip().replace(",", "."))
 
             if "IAPWS" in m_name:
-                p_props = water_iapws97(t_c, p_mpa)
+                p_props = water_iapws97(t_c, p_mpa, conductivity_model=self.combo_water_conductivity.currentData())
                 self.current_fluid_props = p_props
                 self.lbl_extra_props.setToolTip(p_props["desc"])
                 rho = p_props["density"]
@@ -209,7 +220,7 @@ class YPlusDialog(QDialog if HAS_QT else object):
                 self.edit_visc.setText(f"{mu:.3e}")
                 self.lbl_extra_props.setText(
                     f"Cp = {p_props['cp']:.1f} Дж/(кг·К) | λ = {p_props['lambda']:.6f} Вт/(м·К) | Pr = {p_props['prandtl']:.5f}\n"
-                    "Свойства: IF97; вязкость — IAPWS 2008; теплопроводность — IAPWS 2011"
+                    f"μ — IAPWS 2008; λ — IAPWS 2011: {self.combo_water_conductivity.currentText()}"
                 )
             elif "газ" in m_name:
                 comp = ("сжимаемый" in m_name)
