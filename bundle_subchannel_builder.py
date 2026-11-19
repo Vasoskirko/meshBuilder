@@ -117,8 +117,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
         core = (panel.combo_core_mode.currentData(),
                 tuple(panel.fields[k].value() for k in
                       ("core_growth", "core_max_size", "core_max_cells",
-                       "core_transition", "core_layers")), panel.chk_smooth_core.isChecked(),
-                panel.fields["core_smoothing_iterations"].value())
+                       "core_transition", "core_layers")), panel.chk_align_core.isChecked())
         return layer, core
 
     def validate_mesh_inputs(self, *args):
@@ -953,7 +952,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
                 else False
             )
 
-            smoothing_steps=f['core_smoothing_iterations'].value() if self.mesh_subpanel.chk_smooth_core.isChecked() else 0
+            align_core=self.mesh_subpanel.chk_align_core.isChecked()
             model_snapshot=deepcopy(self.model)
             template_snapshot=deepcopy(self.template_configs)
             block_snapshot=deepcopy(self.block_custom_configs)
@@ -970,7 +969,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
                     core_mode=cmode,
                     core_layers=clayers,
                     hermite_tfi=h_tfi,
-                    smoothing_iterations=smoothing_steps,
+                    align_core=align_core,
                     progress_callback=lambda fraction,text:progress(15+int(35*fraction),text),
                 )
                 rep = analyse_subchannel_result(full_res,progress)
@@ -1001,10 +1000,9 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
                     f"Min Jacobian: {rep['metrics']['scaled_jacobian']['min']:.3f}.{extra}\n"
                     f"Можно менять параметры Блока 5 и нажимать «Заполнить ядро сетки» повторно — призма не пересоздаётся."
                 )
-                if d.get('core_smoothing'):
-                    smooth=d['core_smoothing']
-                    self.mesh_subpanel.lbl_status.setText(self.mesh_subpanel.lbl_status.text()+
-                        f"\nСглаживание ядра: среднее отклонение углов от 90° {smooth['before_mean_angle_error_deg']:.3f} → {smooth['after_mean_angle_error_deg']:.3f}°; min scaled Jacobian {smooth['before_min_scaled_jacobian']:.4f} → {smooth['after_min_scaled_jacobian']:.4f}; изменено блоков {smooth['moved_blocks']}.")
+                if d.get('core_alignment'):
+                    a=d['core_alignment']
+                    self.mesh_subpanel.lbl_status.setText(self.mesh_subpanel.lbl_status.text()+f"\nВыравнивание ядра: отношение сторон ≥1, идеально 1; медиана {a['median']:.2f}, 95-й процентиль {a['p95']:.2f}, максимум {a['maximum']:.2f}. Доля ≤1.5: {a['fraction_under_1_5']:.0%} (внешняя половина ядра).")
                 self.mesh_subpanel.update_core_preview()
                 self.redraw_mesh_views()
                 self.populate_blocks_table()
@@ -1101,13 +1099,6 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
             mid_idx = widths_um.shape[0] // 2
             self.ax_layers.plot(nodes_idx, widths_um[mid_idx], "g.-", label=f"Сечение {mid_idx + 1}")
             self.ax_layers.plot(nodes_idx, widths_um[-1], "r.-", label="Сечение N (к зазору M)")
-
-        baseline=getattr(res,'comparison_blocks',[])
-        if baseline and self.chk_compare_core.isChecked():
-            before=np.stack(baseline[block_idx],axis=-1)
-            before_widths=np.linalg.norm(np.diff(before,axis=1),axis=-1)*1e6
-            if not res.wall_starts[block_idx]:before_widths=before_widths[:,::-1]
-            self.ax_layers.plot(nodes_idx,before_widths[before_widths.shape[0]//2],color='#777777',linestyle='--',label='До сглаживания: средний луч')
 
         self.ax_layers.set_xlabel("Номер ячейки по нормали (j)")
         self.ax_layers.set_ylabel("Толщина ячейки (мкм)")
@@ -1248,16 +1239,10 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
         total_points=sum(x.size for x,y in res.blocks)
         render_stride=max(int(stride),int(np.ceil(np.sqrt(total_points/250000))))
         self.combo_detail.setToolTip(f'Фактическое отображение 1:{render_stride}. Авторазрежение больших сеток влияет только на рисунок; экспорт полный.')
-        baseline=getattr(res,'comparison_blocks',[])
-        self.chk_compare_core.setEnabled(bool(baseline))
         for k, (bx, by) in enumerate(res.blocks):
             v = np.stack((bx * 1e3, by * 1e3), axis=-1)
             ii = np.unique(np.r_[np.arange(0, bx.shape[0], render_stride), bx.shape[0] - 1])
             jj = np.unique(np.r_[np.arange(0, bx.shape[1], render_stride), bx.shape[1] - 1])
-            if baseline and self.chk_compare_core.isChecked():
-                old=np.stack(baseline[k],axis=-1)*1e3
-                old_lines=[old[i,jj] for i in ii]+[old[ii,j] for j in jj]
-                self.ax_mesh.add_collection(LineCollection(old_lines,colors='#777777',linestyles='dashed',linewidths=.7,alpha=.65))
             lines = [v[i,jj] for i in ii] + [v[ii,j] for j in jj]
             c = colors[k % len(colors)]
             self.ax_mesh.add_collection(LineCollection(lines, colors=c, linewidths=0.5, alpha=0.85))

@@ -302,14 +302,10 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         self.core_help = QLabel("r задаёт скачок на стыке; q — рост соседних шагов; целевой размер — плато. В строгом режиме ограничения не превышаются: при несовместимости настройте r/q/размер. Общее число слоёв сохраняет конформность блоков.",self)
         self.core_help.setWordWrap(True); b_core.addWidget(self.core_help)
 
-        self.chk_smooth_core=QCheckBox('Эксперимент: сгладить внутренние узлы ядра',self)
-        self.chk_smooth_core.setToolTip('Призма, первый шаг ядра и границы блоков фиксированы. Неподходящие перемещения отклоняются. Серый пунктир покажет исходную сетку.')
-        self.chk_smooth_core.toggled.connect(self.on_core_field_changed)
-        b_core.addWidget(self.chk_smooth_core)
-        self.smoothing_row=self.row(b_core,'Максимум шагов сглаживания:',
-            self.integer('core_smoothing_iterations',15,1,100,onchange=self.on_core_field_changed))
-        self.smoothing_row.setEnabled(False)
-        self.chk_smooth_core.toggled.connect(self.smoothing_row.setEnabled)
+        self.chk_align_core=QCheckBox('Выравнивание пропорций ячеек ядра (эксперимент)',self)
+        self.chk_align_core.setToolTip('Подбор общего числа слоёв под местный поперечный шаг. Цель — пропорции около 1:1 в ядре; призма сохранена. Используются r, q, предел размера и лимит слоёв. Может не иметь решения. Ядро строится по прямым лучам, независимо от Hermite TFI.')
+        self.chk_align_core.toggled.connect(self.on_core_mode_changed)
+        b_core.addWidget(self.chk_align_core)
         self.lbl_core_preview = QLabel(self)
         self.lbl_core_preview.setWordWrap(True)
         self.lbl_core_preview.setStyleSheet("padding: 6px; border-radius: 4px; font-size: 11px; background: #e8f5e9; color: #1b5e20; border: 1px solid #c8e6c9;")
@@ -422,7 +418,7 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         self.layer_thick_row.setVisible(layer and mode in ("layer_thickness", "layer_growth"))
         self.layer_growth_row.setVisible(layer and mode in ("layer_growth", "layer_first_growth"))
         if hasattr(self, "combo_core_mode"):
-            cmode = self.combo_core_mode.currentData()
+            cmode = 'controlled_growth' if getattr(self,'chk_align_core',None) and self.chk_align_core.isChecked() else self.combo_core_mode.currentData()
             self.core_growth_row.setVisible(cmode in ("cfd_growth", "isotropic", "controlled_growth"))
             self.core_maxsize_row.setVisible(cmode in ("cfd_growth","controlled_growth"))
             self.core_limit_row.setVisible(cmode == "controlled_growth")
@@ -468,6 +464,11 @@ class MeshSubpanel(QWidget if HAS_QT else object):
             n_layers = self.fields["core_layers"].value()
             max_cells = self.fields["core_max_cells"].value()
             cmode = self.combo_core_mode.currentData()
+            if self.chk_align_core.isChecked():
+                self.lbl_core_preview.setText('Выравнивание: автоматический подбор числа слоёв под пропорции около 1:1 во внешней половине ядра. Прежний режим ядра не используется. Ограничения: r, q, максимальный размер и лимит слоёв. Ядро — по прямым лучам, независимо от Hermite TFI. Точный результат — после заполнения; 1:1 не гарантируется.')
+                self.combo_core_mode.setEnabled(False)
+                return
+            self.combo_core_mode.setEnabled(True)
             p_curr = self.read_params()
 
             if p_curr.law == "wall_core":

@@ -54,7 +54,6 @@ class SubchannelMeshResult:
     geom_data: list = field(default_factory=list)
     block_metrics: list = field(default_factory=list)
     all_block_widths: list = field(default_factory=list)
-    comparison_blocks: list = field(default_factory=list)
 
 def _face_nodes(block, face):
     v = np.stack(block, axis=-1)
@@ -533,7 +532,7 @@ def build_mesh_from_bundle_model(bundle_model, base_params, template_overrides=N
         all_block_widths=all_block_widths
     )
 
-def fill_subchannel_core(layer_result, bundle_model, growth=1.1, max_size=100e-6, max_cells=5000, transition_ratio=1.0, core_mode="cfd_growth", core_layers=20, hermite_tfi=False, smoothing_iterations=0, progress_callback=None):
+def fill_subchannel_core(layer_result, bundle_model, growth=1.1, max_size=100e-6, max_cells=5000, transition_ratio=1.0, core_mode="cfd_growth", core_layers=20, hermite_tfi=False, align_core=False, progress_callback=None):
     if layer_result.complete: return layer_result
     p = layer_result.params; ni = p.ni; blocks = layer_result.blocks
     if any(x.shape != y.shape or x.shape[0] != ni for x, y in blocks):
@@ -556,11 +555,22 @@ def fill_subchannel_core(layer_result, bundle_model, growth=1.1, max_size=100e-6
     combined_rem = np.concatenate(all_rem_lines)
     h0_combined = np.full(len(combined_rem), last_w, dtype=float)
 
-    if core_mode == 'controlled_growth':
+    if core_mode == 'controlled_growth' or align_core:
         h0_combined = np.concatenate([np.asarray(layer_result.all_block_widths[i])[:,-1]
             if i<len(layer_result.all_block_widths) else np.full(ni,last_w) for i in range(len(blocks))])
     h0_first = last_w * float(transition_ratio)
-    if core_mode == 'controlled_growth':
+    alignment_info = None
+    if align_core:
+        # This isolated distribution operates on straight core rays. The
+        # existing wall layer (including its Hermite geometry) is untouched.
+        hermite_tfi=False
+        from mesh_core_alignment import aligned_distribution, node_tangents
+        effective_max_size=float(max_size)
+        front_tangents=np.concatenate([node_tangents(v[0]) for v in block_rem_lengths])
+        end_tangents=np.concatenate([node_tangents(v[1]) for v in block_rem_lengths])
+        global_dist,alignment_info=aligned_distribution(combined_rem,h0_combined,front_tangents,end_tangents,
+            growth,effective_max_size,max_cells,transition_ratio,progress_callback)
+    elif core_mode == 'controlled_growth':
         effective_max_size=float(max_size)
         global_dist=mc.controlled_distribution(combined_rem,h0_combined,growth,effective_max_size,max_cells,transition_ratio=transition_ratio)
     elif core_mode == "isotropic":
@@ -600,27 +610,6 @@ def fill_subchannel_core(layer_result, bundle_model, growth=1.1, max_size=100e-6
         orig_w = layer_result.all_block_widths[idx] if idx < len(layer_result.all_block_widths) else layer_result.layer_widths
         filled_block_widths.append(np.column_stack((orig_w, widths_block)))
 
-    comparison_blocks=[];smoothing=[]
-    if smoothing_iterations:
-        from mesh_core_smoothing import smooth_core
-        comparison_blocks=filled_blocks
-        smoothed=[]
-        for idx,((x,y),starts) in enumerate(zip(filled_blocks,wall_starts)):
-            wall_count=blocks[idx][0].shape[1]
-            grid=np.stack((x,y),axis=-1)
-            core=grid[:,wall_count-1:] if starts else grid[:,:-(wall_count-1)][:,::-1]
-            def report(step,total):
-                if progress_callback:progress_callback((idx+step/max(1,total))/len(filled_blocks),f'Сглаживание ядра: блок {idx+1}/{len(filled_blocks)}, шаг {step}/{total}')
-            improved,info=smooth_core(core,smoothing_iterations,
-                growth_limit=growth if core_mode=='controlled_growth' else None,
-                size_limit=max_size if core_mode=='controlled_growth' else None,progress=report)
-            if starts:grid[:,wall_count-1:]=improved
-            else:grid[:,:-(wall_count-1)]=improved[:,::-1]
-            smoothed.append((grid[...,0].copy(),grid[...,1].copy()));smoothing.append(info)
-            orig_w=layer_result.all_block_widths[idx] if idx<len(layer_result.all_block_widths) else layer_result.layer_widths
-            filled_block_widths[idx]=np.column_stack((orig_w,np.linalg.norm(np.diff(improved,axis=1),axis=-1)))
-        filled_blocks=smoothed
-
     _validate_interfaces(filled_blocks, layer_result.interfaces, p.pitch * 1e-11)
     new_nj = filled_blocks[0][0].shape[1]
     new_p = mc.replace(p, nj=new_nj)
@@ -642,27 +631,17 @@ def fill_subchannel_core(layer_result, bundle_model, growth=1.1, max_size=100e-6
         float(growth) > 1.0 + 1e-12 and global_dist.plateau.max() > effective_max_size * 1.02
     )
 
-    if smoothing:
-        diag['core_smoothing']={
-            'before_min_scaled_jacobian':min(v['before']['min_scaled_jacobian'] for v in smoothing),
-            'after_min_scaled_jacobian':min(v['after']['min_scaled_jacobian'] for v in smoothing),
-            'before_mean_angle_error_deg':float(np.mean([v['before']['mean_angle_error_deg'] for v in smoothing])),
-            'after_mean_angle_error_deg':float(np.mean([v['after']['mean_angle_error_deg'] for v in smoothing])),
-            'accepted_steps':sum(v['accepted_steps'] for v in smoothing),
-            'moved_blocks':sum(v['accepted_steps']>0 for v in smoothing),
-            'max_displacement_m':max(v['max_displacement_m'] for v in smoothing)}
-        actual=[w[:,layer_result.blocks[i][0].shape[1]-1:] for i,w in enumerate(filled_block_widths)]
-        diag['core_step_min_m']=min(float(w.min()) for w in actual)
-        diag['core_step_max_m']=max(float(w.max()) for w in actual)
-        diag['core_plateau_min_m']=min(float(w[:,-1].min()) for w in actual)
-        diag['core_plateau_max_m']=max(float(w[:,-1].max()) for w in actual)
+    if alignment_info is not None:
+        from mesh_core_alignment import aspect_diagnostics
+        alignment_info.update(aspect_diagnostics(filled_blocks,[b[0].shape[1] for b in blocks],wall_starts))
+        diag['core_alignment']=alignment_info
     updated_metrics = []
-    for metric_index,m in enumerate(layer_result.block_metrics):
+    for m in layer_result.block_metrics:
         m_copy = BlockMetricsInfo(
             global_id=m.global_id, subchannel_id=m.subchannel_id, sector_idx=m.sector_idx,
             template_id=m.template_id, law=m.law, law_display=m.law_display, rod_name=m.rod_name,
             rod_diameter_mm=m.rod_diameter_mm, ni=m.ni, nj=new_nj, nz=m.nz,
-            h1_um=m.h1_um, h_last_um=(float(filled_block_widths[metric_index][:,-1].max()) if smoothing else float(global_dist.widths.max())) * 1e6,
+            h1_um=m.h1_um, h_last_um=float(global_dist.widths.max()) * 1e6,
             azimuth_step_wall_um=m.azimuth_step_wall_um, azimuth_step_opp_um=m.azimuth_step_opp_um,
             growth_q=m.growth_q, aspect_ratio_wall=m.aspect_ratio_wall,
             special_param_str=f"Ядро: {global_dist.count} сл., плато {global_dist.plateau.min()*1e6:.1f}–{global_dist.plateau.max()*1e6:.1f} мкм"
@@ -675,7 +654,7 @@ def fill_subchannel_core(layer_result, bundle_model, growth=1.1, max_size=100e-6
         layer_widths=layer_result.layer_widths, templates=layer_result.templates,
         instances_map=layer_result.instances_map, wall_starts=layer_result.wall_starts,
         geom_data=layer_result.geom_data, block_metrics=updated_metrics,
-        comparison_blocks=comparison_blocks, all_block_widths=filled_block_widths
+        all_block_widths=filled_block_widths
     )
 
 def export_subchannel_plot3d(result, filename):
