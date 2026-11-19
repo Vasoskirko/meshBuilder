@@ -532,8 +532,9 @@ def build_mesh_from_bundle_model(bundle_model, base_params, template_overrides=N
         all_block_widths=all_block_widths
     )
 
-def fill_subchannel_core(layer_result, bundle_model, growth=1.1, max_size=100e-6, max_cells=5000, transition_ratio=1.0, core_mode="cfd_growth", core_layers=20, hermite_tfi=False):
+def fill_subchannel_core(layer_result, bundle_model, growth=1.1, max_size=100e-6, max_cells=5000, transition_ratio=1.0, core_mode="cfd_growth", core_layers=20, hermite_tfi=False, align_core=False, progress_callback=None):
     if layer_result.complete: return layer_result
+    align_core = align_core or core_mode == 'aspect_alignment'
     p = layer_result.params; ni = p.ni; blocks = layer_result.blocks
     if any(x.shape != y.shape or x.shape[0] != ni for x, y in blocks):
         raise ValueError("Несовместимое число узлов ni в пристеночном слое; перестройте слой")
@@ -555,8 +556,25 @@ def fill_subchannel_core(layer_result, bundle_model, growth=1.1, max_size=100e-6
     combined_rem = np.concatenate(all_rem_lines)
     h0_combined = np.full(len(combined_rem), last_w, dtype=float)
 
+    if core_mode == 'controlled_growth' or align_core:
+        h0_combined = np.concatenate([np.asarray(layer_result.all_block_widths[i])[:,-1]
+            if i<len(layer_result.all_block_widths) else np.full(ni,last_w) for i in range(len(blocks))])
     h0_first = last_w * float(transition_ratio)
-    if core_mode == "isotropic":
+    alignment_info = None
+    if align_core:
+        # This isolated distribution operates on straight core rays. The
+        # existing wall layer (including its Hermite geometry) is untouched.
+        hermite_tfi=False
+        from mesh_core_alignment import aligned_distribution, node_tangents
+        effective_max_size=float(max_size)
+        front_tangents=np.concatenate([node_tangents(v[0]) for v in block_rem_lengths])
+        end_tangents=np.concatenate([node_tangents(v[1]) for v in block_rem_lengths])
+        global_dist,alignment_info=aligned_distribution(combined_rem,h0_combined,front_tangents,end_tangents,
+            growth,effective_max_size,max_cells,transition_ratio,progress_callback)
+    elif core_mode == 'controlled_growth':
+        effective_max_size=float(max_size)
+        global_dist=mc.controlled_distribution(combined_rem,h0_combined,growth,effective_max_size,max_cells,transition_ratio=transition_ratio)
+    elif core_mode == "isotropic":
         opp_steps = [float(g["ds_opp"]) for g in geom_data if "ds_opp" in g]
         if opp_steps:
             effective_max_size = max(min(opp_steps), h0_first * 1.01)
@@ -614,6 +632,10 @@ def fill_subchannel_core(layer_result, bundle_model, growth=1.1, max_size=100e-6
         float(growth) > 1.0 + 1e-12 and global_dist.plateau.max() > effective_max_size * 1.02
     )
 
+    if alignment_info is not None:
+        from mesh_core_alignment import aspect_diagnostics
+        alignment_info.update(aspect_diagnostics(filled_blocks,[b[0].shape[1] for b in blocks],wall_starts))
+        diag['core_alignment']=alignment_info
     updated_metrics = []
     for m in layer_result.block_metrics:
         m_copy = BlockMetricsInfo(
@@ -636,7 +658,7 @@ def fill_subchannel_core(layer_result, bundle_model, growth=1.1, max_size=100e-6
         all_block_widths=filled_block_widths
     )
 
-def export_subchannel_plot3d(result, filename):
+def export_subchannel_plot3d(result, filename, progress_callback=None):
     if not result.complete:
         raise ValueError("Нельзя экспортировать неполную сетку: сначала заполните ядро")
     p, nz, z_len = result.params, result.params.nz, result.params.z_len
@@ -647,13 +669,21 @@ def export_subchannel_plot3d(result, filename):
         with open(temp, "w", encoding="ascii", newline="\n") as f:
             f.write(f"{len(result.blocks)}\n")
             for bx, by in result.blocks: f.write(f"{bx.shape[0]} {bx.shape[1]} {nz + 1}\n")
-            for x, y in result.blocks:
+            total_planes=max(1,len(result.blocks)*3*(nz+1))
+            plane=0
+            for block_index,(x, y) in enumerate(result.blocks):
                 b_ni, b_nj = x.shape
                 for coord in (x, y, None):
+                    flat_xy=coord.ravel(order="F") if coord is not None else None
                     for k in range(nz + 1):
-                        flat = coord.ravel(order="F") if coord is not None else np.full(b_ni * b_nj, z_len * k / nz)
-                        for start in range(0, len(flat), 6):
-                            f.write(" ".join(f"{v:.16e}" for v in flat[start:start + 6]) + "\n")
+                        flat = flat_xy if coord is not None else np.full(b_ni * b_nj, z_len * k / nz)
+                        for chunk in range(0,len(flat),6000):
+                            if progress_callback:
+                                progress_callback(int(95*(plane+chunk/max(1,len(flat)))/total_planes),f'Запись Plot3D: блок {block_index+1}/{len(result.blocks)}, слой {k+1}/{nz+1}')
+                            end=min(chunk+6000,len(flat))
+                            f.writelines(' '.join(f'{v:.16e}' for v in flat[start:min(start+6,end)])+'\n' for start in range(chunk,end,6))
+                        plane+=1
+        if progress_callback:progress_callback(97,"Завершение записи Plot3D")
         os.replace(temp, target)
     finally:
         if os.path.exists(temp):

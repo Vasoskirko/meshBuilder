@@ -3,6 +3,7 @@ GROUP_SUPPORT = r'''
     private String managedBucket(NamedObject object, String category) {
         String name=object.getPresentationName();
         if (category.equals("Parameters")) {
+            if (name.equals("TimeStep")) return "Transient";
             if (Arrays.asList("rho","dynvis","kinvis","Cp","lambda","Pr").contains(name)) return "Properties";
             if (Arrays.asList("P_ref","T_ref").contains(name)) return "Reference";
             if (Arrays.asList("P_init","T_init","U_init").contains(name)) return "Initial";
@@ -39,8 +40,9 @@ GROUP_SUPPORT = r'''
     private void nativeGroupObjects(Object manager, String name, List<NamedObject> members) throws Exception {
         for (java.lang.reflect.Method method : manager.getClass().getMethods()) {
             if (!method.getName().equals("groupObjects") || method.getParameterCount()!=3) continue;
-            Object collection=method.getParameterTypes()[1].isAssignableFrom(ArrayList.class)
-                ? new ArrayList<>(members) : new NeoObjectVector(members.toArray());
+            Class<?> expected=method.getParameterTypes()[1];
+            Object collection=expected.isAssignableFrom(ArrayList.class) ? new ArrayList<>(members)
+                : expected.isAssignableFrom(Vector.class) ? new Vector<>(members) : new NeoObjectVector(members.toArray());
             try { method.invoke(manager,name,collection,true); return; }
             catch (IllegalArgumentException mismatch) { /* Try compatible overload. */ }
         }
@@ -67,9 +69,22 @@ GROUP_SUPPORT = r'''
         if (groups.isEmpty()) return;
         try {
             Object roots=manager.getClass().getMethod("getGroupsManager").invoke(manager);
+            // A nested group may only regroup members of its parent. Populate
+            // the root first, then move its members into category subfolders.
+            List<NamedObject> all=new ArrayList<>();
+            for (List<NamedObject> members : groups.values()) all.addAll(members);
+            nativeGroupObjects(roots,"meshBuilder_"+category,all);
             Object root=managedRootGroup(roots,"meshBuilder_"+category);
             Object folders=root.getClass().getMethod("getGroupsManager").invoke(root);
-            for (Map.Entry<String,List<NamedObject>> entry : groups.entrySet()) nativeGroupObjects(folders,entry.getKey(),entry.getValue());
+            for (Map.Entry<String,List<NamedObject>> entry : groups.entrySet()) {
+                nativeGroupObjects(folders,entry.getKey(),entry.getValue());
+                Object leaf=managedRootGroup(folders,entry.getKey());
+                try {
+                    Object actual=leaf.getClass().getMethod("getObjects").invoke(leaf);
+                    if (actual instanceof Collection && !((Collection<?>)actual).containsAll(entry.getValue()))
+                        throw new IllegalStateException("Folder "+entry.getKey()+" missing members; expected "+entry.getValue().size());
+                } catch (NoSuchMethodException noMembershipAccessor) { /* Older API: native grouping succeeded. */ }
+            }
         } catch (Exception e) { warn(sim,"  [!] Nested grouping " + category + ": " + e.getMessage()); }
     }
 '''

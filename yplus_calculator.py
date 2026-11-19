@@ -54,6 +54,7 @@ def calculate_yplus_and_step(mode, value, rho, mu, dh_mm, area_mm2, y_plus=1.0, 
     return {
         "y_plus": y_plus, "re": re, "u": u, "mass_flow": rho * u * A, "mass_flux": rho * u,
         "cf": cf, "tau_w": tau, "u_tau": ut,
+        "nu": mu/rho, "viscous_length_m": mu/(rho*ut),
         "y1_um": y1_um, "delta_y1_um": d1_um,
         "h1_insert_um": round(d1_um, 3),
         "step_display_str": f"h1 = Δy₁ = {fmt_step_auto(d1_um)} | y₁ = {fmt_step_auto(y1_um)}"

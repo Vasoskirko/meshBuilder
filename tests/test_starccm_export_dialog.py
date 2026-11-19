@@ -32,7 +32,7 @@ class ExportDialogTests(unittest.TestCase):
         self.app.processEvents()
 
     def run_export(self, selected, generator_error=None):
-        def export(result, path):
+        def export(result, path, **kwargs):
             Path(path).write_text('XYZ sentinel', encoding='utf-8')
 
         with patch('starccm_export_dialog.QFileDialog.getSaveFileName', return_value=(selected, '')), patch('mesh_subchannel.export_subchannel_plot3d', side_effect=export) as exporter, patch('starccm_macro_generator.generate_starccm_java_macro', return_value='JAVA sentinel', side_effect=generator_error) as generator, patch('starccm_export_dialog.QMessageBox.critical') as critical, patch('starccm_export_dialog.QMessageBox.warning') as warning, patch('starccm_export_dialog.QMessageBox.information') as information, patch.object(self.dialog, 'accept') as accepted:

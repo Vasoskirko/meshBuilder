@@ -1,5 +1,6 @@
 """Portable, validated STAR export settings; no mesh or solver state is stored."""
 import json
+import math
 import os
 import tempfile
 from pathlib import Path
@@ -28,7 +29,7 @@ DEFAULTS = dict(import_mesh=True, inner_fuse=True, inter_fuse=False,
     quality_bins=50, gap_sections=False, n_planes=11, n_sub_planes=11,
     key_planes=True, sub_planes=True, axis_probes=True, selected_subchannels=[],
     create_bad_cells=True, group_objects=True, create_summary=True, create_field_functions=True, initialize_solution=True,
-    field_functions=list(FIELD_CHOICES), subchannel_reports=[], time_mean_fields=[], mean_start_step=1)
+    field_functions=list(FIELD_CHOICES), subchannel_reports=[], time_mean_fields=[], mean_start_step=1, time_step=1e-4)
 ENUMS = dict(gravity_axis=('-X','+X','-Y','+Y','-Z','+Z'), region_mode=('by_subchannel','monolithic'), inlet_outlet_mode=('by_subchannel','single'),
     rod_wall_mode=('by_rod','sectors_60','monolithic'), turbulence_model=('rst','hybrid_srh'))
 
@@ -37,6 +38,10 @@ def validate_options(options, sub_count=None):
     if not isinstance(options,dict) or set(options)-set(DEFAULTS):
         raise ValueError('Неизвестные параметры профиля экспорта')
     values=dict(DEFAULTS,**options)
+    dt=values['time_step']
+    if isinstance(dt,bool) or not isinstance(dt,(int,float)) or not math.isfinite(dt) or dt<=0:
+        raise ValueError('Шаг времени Δt должен быть конечным положительным числом секунд')
+    values['time_step']=float(dt)
     for key,default in DEFAULTS.items():
         value=values[key]
         if type(value) is not type(default):
@@ -60,7 +65,7 @@ def validate_options(options, sub_count=None):
     if not values['inner_fuse'] or not values['rename_boundaries'] or not values['create_physics']:
         raise ValueError('Профиль не поддерживает отключение базовой сборки/физики/именования')
     if values['inter_fuse']:
-        if values['rod_wall_mode']=='sectors_60' or values['inlet_outlet_mode']!='single' or values['region_mode']!='monolithic':
+        if values['inlet_outlet_mode']!='single' or values['region_mode']!='monolithic':
             raise ValueError('Несовместимые параметры Fuse')
     elif values['region_mode']!='by_subchannel' or values['inlet_outlet_mode']!='by_subchannel' or values['rod_wall_mode']=='monolithic':
         raise ValueError('Несовместимые параметры Internal Interface')

@@ -30,7 +30,7 @@ def evaluate_azimuth_hint_for_assembly(ni: int, rods_dict: dict = None, unit: st
         ds = ((math.pi * d) / 6.0 / n_intervals) * 1e-3 * uscale
         items.append(f"ИК: {ds:.{nd}f} {unit} (D={d:.1f} мм)")
 
-    return f"💡 Шаг по дуге (азимут, 60°): Δs ≈ {' … '.join(items)} при ni = {ni}"
+    return f"💡 Шаг по дуге (азимут, 60°): Δφ ≈ {' … '.join(items)} при ni = {ni}"
 
 def evaluate_mesh_hints(law: str, mode: str, fields: dict, min_gap_mm: float = 0.95, unit: str = "мкм", uscale: float = 1e6) -> Tuple[str, str]:
     L = max(0.1e-3, min_gap_mm * 1e-3)

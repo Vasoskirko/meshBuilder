@@ -30,7 +30,7 @@ class BundleUiExtractionTests(unittest.TestCase):
 
     def test_moved_method_bodies_are_unchanged(self):
         original = find_class(self.original, 'BundleBuilderWindow')
-        extracted = find_class(ast.parse((ROOT / 'bundle_builder_ui.py').read_text(encoding='utf-8')), 'BundleBuilderUiMixin')
+        extracted = find_class(ast.parse(subprocess.check_output(['git','show','e2f362c:bundle_builder_ui.py'],cwd=ROOT).decode('utf-8')), 'BundleBuilderUiMixin')
         before = {n.name: n for n in original.body if isinstance(n, ast.FunctionDef) and n.name in MOVED}
         after = {n.name: n for n in extracted.body if isinstance(n, ast.FunctionDef)}
         self.assertEqual(set(before), MOVED)

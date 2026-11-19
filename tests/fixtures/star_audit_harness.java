@@ -8,12 +8,16 @@ class CheckAudit {
     }
     static class Surface extends NamedObject { double mass;Surface(double m) { mass=m; } }
     static class Report extends NamedObject {
-        int calls;double value;Parts parts=new Parts();
-        double getReportMonitorValue() { calls++;return value; } Parts getParts() { return parts; }
+        int calls;double value;
+        double getReportMonitorValue() { calls++;return value; }
     }
     static class ExpressionReport extends Report { String definition;String getDefinition() { return definition; } }
-    static class MassFlowAverageReport extends Report {}
-    static class MassFlowReport extends Report {
+    // STAR 2602: base Report (and ExpressionReport) have no getParts().
+    static class ScopedReport extends Report {
+        Parts parts=new Parts();Parts getParts() { return parts; }
+    }
+    static class MassFlowAverageReport extends ScopedReport {}
+    static class MassFlowReport extends ScopedReport {
         @Override double getReportMonitorValue() { return ((Surface)parts.parts.get(0)).mass; }
     }
     static class ReportManager {

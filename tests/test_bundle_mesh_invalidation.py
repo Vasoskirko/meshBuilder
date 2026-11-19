@@ -109,7 +109,7 @@ class BundleMeshInvalidationTests(unittest.TestCase):
             lambda: self.w.pitch_spin.setValue(13),
             self.w.on_clear_selection,
             lambda: self.p.combo_center_method.setCurrentIndex(1),
-            lambda: self.p.chk_hermite_tfi.setChecked(False),
+            lambda: self.p.combo_mesh_lines.setCurrentIndex(0),
             lambda: self.w.template_configs.update({1: replace(self.w.base_params, ni=12)}),
             lambda: self.w.block_custom_configs.update({1: replace(self.w.base_params, ni=12)}),
         ):

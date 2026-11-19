@@ -3,14 +3,18 @@
 try:
     from PySide6.QtWidgets import (
         QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox, QLineEdit,
-        QComboBox, QPushButton, QLabel, QRadioButton, QButtonGroup, QDialog
+        QComboBox, QPushButton, QLabel, QRadioButton, QButtonGroup, QDialog, QWidget, QScrollArea
     )
     HAS_QT = True
 except ImportError:
     HAS_QT = False
 
+import math
+
+from fluid_properties_dialog import FluidPropertiesDialog
+
 from yplus_calculator import calculate_yplus_and_step, FLUID_MODES
-from fluid_properties import water_iapws97, gas_properties, GAS_PRESETS
+from fluid_properties import water_iapws97, gas_properties, GAS_PRESETS, WATER_CONDUCTIVITY_MODELS
 
 
 class YPlusDialog(QDialog if HAS_QT else object):
@@ -19,16 +23,23 @@ class YPlusDialog(QDialog if HAS_QT else object):
             return
         super().__init__(parent)
         self.setWindowTitle("Инженерный CFD-калькулятор y⁺ (IAPWS-97 / Идеальный газ)")
-        self.resize(580, 580)
+        self.resize(640, 720)
         self.target_field = target_field
         self.d_hyd_mm = d_hyd_mm
         self.a_fluid_mm2 = a_fluid_mm2
         self.state_dict = state_dict if state_dict is not None else {}
 
-        lay = QVBoxLayout(self)
+        self.properties_dialog = FluidPropertiesDialog(self,self.state_dict.get('conductivity_model','background'))
+        # One shared selector/state; it is shown only in the property window.
+        self.combo_water_conductivity = self.properties_dialog.combo_conductivity
+        outer_lay = QVBoxLayout(self)
+        scroll = QScrollArea(self); scroll.setWidgetResizable(True)
+        content = QWidget(); lay = QVBoxLayout(content)
+        scroll.setWidget(content); outer_lay.addWidget(scroll)
 
         g_fluid = QGroupBox("1. Теплоноситель и теплофизические свойства", self)
         f_fluid = QFormLayout(g_fluid)
+        self.fluid_form = f_fluid
 
         self.combo_fluid_mode = QComboBox(self)
         for m_name in FLUID_MODES:
@@ -59,6 +70,8 @@ class YPlusDialog(QDialog if HAS_QT else object):
         self.combo_gas.currentIndexChanged.connect(self.recalc)
         f_fluid.addRow("Выбор газа:", self.combo_gas)
 
+        self.combo_water_conductivity.currentIndexChanged.connect(self.recalc)
+
         self.edit_density = QLineEdit(str(self.state_dict.get("density", "712.0")), self)
         self.edit_density.textEdited.connect(self.recalc)
         f_fluid.addRow("Плотность (ρ, кг/м³):", self.edit_density)
@@ -67,9 +80,14 @@ class YPlusDialog(QDialog if HAS_QT else object):
         self.edit_visc.textEdited.connect(self.recalc)
         f_fluid.addRow("Динамическая вязкость (μ, Па·с):", self.edit_visc)
 
-        self.lbl_extra_props = QLabel(self)
-        self.lbl_extra_props.setStyleSheet("font-size: 11px; color: #004d40; background: #e0f2f1; padding: 4px; border-radius: 3px;")
-        f_fluid.addRow("Справочно (CFD):", self.lbl_extra_props)
+        self.edit_kinematic = QLineEdit(self); self.edit_kinematic.setReadOnly(True)
+        self.edit_kinematic.setPlaceholderText('—')
+        f_fluid.addRow('Кинематическая вязкость (ν, м²/с):',self.edit_kinematic)
+        self.lbl_extra_props = QLabel(self); self.lbl_extra_props.setWordWrap(True)
+        f_fluid.addRow('Модель свойств:',self.lbl_extra_props)
+        self.btn_properties = QPushButton('Все свойства теплоносителя и насыщение…',self)
+        self.btn_properties.clicked.connect(self.open_properties)
+        f_fluid.addRow(self.btn_properties)
 
         lay.addWidget(g_fluid)
 
@@ -157,7 +175,7 @@ class YPlusDialog(QDialog if HAS_QT else object):
         btn_close = QPushButton("Закрыть", self)
         btn_close.clicked.connect(self.reject)
         b_box.addWidget(btn_close)
-        lay.addLayout(b_box)
+        outer_lay.addLayout(b_box)
 
         self.calculated_delta_y1_um = 2.5
         self.on_fluid_mode_changed(0)
@@ -170,12 +188,15 @@ class YPlusDialog(QDialog if HAS_QT else object):
         self.edit_temp.setEnabled(is_iapws or is_gas)
         self.edit_press.setEnabled(is_iapws or is_gas)
         self.combo_gas.setVisible(is_gas)
+        self.fluid_form.labelForField(self.combo_gas).setVisible(is_gas)
+        self.combo_water_conductivity.setEnabled(is_iapws)
 
         self.edit_density.setReadOnly(is_iapws or is_gas)
         self.edit_visc.setReadOnly(is_iapws or is_gas)
         self.recalc()
 
     def save_state(self):
+        self.state_dict["conductivity_model"] = self.combo_water_conductivity.currentData()
         self.state_dict["fluid_mode"] = self.combo_fluid_mode.currentText()
         self.state_dict["temp_c"] = self.edit_temp.text().strip()
         self.state_dict["press_mpa"] = self.edit_press.text().strip()
@@ -192,22 +213,39 @@ class YPlusDialog(QDialog if HAS_QT else object):
         else:
             self.state_dict["flow_mode"] = "reynolds"
 
+    def open_properties(self):
+        self.show_property_values(getattr(self,'current_fluid_props',{}))
+        self.properties_dialog.show()
+        self.properties_dialog.raise_()
+        self.properties_dialog.activateWindow()
+
+    def show_property_values(self, props):
+        value=props.get('kin_vis')
+        self.edit_kinematic.setText('' if value is None else f'{value:.8e}')
+        self.properties_dialog.set_properties(props,self.combo_fluid_mode.currentText(),
+            'IAPWS' in self.combo_fluid_mode.currentText())
+        self.btn_properties.setEnabled(bool(props))
+
+    def done(self, result):
+        self.properties_dialog.close()
+        super().done(result)
+
     def recalc(self):
+        properties_ready = False
         try:
             m_name = self.combo_fluid_mode.currentText()
             t_c = float(self.edit_temp.text().strip().replace(",", "."))
             p_mpa = float(self.edit_press.text().strip().replace(",", "."))
 
             if "IAPWS" in m_name:
-                p_props = water_iapws97(t_c, p_mpa)
+                p_props = water_iapws97(t_c, p_mpa, conductivity_model=self.combo_water_conductivity.currentData())
                 self.current_fluid_props = p_props
+                self.lbl_extra_props.setToolTip(p_props["desc"])
                 rho = p_props["density"]
                 mu = p_props["dyn_vis"]
-                self.edit_density.setText(str(rho))
-                self.edit_visc.setText(f"{mu:.3e}")
-                self.lbl_extra_props.setText(
-                    f"Cp = {p_props['cp']:.1f} Дж/(кг·К) | λ = {p_props['lambda']:.3f} Вт/(м·К) | Pr = {p_props['prandtl']:.2f}"
-                )
+                self.edit_density.setText(f"{rho:.6f}")
+                self.edit_visc.setText(f"{mu:.7e}")
+                self.lbl_extra_props.setText('Плотность — IF97; вязкость — IAPWS 2008. Полные свойства доступны в отдельном окне.')
             elif "газ" in m_name:
                 comp = ("сжимаемый" in m_name)
                 g_props = gas_properties(self.combo_gas.currentText(), t_c, p_mpa, compressible=comp)
@@ -215,10 +253,8 @@ class YPlusDialog(QDialog if HAS_QT else object):
                 rho = g_props["density"]
                 mu = g_props["dyn_vis"]
                 self.edit_density.setText(str(rho))
-                self.edit_visc.setText(f"{mu:.3e}")
-                self.lbl_extra_props.setText(
-                    f"Cp = {g_props['cp']:.1f} Дж/(кг·К) | λ = {g_props['lambda']:.4f} Вт/(м·К) | Pr = {g_props['prandtl']:.2f} | γ = {g_props['gamma']:.2f}"
-                )
+                self.edit_visc.setText(f"{mu:.7e}")
+                self.lbl_extra_props.setText(g_props['desc'])
             else:
                 rho = float(self.edit_density.text().strip().replace(",", "."))
                 mu = float(self.edit_visc.text().strip().replace(",", "."))
@@ -228,6 +264,12 @@ class YPlusDialog(QDialog if HAS_QT else object):
                 }
                 self.lbl_extra_props.setText("Пользовательские свойства теплоносителя")
 
+            # Derived viscosity is meaningful for water, gas and manual rho/mu.
+            if not math.isfinite(rho) or not math.isfinite(mu) or rho<=0 or mu<=0:
+                raise ValueError('Плотность и динамическая вязкость должны быть положительными и конечными')
+            self.current_fluid_props.update(kin_vis=mu/rho,t_ref_c=t_c,p_ref_mpa=p_mpa)
+            self.show_property_values(self.current_fluid_props)
+            properties_ready = True
             y_target = float(self.edit_yplus.text().strip().replace(",", "."))
 
             if self.rad_re.isChecked():
@@ -256,12 +298,22 @@ class YPlusDialog(QDialog if HAS_QT else object):
                 f"Re = {res['re']:,.0f} | U_bulk = {res['u']:.3f} м/с | Q = {res['mass_flow']:.4f} кг/с"
             )
             self.lbl_tau_summary.setText(
-                f"Cf = {res['cf']:.5f} | τ_w = {res['tau_w']:.2f} Па | u_τ = {res['u_tau']:.4f} м/с"
+                f"Cf = {res['cf']:.5f} | τ_w = {res['tau_w']:.2f} Па | u_τ = {res['u_tau']:.4f} м/с\nℓν = ν/uτ = {res['viscous_length_m']*1e6:.4g} мкм"
             )
             self.lbl_step_res.setText(res["step_display_str"])
             self.btn_apply.setEnabled(True)
             self.save_state()
         except Exception as exc:
+            self.last_yplus_result = None
+            self.calculated_delta_y1_um = 0
+            self.lbl_flow_summary.clear()
+            self.lbl_tau_summary.clear()
+            if not properties_ready:
+                self.current_fluid_props = {}
+                self.show_property_values({})
+                self.lbl_extra_props.setText('Свойства не рассчитаны: проверьте T, P и модель среды')
+                if self.edit_density.isReadOnly(): self.edit_density.clear()
+                if self.edit_visc.isReadOnly(): self.edit_visc.clear()
             self.lbl_step_res.setText(f"Проверьте ввод: {exc}")
             self.btn_apply.setEnabled(False)
 

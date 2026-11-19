@@ -60,9 +60,10 @@ from mesh_subchannel_subpanel import MeshSubpanel
 
 
 from bundle_builder_ui import BundleBuilderUiMixin
+from bundle_mesh_jobs import BundleMeshJobsMixin, analyse_subchannel_result
 
 
-class BundleBuilderWindow(BundleBuilderUiMixin, QMainWindow):
+class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Конструктор сечения ТВС и генератор сетки подканалов (CFD)")
@@ -95,6 +96,27 @@ class BundleBuilderWindow(BundleBuilderUiMixin, QMainWindow):
         for spin in self.geometry_controls():
             spin.valueChanged.connect(self.validate_mesh_inputs)
 
+    def append_mesh_message(self, text):
+        from datetime import datetime
+        self.mesh_console.appendPlainText(f'[{datetime.now():%H:%M:%S}] {text}')
+
+    def report_viscous_units(self):
+        result=self.current_mesh_result
+        if result is None:
+            self.append_mesh_message('Нет актуальной сетки для оценки вязких размеров.')
+            return
+        ranges=result.diagnostics.get('edge_ranges_m')
+        if ranges is None:
+            self.append_mesh_message('Размеры рёбер ещё не измерены; выполните построение.')
+            return
+        from mesh_viscous_units import format_wall_units
+        try:
+            message=format_wall_units(ranges,getattr(self.mesh_subpanel,'last_yplus_result',None))
+        except (ValueError,TypeError,KeyError) as exc:
+            message=f'Вязкие размеры недоступны: {exc}. Откройте калькулятор y+ и выполните корректный расчёт.'
+        state='Полная сетка' if result.complete else 'Только пристеночный слой (ядро не заполнено)'
+        self.append_mesh_message(state+'\n'+message)
+
     def geometry_controls(self):
         return (self.s_flat_spin, self.pitch_spin, self.d_fuel_spin,
                 self.d_guide_spin, self.d_inst_spin)
@@ -111,21 +133,22 @@ class BundleBuilderWindow(BundleBuilderUiMixin, QMainWindow):
             set(self.model.selected_subchannels), self.base_params,
             self.template_configs, self.block_custom_configs,
             panel.combo_center_method.currentData(),
-            panel.chk_hermite_tfi.isChecked(),
+            panel.combo_mesh_lines.currentData() if any(p.law != "wall_core" for p in [self.base_params,*self.template_configs.values(),*self.block_custom_configs.values()]) else False,
         ))
-        core = (panel.combo_core_mode.currentData(),
-                tuple(panel.fields[k].value() for k in
-                      ("core_growth", "core_max_size", "core_max_cells",
-                       "core_transition", "core_layers")))
+        cmode=panel.combo_core_mode.currentData()
+        keys=('core_transition','core_layers') if cmode=='fixed_count' else (
+            'core_transition','core_growth','core_max_size','core_max_cells')
+        core=(cmode,tuple(panel.fields[k].value() for k in keys),
+              panel.combo_core_lines.currentData() if cmode=='fixed_count' else False)
         return layer, core
 
     def validate_mesh_inputs(self, *args):
         if self._layer_inputs is None and self._mesh_inputs is None:
             return
         try:
+            # Commit axial drafts even if focus/editingFinished has not fired.
+            self.mesh_subpanel.sync_global_axial(self.mesh_subpanel.read_params())
             layer, core = self.mesh_inputs()
-            # Read the active editor as well: an invalid draft was not saved.
-            self.mesh_subpanel.read_params()
         except ValueError:
             layer, core = None, None
         if self._layer_inputs is not None and layer != self._layer_inputs:
@@ -140,6 +163,7 @@ class BundleBuilderWindow(BundleBuilderUiMixin, QMainWindow):
             panel.btn_export_star.setEnabled(False)
             panel.btn_quality.setEnabled(False)
             panel.lbl_status.setText("Параметры изменены. Перестройте сетку или заполните актуальный слой.")
+            self.append_mesh_message("Сетка устарела: параметры изменены. Предыдущие размеры в журнале относятся к прежнему построению; экспорт заблокирован.")
         self.mesh_subpanel.btn_fill_core.setEnabled(self.current_layer_result is not None)
 
     def accept_mesh_inputs(self, result, *, filled=False):
@@ -819,45 +843,52 @@ class BundleBuilderWindow(BundleBuilderUiMixin, QMainWindow):
                 if hasattr(self.mesh_subpanel, "combo_center_method")
                 else "equi_clearance"
             )
-            res = ms.build_mesh_from_bundle_model(
-                self.model,
-                base_params=base_p,
-                template_overrides=self.template_configs,
-                block_custom_overrides=self.block_custom_configs,
-                auto_fill_core=False,
-                center_method=cm_method,
-                hermite_tfi=(
-                    self.mesh_subpanel.chk_hermite_tfi.isChecked()
-                    if hasattr(self.mesh_subpanel, "chk_hermite_tfi")
-                    else False
-                ),
-            )
-            z_len, nz = base_p.z_len, base_p.nz
-            z_nodes = np.linspace(0, z_len, nz + 1)
-            b3d = mq.extrude_blocks(res.blocks, z_nodes)
-            rep = mq.analyse_blocks(b3d)
+            model_snapshot=deepcopy(self.model)
+            template_snapshot=deepcopy(self.template_configs)
+            block_snapshot=deepcopy(self.block_custom_configs)
+            hermite_snapshot=bool(self.mesh_subpanel.combo_mesh_lines.currentData())
+            def compute(progress):
+                progress(5,"Расчёт геометрии и координат сетки")
+                res = ms.build_mesh_from_bundle_model(
+                    model_snapshot,
+                    base_params=base_p,
+                    template_overrides=template_snapshot,
+                    block_custom_overrides=block_snapshot,
+                    auto_fill_core=False,
+                    center_method=cm_method,
+                    hermite_tfi=hermite_snapshot,
+                )
+                rep = analyse_subchannel_result(res,progress)
+                progress(92,"Расчёт завершён")
 
-            self.current_mesh_result = res
-            self.accept_mesh_inputs(res)
-            self.current_quality_report = rep
-            self.mesh_subpanel.btn_quality.setEnabled(True)
-            self.mesh_subpanel.btn_export.setEnabled(False)
-            self.mesh_subpanel.btn_export_star.setEnabled(False)
-            self.mesh_subpanel.btn_fill_core.setEnabled(self.current_layer_result is not None)
+                return res,rep
+            def completed(payload):
+                res,rep=payload
+                self.current_mesh_result = res
+                self.accept_mesh_inputs(res)
+                self.current_quality_report = rep
+                self.mesh_subpanel.btn_quality.setEnabled(True)
+                self.mesh_subpanel.btn_export.setEnabled(False)
+                self.mesh_subpanel.btn_export_star.setEnabled(False)
+                self.mesh_subpanel.btn_fill_core.setEnabled(self.current_layer_result is not None)
 
-            d = res.diagnostics
-            skipped = d.get("skipped_peripheral", 0)
-            skip_txt = f" (пропущено пристеночных: {skipped})" if skipped else ""
-            txt = (
-                f"Построен пристеночный слой: {d['blocks']} блоков.\n"
-                f"Ядро не заполнено. Настройте блок «5. Заполнение ядра» и нажмите «Заполнить ядро сетки».{skip_txt}"
-            )
-            self.mesh_subpanel.lbl_status.setText(txt)
-            self.mesh_subpanel.update_core_preview()
-            self.redraw_mesh_views()
-            self.populate_blocks_table()
+                d = res.diagnostics
+                skipped = d.get("skipped_peripheral", 0)
+                skip_txt = f" (пропущено пристеночных: {skipped})" if skipped else ""
+                txt = (
+                    f"Построен пристеночный слой: {d['blocks']} блоков.\n"
+                    f"Ядро не заполнено. Настройте блок «5. Заполнение ядра» и нажмите «Заполнить ядро сетки».{skip_txt}"
+                )
+                self.mesh_subpanel.lbl_status.setText(txt)
+                self.append_mesh_message(txt)
+                self.report_viscous_units()
+                self.mesh_subpanel.update_core_preview()
+                self.redraw_mesh_views()
+                self.populate_blocks_table()
+            self._run_mesh_task("Построение пристеночного слоя",compute,completed,"Ошибка построения слоя")
         except Exception as exc:
             user_msg = format_friendly_error(exc)
+            self.append_mesh_message("Ошибка построения слоя: "+user_msg)
             QMessageBox.critical(self, "Ошибка построения слоя", user_msg)
 
     def on_build_multiblock_mesh(self):
@@ -879,44 +910,51 @@ class BundleBuilderWindow(BundleBuilderUiMixin, QMainWindow):
                 if hasattr(self.mesh_subpanel, "combo_center_method")
                 else "equi_clearance"
             )
-            res = ms.build_mesh_from_bundle_model(
-                self.model,
-                base_params=base_p,
-                template_overrides=self.template_configs,
-                block_custom_overrides=self.block_custom_configs,
-                auto_fill_core=False if is_layer_mode else True,
-                center_method=cm_method,
-                hermite_tfi=(
-                    self.mesh_subpanel.chk_hermite_tfi.isChecked()
-                    if hasattr(self.mesh_subpanel, "chk_hermite_tfi")
-                    else False
-                ),
-            )
-            z_len, nz = base_p.z_len, base_p.nz
-            z_nodes = np.linspace(0, z_len, nz + 1)
-            b3d = mq.extrude_blocks(res.blocks, z_nodes)
-            rep = mq.analyse_blocks(b3d)
+            model_snapshot=deepcopy(self.model)
+            template_snapshot=deepcopy(self.template_configs)
+            block_snapshot=deepcopy(self.block_custom_configs)
+            hermite_snapshot=bool(self.mesh_subpanel.combo_mesh_lines.currentData())
+            def compute(progress):
+                progress(5,"Расчёт геометрии и координат сетки")
+                res = ms.build_mesh_from_bundle_model(
+                    model_snapshot,
+                    base_params=base_p,
+                    template_overrides=template_snapshot,
+                    block_custom_overrides=block_snapshot,
+                    auto_fill_core=False if is_layer_mode else True,
+                    center_method=cm_method,
+                    hermite_tfi=hermite_snapshot,
+                )
+                rep = analyse_subchannel_result(res,progress)
+                progress(92,"Расчёт завершён")
 
-            self.current_mesh_result = res
-            self.accept_mesh_inputs(res)
-            self.current_quality_report = rep
-            self.mesh_subpanel.btn_quality.setEnabled(True)
-            self.mesh_subpanel.btn_export.setEnabled(res.complete)
-            self.mesh_subpanel.btn_export_star.setEnabled(res.complete)
-            self.mesh_subpanel.btn_fill_core.setEnabled(self.current_layer_result is not None)
+                return res,rep
+            def completed(payload):
+                res,rep=payload
+                self.current_mesh_result = res
+                self.accept_mesh_inputs(res)
+                self.current_quality_report = rep
+                self.mesh_subpanel.btn_quality.setEnabled(True)
+                self.mesh_subpanel.btn_export.setEnabled(res.complete)
+                self.mesh_subpanel.btn_export_star.setEnabled(res.complete)
+                self.mesh_subpanel.btn_fill_core.setEnabled(self.current_layer_result is not None)
 
-            d = res.diagnostics
-            skipped = d.get("skipped_peripheral", 0)
-            skip_txt = f" (пропущено пристеночных: {skipped})" if skipped else ""
-            txt = (
-                f"Сетка построена: {d['blocks']} блоков, {d['cells_3d']:,} ячеек (3D).\n"
-                f"Интерфейсов: {d.get('matched_interfaces', 0)}, Min Jacobian: {rep['metrics']['scaled_jacobian']['min']:.3f}.{skip_txt}"
-            )
-            self.mesh_subpanel.lbl_status.setText(txt)
-            self.redraw_mesh_views()
-            self.populate_blocks_table()
+                d = res.diagnostics
+                skipped = d.get("skipped_peripheral", 0)
+                skip_txt = f" (пропущено пристеночных: {skipped})" if skipped else ""
+                txt = (
+                    f"Сетка построена: {d['blocks']} блоков, {d['cells_3d']:,} ячеек (3D).\n"
+                    f"Интерфейсов: {d.get('matched_interfaces', 0)}, Min Jacobian: {rep['metrics']['scaled_jacobian']['min']:.3f}.{skip_txt}"
+                )
+                self.mesh_subpanel.lbl_status.setText(txt)
+                self.append_mesh_message(txt)
+                self.report_viscous_units()
+                self.redraw_mesh_views()
+                self.populate_blocks_table()
+            self._run_mesh_task("Построение сетки",compute,completed,"Ошибка построения сетки")
         except Exception as exc:
             user_msg = format_friendly_error(exc)
+            self.append_mesh_message("Ошибка построения сетки: "+user_msg)
             QMessageBox.critical(self, "Ошибка построения сетки", user_msg)
 
     def on_fill_core_clicked(self):
@@ -934,63 +972,74 @@ class BundleBuilderWindow(BundleBuilderUiMixin, QMainWindow):
             cmode = (
                 self.mesh_subpanel.combo_core_mode.currentData()
                 if hasattr(self.mesh_subpanel, "combo_core_mode")
-                else "cfd_growth"
+                else "controlled_growth"
             )
             clayers = f["core_layers"].value() if "core_layers" in f else 20
-            h_tfi = (
-                self.mesh_subpanel.chk_hermite_tfi.isChecked()
-                if hasattr(self.mesh_subpanel, "chk_hermite_tfi")
-                else False
-            )
-
-            full_res = ms.fill_subchannel_core(
-                layer_src,
-                self.model,
-                growth=growth,
-                max_size=maxsize,
-                max_cells=maxcells,
-                transition_ratio=q_trans,
-                core_mode=cmode,
-                core_layers=clayers,
-                hermite_tfi=h_tfi,
-            )
-            z_len, nz = full_res.params.z_len, full_res.params.nz
-            z_nodes = np.linspace(0, z_len, nz + 1)
-            b3d = mq.extrude_blocks(full_res.blocks, z_nodes)
-            rep = mq.analyse_blocks(b3d)
-
-            self.current_mesh_result = full_res
-            self.accept_mesh_inputs(full_res, filled=True)
-            self.mesh_subpanel.btn_quality.setEnabled(True)
-            self.current_quality_report = rep
-            self.mesh_subpanel.btn_fill_core.setEnabled(True)
-            self.mesh_subpanel.btn_export.setEnabled(True)
-            self.mesh_subpanel.btn_export_star.setEnabled(True)
-
-            d = full_res.diagnostics
-            extra = ""
-            if d.get("core_target_exceeded"):
-                extra = (
-                    f"\n⚠ Узкий зазор ограничил число слоёв: в центре ячейки крупнее целевого "
-                    f"({d.get('core_target_m', 0) * 1e6:.0f} мкм) — до {d.get('core_plateau_max_m', 0) * 1e6:.0f} мкм."
+            h_tfi = cmode == 'fixed_count' and bool(self.mesh_subpanel.combo_core_lines.currentData())
+            align_core = cmode == 'aspect_alignment'
+            model_snapshot=deepcopy(self.model)
+            template_snapshot=deepcopy(self.template_configs)
+            block_snapshot=deepcopy(self.block_custom_configs)
+            def compute(progress):
+                progress(5,"Расчёт геометрии и координат сетки")
+                full_res = ms.fill_subchannel_core(
+                    layer_src,
+                    model_snapshot,
+                    growth=growth,
+                    max_size=maxsize,
+                    max_cells=maxcells,
+                    transition_ratio=q_trans,
+                    core_mode=cmode,
+                    core_layers=clayers,
+                    hermite_tfi=h_tfi,
+                    align_core=align_core,
+                    progress_callback=lambda fraction,text:progress(15+int(35*fraction),text),
                 )
-            self.mesh_subpanel.lbl_status.setText(
-                f"Ядро заполнено: {d['blocks']} блоков, {d['cells_3d']:,} ячеек (3D). "
-                f"Слоёв ядра: {d.get('core_layers_count', '?')}; ячейка на конце ядра: "
-                f"зазор ≈ {d.get('core_plateau_min_m', 0) * 1e6:.0f} … центр ≈ {d.get('core_plateau_max_m', 0) * 1e6:.0f} мкм.\n"
-                f"Min Jacobian: {rep['metrics']['scaled_jacobian']['min']:.3f}.{extra}\n"
-                f"Можно менять параметры Блока 5 и нажимать «Заполнить ядро сетки» повторно — призма не пересоздаётся."
-            )
-            self.mesh_subpanel.update_core_preview()
-            self.redraw_mesh_views()
-            self.populate_blocks_table()
-            QMessageBox.information(
-                self,
-                "Ядро заполнено",
-                f"Сетка успешно заполнена до центра подканалов! Всего ячеек: {d['cells_3d']:,}",
-            )
+                rep = analyse_subchannel_result(full_res,progress)
+                progress(92,"Расчёт завершён")
+
+                return full_res,rep
+            def completed(payload):
+                full_res,rep=payload
+                self.current_mesh_result = full_res
+                self.accept_mesh_inputs(full_res, filled=True)
+                self.mesh_subpanel.btn_quality.setEnabled(True)
+                self.current_quality_report = rep
+                self.mesh_subpanel.btn_fill_core.setEnabled(True)
+                self.mesh_subpanel.btn_export.setEnabled(True)
+                self.mesh_subpanel.btn_export_star.setEnabled(True)
+
+                d = full_res.diagnostics
+                extra = ""
+                if d.get("core_target_exceeded"):
+                    extra = (
+                        f"\n⚠ Узкий зазор ограничил число слоёв: в центре ячейки крупнее целевого "
+                        f"({d.get('core_target_m', 0) * 1e6:.0f} мкм) — до {d.get('core_plateau_max_m', 0) * 1e6:.0f} мкм."
+                    )
+                self.mesh_subpanel.lbl_status.setText(
+                    f"Ядро заполнено: {d['blocks']} блоков, {d['cells_3d']:,} ячеек (3D). "
+                    f"Слоёв ядра: {d.get('core_layers_count', '?')}; ячейка на конце ядра: "
+                    f"зазор ≈ {d.get('core_plateau_min_m', 0) * 1e6:.0f} … центр ≈ {d.get('core_plateau_max_m', 0) * 1e6:.0f} мкм.\n"
+                    f"Min Jacobian: {rep['metrics']['scaled_jacobian']['min']:.3f}.{extra}\n"
+                    f"Можно менять параметры Блока 5 и нажимать «Заполнить ядро сетки» повторно — призма не пересоздаётся."
+                )
+                if d.get('core_alignment'):
+                    a=d['core_alignment']
+                    self.mesh_subpanel.lbl_status.setText(self.mesh_subpanel.lbl_status.text()+f"\nВыравнивание ядра: отношение сторон ≥1, идеально 1; медиана {a['median']:.2f}, 95-й процентиль {a['p95']:.2f}, максимум {a['maximum']:.2f}. Доля ≤1.5: {a['fraction_under_1_5']:.0%} (внешняя половина ядра).")
+                self.append_mesh_message(self.mesh_subpanel.lbl_status.text())
+                self.report_viscous_units()
+                self.mesh_subpanel.update_core_preview()
+                self.redraw_mesh_views()
+                self.populate_blocks_table()
+                QMessageBox.information(
+                    self,
+                    "Ядро заполнено",
+                    f"Сетка успешно заполнена до центра подканалов! Всего ячеек: {d['cells_3d']:,}",
+                )
+            self._run_mesh_task("Заполнение ядра",compute,completed,"Не удалось заполнить ядро")
         except Exception as exc:
             user_msg = format_friendly_error(exc)
+            self.append_mesh_message("Не удалось заполнить ядро: "+user_msg)
             QMessageBox.critical(self, "Не удалось заполнить ядро", user_msg)
 
     def populate_blocks_table(self):
@@ -1213,11 +1262,14 @@ class BundleBuilderWindow(BundleBuilderUiMixin, QMainWindow):
             else 1
         )
 
+        total_points=sum(x.size for x,y in res.blocks)
+        render_stride=max(int(stride),int(np.ceil(np.sqrt(total_points/250000))))
+        self.combo_detail.setToolTip(f'Фактическое отображение 1:{render_stride}. Авторазрежение больших сеток влияет только на рисунок; экспорт полный.')
         for k, (bx, by) in enumerate(res.blocks):
             v = np.stack((bx * 1e3, by * 1e3), axis=-1)
-            ii = np.unique(np.r_[np.arange(0, bx.shape[0], stride), bx.shape[0] - 1])
-            jj = np.unique(np.r_[np.arange(0, bx.shape[1], stride), bx.shape[1] - 1])
-            lines = [v[i] for i in ii] + [v[:, j] for j in jj]
+            ii = np.unique(np.r_[np.arange(0, bx.shape[0], render_stride), bx.shape[0] - 1])
+            jj = np.unique(np.r_[np.arange(0, bx.shape[1], render_stride), bx.shape[1] - 1])
+            lines = [v[i,jj] for i in ii] + [v[ii,j] for j in jj]
             c = colors[k % len(colors)]
             self.ax_mesh.add_collection(LineCollection(lines, colors=c, linewidths=0.5, alpha=0.85))
 
@@ -1328,11 +1380,21 @@ class BundleBuilderWindow(BundleBuilderUiMixin, QMainWindow):
             return
         path, _ = QFileDialog.getSaveFileName(self, "Сохранить сетку Plot3D", "bundle_subchannels.xyz", "Plot3D (*.xyz)")
         if path:
-            try:
-                ms.export_subchannel_plot3d(self.current_mesh_result, path)
-                QMessageBox.information(self, "Успешно", f"Сетка успешно сохранена в файл:\n{path}")
-            except Exception as exc:
-                QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить сетку:\n{exc}")
+            from mesh_export_jobs import run_export,ExportCancelled
+            result=self.current_mesh_result
+            def compute(progress):
+                ms.export_subchannel_plot3d(result,path,progress_callback=progress)
+                return path
+            def success(saved):
+                self.append_mesh_message(f'Экспорт Plot3D завершён: {saved}')
+                QMessageBox.information(self,'Успешно',f'Сетка успешно сохранена в файл:\n{saved}')
+            def failure(exc):
+                self.append_mesh_message(f'Экспорт Plot3D: {exc or "отменён"}')
+                if not isinstance(exc,ExportCancelled):
+                    QMessageBox.critical(self,'Ошибка',f'Не удалось сохранить сетку:\n{exc}')
+            self.append_mesh_message(f'Экспорт Plot3D: {path}')
+            run_export(self,'Экспорт Plot3D',compute,success,failure)
+
 
 
 def main():
