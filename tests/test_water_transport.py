@@ -69,7 +69,7 @@ class WaterTransportTests(unittest.TestCase):
         expected=calculate_yplus_and_step('velocity',5.62,props['density'],props['dyn_vis'],10,40,
             y_plus=float(dialog.edit_yplus.text()))
         self.assertAlmostEqual(dialog.last_yplus_result['delta_y1_um'],expected['delta_y1_um'],places=12)
-        self.assertIn('IAPWS 2011',dialog.lbl_extra_props.text())
+        self.assertIn('IAPWS 2011',dialog.properties_dialog.source_label.text())
         mesh=generate_mesh(MeshParams(ni=8,nj=20,nz=1))
         macro=generate_starccm_java_macro('water.xyz',mesh,None,dialog.current_fluid_props,dialog.last_yplus_result,{})
         # Existing versions format exported numbers differently, so check numeric values.
