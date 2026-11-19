@@ -27,7 +27,7 @@ AUDIT_SUPPORT = r'''
                 // A zero-flow boundary/section has no defined mass-flow average.
                 MassFlowReport flow=sim.getReportManager().createReport(MassFlowReport.class);
                 try {
-                    flow.getParts().setObjects(report.getParts().getObjects());
+                    flow.getParts().setObjects(((MassFlowAverageReport)report).getParts().getObjects());
                     double mass=flow.getReportMonitorValue();
                     if (!Double.isFinite(mass) || Math.abs(mass)<=1e-30)
                         throw new IllegalStateException("Zero/unavailable net mass flow; average undefined");
