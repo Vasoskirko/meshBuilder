@@ -112,12 +112,13 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
             set(self.model.selected_subchannels), self.base_params,
             self.template_configs, self.block_custom_configs,
             panel.combo_center_method.currentData(),
-            panel.chk_hermite_tfi.isChecked(),
+            panel.combo_mesh_lines.currentData() if any(p.law != "wall_core" for p in [self.base_params,*self.template_configs.values(),*self.block_custom_configs.values()]) else False,
         ))
-        core = (panel.combo_core_mode.currentData(),
-                tuple(panel.fields[k].value() for k in
-                      ("core_growth", "core_max_size", "core_max_cells",
-                       "core_transition", "core_layers")), panel.chk_align_core.isChecked())
+        cmode=panel.combo_core_mode.currentData()
+        keys=('core_transition','core_layers') if cmode=='fixed_count' else (
+            'core_transition','core_growth','core_max_size','core_max_cells')
+        core=(cmode,tuple(panel.fields[k].value() for k in keys),
+              panel.combo_core_lines.currentData() if cmode=='fixed_count' else False)
         return layer, core
 
     def validate_mesh_inputs(self, *args):
@@ -823,7 +824,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
             model_snapshot=deepcopy(self.model)
             template_snapshot=deepcopy(self.template_configs)
             block_snapshot=deepcopy(self.block_custom_configs)
-            hermite_snapshot=self.mesh_subpanel.chk_hermite_tfi.isChecked()
+            hermite_snapshot=bool(self.mesh_subpanel.combo_mesh_lines.currentData())
             def compute(progress):
                 progress(5,"Расчёт геометрии и координат сетки")
                 res = ms.build_mesh_from_bundle_model(
@@ -887,7 +888,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
             model_snapshot=deepcopy(self.model)
             template_snapshot=deepcopy(self.template_configs)
             block_snapshot=deepcopy(self.block_custom_configs)
-            hermite_snapshot=self.mesh_subpanel.chk_hermite_tfi.isChecked()
+            hermite_snapshot=bool(self.mesh_subpanel.combo_mesh_lines.currentData())
             def compute(progress):
                 progress(5,"Расчёт геометрии и координат сетки")
                 res = ms.build_mesh_from_bundle_model(
@@ -943,20 +944,14 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
             cmode = (
                 self.mesh_subpanel.combo_core_mode.currentData()
                 if hasattr(self.mesh_subpanel, "combo_core_mode")
-                else "cfd_growth"
+                else "controlled_growth"
             )
             clayers = f["core_layers"].value() if "core_layers" in f else 20
-            h_tfi = (
-                self.mesh_subpanel.chk_hermite_tfi.isChecked()
-                if hasattr(self.mesh_subpanel, "chk_hermite_tfi")
-                else False
-            )
-
-            align_core=self.mesh_subpanel.chk_align_core.isChecked()
+            h_tfi = cmode == 'fixed_count' and bool(self.mesh_subpanel.combo_core_lines.currentData())
+            align_core = cmode == 'aspect_alignment'
             model_snapshot=deepcopy(self.model)
             template_snapshot=deepcopy(self.template_configs)
             block_snapshot=deepcopy(self.block_custom_configs)
-            hermite_snapshot=self.mesh_subpanel.chk_hermite_tfi.isChecked()
             def compute(progress):
                 progress(5,"Расчёт геометрии и координат сетки")
                 full_res = ms.fill_subchannel_core(

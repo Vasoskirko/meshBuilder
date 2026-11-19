@@ -252,11 +252,12 @@ class MeshSubpanel(QWidget if HAS_QT else object):
             self
         )
         self.lbl_center_desc.setWordWrap(True)
-        self.chk_hermite_tfi = QCheckBox("Ортогонализация к центру (Hermite TFI)", self)
-        self.chk_hermite_tfi.setChecked(True)
-        self.chk_hermite_tfi.setToolTip("Кубическое сглаживание по Эрмиту: выпрямляет лучи к центру подканала и ребру стыка секторов (O -> M) под углом ~90°.")
-        self.chk_hermite_tfi.toggled.connect(self.on_field_changed)
-        b_center.addWidget(self.chk_hermite_tfi)
+        self.combo_mesh_lines = QComboBox(self)
+        self.combo_mesh_lines.addItem('Прямые', False)
+        self.combo_mesh_lines.addItem('Плавное сопряжение (Hermite)', True)
+        self.combo_mesh_lines.setCurrentIndex(1)
+        self.combo_mesh_lines.currentIndexChanged.connect(self.on_field_changed)
+        self.mesh_lines_row=self.row(b_center,'Форма линий сетки:',self.combo_mesh_lines)
         b_center.addWidget(self.lbl_center_desc)
 
         layout.addWidget(grp_center)
@@ -268,12 +269,19 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         b_core = QVBoxLayout(self.core_group); b_core.setSpacing(6)
 
         self.combo_core_mode = QComboBox(self)
-        self.combo_core_mode.addItem("Адаптивное заполнение (ограничения мягкие)", "cfd_growth")
-        self.combo_core_mode.addItem("Рост до размера → равномерное ядро (строго)", "controlled_growth")
-        self.combo_core_mode.addItem("Изотропное ядро (Аспект ≈ 1.0)", "isotropic")
-        self.combo_core_mode.addItem("Фиксированное число слоёв", "fixed_count")
+        self.combo_core_mode.addItem('Плавный рост от пристеночного слоя', 'controlled_growth')
+        self.combo_core_mode.addItem('Ячейки ядра около 1:1 — экспериментальный', 'aspect_alignment')
+        self.combo_core_mode.addItem('Заданное число слоёв', 'fixed_count')
         self.combo_core_mode.currentIndexChanged.connect(self.on_core_mode_changed)
-        self.row(b_core, "Режим ядра:", self.combo_core_mode)
+        self.row(b_core, 'Способ заполнения ядра:', self.combo_core_mode)
+        self.combo_core_lines=QComboBox(self)
+        self.combo_core_lines.addItem('Прямые',False)
+        self.combo_core_lines.addItem('Плавное сопряжение (Hermite)',True)
+        self.combo_core_lines.currentIndexChanged.connect(self.on_core_field_changed)
+        self.core_lines_row=self.row(b_core,'Форма линий ядра:',self.combo_core_lines)
+        self.lbl_core_lines=QLabel('Используются прямые линии: сохраняются ограничения нормальных шагов.',self)
+        self.lbl_core_lines.setWordWrap(True)
+        b_core.addWidget(self.lbl_core_lines)
 
         self.core_transition_row = self.row(
             b_core, "Переход r = первый шаг ядра / последний шаг слоя:",
@@ -302,10 +310,6 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         self.core_help = QLabel("r задаёт скачок на стыке; q — рост соседних шагов; целевой размер — плато. В строгом режиме ограничения не превышаются: при несовместимости настройте r/q/размер. Общее число слоёв сохраняет конформность блоков.",self)
         self.core_help.setWordWrap(True); b_core.addWidget(self.core_help)
 
-        self.chk_align_core=QCheckBox('Выравнивание пропорций ячеек ядра (эксперимент)',self)
-        self.chk_align_core.setToolTip('Подбор общего числа слоёв под местный поперечный шаг. Цель — пропорции около 1:1 в ядре; призма сохранена. Используются r, q, предел размера и лимит слоёв. Может не иметь решения. Ядро строится по прямым лучам, независимо от Hermite TFI.')
-        self.chk_align_core.toggled.connect(self.on_core_mode_changed)
-        b_core.addWidget(self.chk_align_core)
         self.lbl_core_preview = QLabel(self)
         self.lbl_core_preview.setWordWrap(True)
         self.lbl_core_preview.setStyleSheet("padding: 6px; border-radius: 4px; font-size: 11px; background: #e8f5e9; color: #1b5e20; border: 1px solid #c8e6c9;")
@@ -406,6 +410,7 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         layer = (law == "wall_core")
 
         self.core_group.setVisible(layer)
+        self.mesh_lines_row.setVisible(not layer)
         self.hyper_row.setVisible(hyper)
         self.btn_build_layer.setVisible(layer)
 
@@ -418,14 +423,20 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         self.layer_thick_row.setVisible(layer and mode in ("layer_thickness", "layer_growth"))
         self.layer_growth_row.setVisible(layer and mode in ("layer_growth", "layer_first_growth"))
         if hasattr(self, "combo_core_mode"):
-            cmode = 'controlled_growth' if getattr(self,'chk_align_core',None) and self.chk_align_core.isChecked() else self.combo_core_mode.currentData()
-            self.core_growth_row.setVisible(cmode in ("cfd_growth", "isotropic", "controlled_growth"))
-            self.core_maxsize_row.setVisible(cmode in ("cfd_growth","controlled_growth"))
-            self.core_limit_row.setVisible(cmode == "controlled_growth")
+            cmode = self.combo_core_mode.currentData()
+            self.core_growth_row.setVisible(cmode in ("controlled_growth", "aspect_alignment"))
+            self.core_maxsize_row.setVisible(cmode in ("controlled_growth","aspect_alignment"))
+            self.core_limit_row.setVisible(cmode in ("controlled_growth","aspect_alignment"))
             self.core_maxsize_row.layout().itemAt(0).widget().setText(
-                'Максимальный допустимый шаг ядра:' if cmode=='controlled_growth' else 'Целевой размер в ядре:')
+                'Максимальный допустимый шаг ядра:' if cmode in ('controlled_growth','aspect_alignment') else 'Целевой размер в ядре:')
             self.w_core_max_size.setToolTip('В строгом режиме это верхняя граница. Плато на разных лучах может быть меньше для сохранения общего числа слоёв.')
             self.core_layers_row.setVisible(cmode == "fixed_count")
+            self.core_lines_row.setVisible(cmode == 'fixed_count')
+            self.lbl_core_lines.setVisible(cmode != 'fixed_count')
+            self.core_help.setText(
+                'Задайте число слоёв и переход r. Ограничения q и максимального размера в этом режиме не применяются.'
+                if cmode == 'fixed_count' else
+                'r — первый шаг ядра / последний шаг слоя; q — максимальный рост соседних шагов. Размер — строгий верхний предел. При несовместимых ограничениях построение остановится с пояснением.')
             self.update_core_preview()
         self.update_live_advisor_hint()
 
@@ -464,11 +475,10 @@ class MeshSubpanel(QWidget if HAS_QT else object):
             n_layers = self.fields["core_layers"].value()
             max_cells = self.fields["core_max_cells"].value()
             cmode = self.combo_core_mode.currentData()
-            if self.chk_align_core.isChecked():
-                self.lbl_core_preview.setText('Выравнивание: автоматический подбор числа слоёв под пропорции около 1:1 во внешней половине ядра. Прежний режим ядра не используется. Ограничения: r, q, максимальный размер и лимит слоёв. Ядро — по прямым лучам, независимо от Hermite TFI. Точный результат — после заполнения; 1:1 не гарантируется.')
-                self.combo_core_mode.setEnabled(False)
+            if cmode == 'aspect_alignment':
+                self.lbl_core_preview.setStyleSheet('padding: 6px; background: #e8f5e9; color: #1b5e20;')
+                self.lbl_core_preview.setText('Подбирается общее число слоёв под местный поперечный шаг. Цель — пропорции около 1:1 во внешней половине ядра; пристеночный слой сохранён. Ограничения: r, q, максимальный размер и лимит слоёв. Используются прямые линии. Точный результат — после заполнения; 1:1 не гарантируется.')
                 return
-            self.combo_core_mode.setEnabled(True)
             p_curr = self.read_params()
 
             if p_curr.law == "wall_core":
@@ -519,7 +529,7 @@ class MeshSubpanel(QWidget if HAS_QT else object):
                     est_lines.append(f"Общее число слоёв N = {dist.count}; длина узкого луча {lmin_disp:.{nd}f} {unit_lbl}. "
                                      f"(одинаково для всех блоков)")
                     est_lines.append(f"последняя ячейка: зазор ≈ {plat_min*scale:.{nd}f} … центр ≈ {plat_max*scale:.{nd}f} {unit_lbl}")
-                    if q_core <= 1.0 + 1e-12:
+                    if cmode == "controlled_growth" and q_core <= 1.0 + 1e-12:
                         est_lines.append("режим: равномерное ядро (все ячейки ≈ h₁)")
                     opp_steps = [float(g["ds_opp"]) for g in layer_res.geom_data if "ds_opp" in g]
                     if opp_steps:
@@ -529,8 +539,8 @@ class MeshSubpanel(QWidget if HAS_QT else object):
                                          f"(шаг по лучу {plat_max*scale:.{nd}f} / поперёк {ds_min*scale:.{nd}f} {unit_lbl})")
                         if ar_center > 1.6:
                             warn = (f"ячейки в центре вытянуты (≈{ar_center:.1f}:1). Чтобы приблизить к 1:1 — "
-                                    f"уменьшите целевой размер, увеличьте N (меньше коэф. перехода / тоньше призма) "
-                                    f"или уменьшите ni.")
+                                    + ("увеличьте заданное число слоёв или скорректируйте поперечное разбиение." if cmode == "fixed_count" else
+                                       "уменьшите максимальный размер или скорректируйте переход r и поперечное разбиение."))
                 except Exception as exc:
                     warn = str(exc)
 
@@ -539,15 +549,9 @@ class MeshSubpanel(QWidget if HAS_QT else object):
             ht = h_target * scale
             lines = []
             lines.append(f"▪ Призма (посл. слой): h_призм = {hl:.{nd}f} {unit_lbl}")
-            if cmode == "cfd_growth" and q_core <= 1.0 + 1e-12:
-                lines.append(f"▪ Ядро: h₁ = q_пер × h_призм = {q_trans:.2f} × {hl:.{nd}f} = {hc:.{nd}f} {unit_lbl}")
-                lines.append(f"▪ Режим: равномерное ядро, все ячейки ≈ h₁")
-            elif cmode in ("cfd_growth", "controlled_growth"):
-                lines.append(f"▪ Ядро: h₁ = q_пер × h_призм = {q_trans:.2f} × {hl:.{nd}f} = {hc:.{nd}f} {unit_lbl}")
-                lines.append(f"▪ Рост: q = {q_core:.2f} → плато h_t = {ht:.{nd}f} {unit_lbl}")
-            elif cmode == "isotropic":
-                lines.append(f"▪ Ядро: h₁ = q_пер × h_призм = {q_trans:.2f} × {hl:.{nd}f} = {hc:.{nd}f} {unit_lbl}")
-                lines.append(f"▪ Рост: q = {q_core:.2f}, цель ≈ шаг поперёк лучей")
+            if cmode == 'controlled_growth':
+                lines.append(f'▪ Первый шаг ядра: {hc:.{nd}f} {unit_lbl}; r = {q_trans:.2f}')
+                lines.append(f'▪ Максимальный рост q = {q_core:.2f}; максимальный шаг {ht:.{nd}f} {unit_lbl}')
             else:
                 lines.append(f"▪ Ядро: h₁ = q_пер × h_призм = {q_trans:.2f} × {hl:.{nd}f} = {hc:.{nd}f} {unit_lbl}")
                 lines.append(f"▪ Задано слоёв: {n_layers}")

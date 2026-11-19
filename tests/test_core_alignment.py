@@ -67,13 +67,13 @@ class CoreAlignmentTests(unittest.TestCase):
         w.mesh_subpanel.apply_params(w.base_params)
         w.mesh_subpanel.fields['core_growth'].setValue(1.2)
         w.mesh_subpanel.fields['core_max_size'].setValue(.0002)
-        self.assertFalse(w.mesh_subpanel.chk_align_core.isChecked())
+        self.assertEqual(w.mesh_subpanel.combo_core_mode.currentData(),'controlled_growth')
         with patch.object(w,'redraw_mesh_views'),patch.object(w,'populate_blocks_table'),patch('bundle_subchannel_builder.QMessageBox.information'),patch('bundle_subchannel_builder.QMessageBox.critical',side_effect=AssertionError('Unexpected build failure')):
             w.on_build_layer_only();layer=w.current_layer_result
             w.on_fill_core_clicked();self.assertTrue(w.can_export_mesh())
-            w.mesh_subpanel.chk_align_core.setChecked(True)
+            w.mesh_subpanel.combo_core_mode.setCurrentIndex(w.mesh_subpanel.combo_core_mode.findData('aspect_alignment'))
             self.assertIs(w.current_layer_result,layer);self.assertFalse(w.can_export_mesh())
-            self.assertFalse(w.mesh_subpanel.combo_core_mode.isEnabled())
+            self.assertTrue(w.mesh_subpanel.combo_core_mode.isEnabled())
             with patch('bundle_subchannel_builder.QMessageBox.warning') as warning,patch('bundle_subchannel_builder.QFileDialog.getSaveFileName',return_value=('', '')) as save,patch('starccm_export_dialog.StarCcmExportDialog') as star:
                 w.on_export_plot3d();w.on_export_starccm_dialog()
                 self.assertEqual(warning.call_count,2);save.assert_not_called();star.assert_not_called()
@@ -81,7 +81,38 @@ class CoreAlignmentTests(unittest.TestCase):
                 w.on_export_plot3d();w.on_export_starccm_dialog()
                 save.assert_called_once();star.return_value.exec.assert_called_once()
             self.assertIn('Выравнивание ядра',w.mesh_subpanel.lbl_status.text())
-            w.mesh_subpanel.chk_align_core.setChecked(False)
+            w.mesh_subpanel.combo_core_mode.setCurrentIndex(w.mesh_subpanel.combo_core_mode.findData('controlled_growth'))
             self.assertIs(w.current_layer_result,layer);self.assertFalse(w.can_export_mesh())
             self.assertTrue(w.mesh_subpanel.combo_core_mode.isEnabled())
             w.on_fill_core_clicked();self.assertTrue(w.can_export_mesh())
+
+    def test_three_modes_only_show_effective_controls_and_shape(self):
+        w=BundleBuilderWindow();self.addCleanup(w.deleteLater)
+        p=w.mesh_subpanel
+        w.base_params=replace(w.base_params,law='wall_core',mode='layer_first_growth')
+        p.apply_params(w.base_params)
+        self.assertEqual([p.combo_core_mode.itemData(i) for i in range(p.combo_core_mode.count())],
+                         ['controlled_growth','aspect_alignment','fixed_count'])
+        self.assertFalse(hasattr(p,'chk_align_core'))
+        self.assertFalse(hasattr(p,'chk_hermite_tfi'))
+        for mode in ('controlled_growth','aspect_alignment','fixed_count'):
+            p.combo_core_mode.setCurrentIndex(p.combo_core_mode.findData(mode))
+            fixed=mode=='fixed_count'
+            self.assertEqual(p.core_growth_row.isHidden(),fixed)
+            self.assertEqual(p.core_maxsize_row.isHidden(),fixed)
+            self.assertEqual(p.core_limit_row.isHidden(),fixed)
+            self.assertEqual(p.core_layers_row.isHidden(),not fixed)
+            self.assertEqual(p.core_lines_row.isHidden(),not fixed)
+            self.assertEqual(p.lbl_core_lines.isHidden(),fixed)
+            self.assertTrue(p.mesh_lines_row.isHidden())
+            before=w.mesh_inputs()
+            p.combo_core_lines.setCurrentIndex(1-p.combo_core_lines.currentIndex())
+            after=w.mesh_inputs()
+            self.assertEqual(before[0],after[0])
+            if fixed:self.assertNotEqual(before[1],after[1])
+            else:self.assertEqual(before[1],after[1])
+            before=w.mesh_inputs()
+            p.fields['core_max_size'].setValue(p.fields['core_max_size'].value()*1.1)
+            after=w.mesh_inputs()
+            if fixed:self.assertEqual(before[1],after[1])
+            else:self.assertNotEqual(before[1],after[1])

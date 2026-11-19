@@ -534,6 +534,7 @@ def build_mesh_from_bundle_model(bundle_model, base_params, template_overrides=N
 
 def fill_subchannel_core(layer_result, bundle_model, growth=1.1, max_size=100e-6, max_cells=5000, transition_ratio=1.0, core_mode="cfd_growth", core_layers=20, hermite_tfi=False, align_core=False, progress_callback=None):
     if layer_result.complete: return layer_result
+    align_core = align_core or core_mode == 'aspect_alignment'
     p = layer_result.params; ni = p.ni; blocks = layer_result.blocks
     if any(x.shape != y.shape or x.shape[0] != ni for x, y in blocks):
         raise ValueError("Несовместимое число узлов ni в пристеночном слое; перестройте слой")
