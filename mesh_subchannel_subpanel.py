@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 
 try:
-    from PySide6.QtCore import Qt, QObject, QThread, Signal, Slot
+    from PySide6.QtCore import Qt, QObject, QThread, Signal, Slot, QSignalBlocker
     from PySide6.QtWidgets import (
         QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox, QLineEdit,
         QSpinBox, QComboBox, QCheckBox, QPushButton, QLabel, QFileDialog,
@@ -279,7 +279,7 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         self.combo_core_lines.addItem('Плавное сопряжение (Hermite)',True)
         self.combo_core_lines.currentIndexChanged.connect(self.on_core_field_changed)
         self.core_lines_row=self.row(b_core,'Форма линий ядра:',self.combo_core_lines)
-        self.lbl_core_lines=QLabel('Используются прямые линии: сохраняются ограничения нормальных шагов.',self)
+        self.lbl_core_lines=QLabel('Прямые линии сохраняют ограничения нормальных шагов. Hermite доступен в способе «Заданное число слоёв».',self)
         self.lbl_core_lines.setWordWrap(True)
         b_core.addWidget(self.lbl_core_lines)
 
@@ -352,7 +352,7 @@ class MeshSubpanel(QWidget if HAS_QT else object):
 
         self.lbl_status = QLabel("Настройте параметры и нажмите кнопку построения.")
         self.lbl_status.setWordWrap(True)
-        layout.addWidget(self.lbl_status)
+        self.lbl_status.hide()  # Detailed status is displayed once, in the mesh journal.
 
         layout.addStretch()
 
@@ -431,7 +431,15 @@ class MeshSubpanel(QWidget if HAS_QT else object):
                 'Максимальный допустимый шаг ядра:' if cmode in ('controlled_growth','aspect_alignment') else 'Целевой размер в ядре:')
             self.w_core_max_size.setToolTip('В строгом режиме это верхняя граница. Плато на разных лучах может быть меньше для сохранения общего числа слоёв.')
             self.core_layers_row.setVisible(cmode == "fixed_count")
-            self.core_lines_row.setVisible(cmode == 'fixed_count')
+            self.core_lines_row.setVisible(True)
+            self.combo_core_lines.setEnabled(cmode == 'fixed_count')
+            previous=getattr(self,'_last_core_line_mode',None)
+            if previous == 'fixed_count' and cmode != 'fixed_count':
+                self._fixed_core_line_index=self.combo_core_lines.currentIndex()
+            if cmode != 'fixed_count' or previous != 'fixed_count':
+                with QSignalBlocker(self.combo_core_lines):
+                    self.combo_core_lines.setCurrentIndex(getattr(self,'_fixed_core_line_index',0) if cmode=='fixed_count' else 0)
+            self._last_core_line_mode=cmode
             self.lbl_core_lines.setVisible(cmode != 'fixed_count')
             self.core_help.setText(
                 'Задайте число слоёв и переход r. Ограничения q и максимального размера в этом режиме не применяются.'
@@ -580,6 +588,7 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         except ValueError as exc:
             self.parent_window.validate_mesh_inputs()
             self.lbl_status.setText(f"Проверьте ввод: {exc}")
+            self.parent_window.append_mesh_message(f"Проверьте ввод: {exc}")
             return
         self.parent_window.validate_mesh_inputs()
         self.update_tree_status()

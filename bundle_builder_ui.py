@@ -3,6 +3,7 @@
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from matplotlib.figure import Figure
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import QPlainTextEdit, QComboBox, QDoubleSpinBox, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QPushButton, QScrollArea, QSplitter, QStackedWidget, QTableWidget, QTabWidget, QVBoxLayout, QWidget
 from mesh_subchannel_subpanel import MeshSubpanel
 
@@ -238,9 +239,12 @@ class BundleBuilderUiMixin:
         output_layout.addLayout(output_bar)
         self.mesh_console=QPlainTextEdit(self)
         self.mesh_console.setReadOnly(True)
+        self.mesh_console.setFont(QFontDatabase.systemFont(QFontDatabase.FixedFont))
+        self.mesh_console.setStyleSheet('QPlainTextEdit { font-family: "Consolas", "DejaVu Sans Mono", monospace; font-size: 9pt; }')
+        self.mesh_console.setLineWrapMode(QPlainTextEdit.NoWrap)
         self.mesh_console.setMaximumBlockCount(600)
         self.mesh_console.setMinimumHeight(95)
-        self.mesh_console.setPlaceholderText('Здесь появятся сообщения построения и размеры Δs+, Δz+, Δn+. Для вязких единиц откройте калькулятор y+.')
+        self.mesh_console.setPlaceholderText('Здесь появятся сообщения построения и размеры Δφ+, Δz+, Δn+. Для вязких единиц откройте калькулятор y+.')
         clear_output.clicked.connect(self.mesh_console.clear)
         output_layout.addWidget(self.mesh_console)
         mesh_output_splitter.addWidget(output_widget)
@@ -266,7 +270,7 @@ class BundleBuilderUiMixin:
             "Шаг у стенки h1 (мкм)",
             "Слоёв по нормали",
             "Ячеек по дуге",
-            "Шаг по дуге Δs (мкм)",
+            "Шаг по дуге Δφ (мкм)",
             "Параметр закона",
             "Шаг в ядре (мкм)",
             "Вытянутость AR",

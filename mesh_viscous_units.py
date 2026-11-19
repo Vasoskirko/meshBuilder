@@ -40,14 +40,17 @@ def wall_units(ranges, calculator_result):
 
 def format_wall_units(ranges, calculator_result):
     ell,plus=wall_units(ranges,calculator_result)
-    labels={'azimuth':'По азимуту Δs+', 'wall_azimuth':'По азимуту у стенки Δs_wall+',
-            'axial':'По высоте (оси) Δz+', 'normal':'По нормали Δn+',
-            'first_normal':'Толщина первого слоя Δn₁+'}
-    lines=[f'Вязкий масштаб ℓν = ν/uτ = {ell:.6g} м; ν = {calculator_result["nu"]:.6g} м²/с; uτ = {calculator_result["u_tau"]:.6g} м/с.',
-           'Диапазоны по всем построенным блокам (min … max):']
-    for name,label in labels.items():
-        lo,hi=plus[name];lines.append(f'{label}: {lo:.4g} … {hi:.4g}')
-    lo,hi=plus['first_normal'];lines.append(f'Оценка y₁+ ≈ Δn₁+/2: {lo/2:.4g} … {hi/2:.4g} (центр первого слоя, не толщина).')
-    lines.append('Справочная оценка по единому uτ из калькулятора, не локальные значения из CFD. Δs/Δn — длины рёбер по направлениям сетки. Пристеночный слой без ядра — неполная сетка.' )
-    lines.append('Для LES/DNS сравнивайте с требованиями выбранного метода; эти значения сами по себе не подтверждают достаточное разрешение.')
+    rows=[('Азимут Δφ+',plus['azimuth']),
+          ('Азимут у стенки Δφ_wall+',plus['wall_azimuth']),
+          ('По высоте Δz+',plus['axial']),
+          ('По нормали Δn+',plus['normal']),
+          ('Первый слой Δn₁+',plus['first_normal']),
+          ('Центр первого слоя y₁+ ≈',tuple(v/2 for v in plus['first_normal']))]
+    lines=['РАЗМЕРЫ В ВЯЗКИХ ЕДИНИЦАХ',
+           f'ℓν = {ell*1e6:.5g} мкм  |  ν = {calculator_result["nu"]:.5g} м²/с  |  uτ = {calculator_result["u_tau"]:.5g} м/с',
+           '',f'{"Направление":<30} {"min":>12} {"max":>12}', '─'*56]
+    for label,(lo,hi) in rows:
+        lines.append(f'{label:<30} {lo:>12.4g} {hi:>12.4g}')
+    lines.extend(['─'*56,'Δφ+ — длина азимутального ребра / ℓν; y₁+ ≈ Δn₁+/2.',
+                  'Опорный uτ, не локальные значения CFD. Пригодность LES/DNS проверяется отдельно.'])
     return '\n'.join(lines)

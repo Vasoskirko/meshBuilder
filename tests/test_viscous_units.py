@@ -29,8 +29,10 @@ class ViscousUnitsTests(unittest.TestCase):
         np.testing.assert_allclose(plus['normal'],(100,200))
         np.testing.assert_allclose(plus['axial'],(500,500))
         text=format_wall_units(ranges,dict(nu=1e-6,u_tau=.1))
-        self.assertIn('Δs+',text);self.assertIn('Δz+',text);self.assertIn('Δn+',text)
+        self.assertIn('Δφ+',text);self.assertIn('Δz+',text);self.assertIn('Δn+',text)
         self.assertIn('y₁+',text)
+        self.assertIn('min',text);self.assertIn('max',text)
+        self.assertNotIn('Δs+',text)
         for bad in ({},dict(nu=0,u_tau=.1),dict(nu=1e-6,u_tau=float('nan'))):
             with self.assertRaises(ValueError):wall_units(ranges,bad)
         r.blocks=[]
@@ -44,6 +46,7 @@ class ViscousUnitsTests(unittest.TestCase):
     def test_console_build_reference_update_and_stale_message(self):
         w=BundleBuilderWindow();self.addCleanup(w.deleteLater)
         self.assertTrue(w.mesh_console.isReadOnly())
+        self.assertTrue(w.mesh_subpanel.lbl_status.isHidden())
         self.assertEqual(w.mesh_console.maximumBlockCount(),600)
         sid=next(i for i,s in w.model.subchannels.items() if s.sub_type=='interior')
         w.model.selected_subchannels={sid};w.switch_to_mesh_mode()
@@ -55,13 +58,13 @@ class ViscousUnitsTests(unittest.TestCase):
         self.assertIn('Вязкие размеры недоступны',w.mesh_console.toPlainText())
         w.mesh_subpanel.last_yplus_result=dict(nu=1e-6,u_tau=.1)
         w.report_viscous_units()
-        self.assertIn('По азимуту Δs+',w.mesh_console.toPlainText())
+        self.assertIn('Азимут Δφ+',w.mesh_console.toPlainText())
         result=w.current_mesh_result
         w.mesh_subpanel.last_yplus_result=dict(nu=2e-6,u_tau=.1)
         w.report_viscous_units()
         self.assertIs(w.current_mesh_result,result)
         self.assertTrue(w.can_export_mesh())
-        self.assertIn('2e-05 м',w.mesh_console.toPlainText())
+        self.assertIn('ℓν = 20 мкм',w.mesh_console.toPlainText())
         w.pitch_spin.setValue(w.pitch_spin.value()+.1)
         self.assertFalse(w.can_export_mesh())
         self.assertIn('Сетка устарела',w.mesh_console.toPlainText())

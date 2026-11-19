@@ -1380,11 +1380,21 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
             return
         path, _ = QFileDialog.getSaveFileName(self, "Сохранить сетку Plot3D", "bundle_subchannels.xyz", "Plot3D (*.xyz)")
         if path:
-            try:
-                ms.export_subchannel_plot3d(self.current_mesh_result, path)
-                QMessageBox.information(self, "Успешно", f"Сетка успешно сохранена в файл:\n{path}")
-            except Exception as exc:
-                QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить сетку:\n{exc}")
+            from mesh_export_jobs import run_export,ExportCancelled
+            result=self.current_mesh_result
+            def compute(progress):
+                ms.export_subchannel_plot3d(result,path,progress_callback=progress)
+                return path
+            def success(saved):
+                self.append_mesh_message(f'Экспорт Plot3D завершён: {saved}')
+                QMessageBox.information(self,'Успешно',f'Сетка успешно сохранена в файл:\n{saved}')
+            def failure(exc):
+                self.append_mesh_message(f'Экспорт Plot3D: {exc or "отменён"}')
+                if not isinstance(exc,ExportCancelled):
+                    QMessageBox.critical(self,'Ошибка',f'Не удалось сохранить сетку:\n{exc}')
+            self.append_mesh_message(f'Экспорт Plot3D: {path}')
+            run_export(self,'Экспорт Plot3D',compute,success,failure)
+
 
 
 def main():

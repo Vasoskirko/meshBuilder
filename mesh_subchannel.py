@@ -658,7 +658,7 @@ def fill_subchannel_core(layer_result, bundle_model, growth=1.1, max_size=100e-6
         all_block_widths=filled_block_widths
     )
 
-def export_subchannel_plot3d(result, filename):
+def export_subchannel_plot3d(result, filename, progress_callback=None):
     if not result.complete:
         raise ValueError("Нельзя экспортировать неполную сетку: сначала заполните ядро")
     p, nz, z_len = result.params, result.params.nz, result.params.z_len
@@ -669,13 +669,21 @@ def export_subchannel_plot3d(result, filename):
         with open(temp, "w", encoding="ascii", newline="\n") as f:
             f.write(f"{len(result.blocks)}\n")
             for bx, by in result.blocks: f.write(f"{bx.shape[0]} {bx.shape[1]} {nz + 1}\n")
-            for x, y in result.blocks:
+            total_planes=max(1,len(result.blocks)*3*(nz+1))
+            plane=0
+            for block_index,(x, y) in enumerate(result.blocks):
                 b_ni, b_nj = x.shape
                 for coord in (x, y, None):
+                    flat_xy=coord.ravel(order="F") if coord is not None else None
                     for k in range(nz + 1):
-                        flat = coord.ravel(order="F") if coord is not None else np.full(b_ni * b_nj, z_len * k / nz)
-                        for start in range(0, len(flat), 6):
-                            f.write(" ".join(f"{v:.16e}" for v in flat[start:start + 6]) + "\n")
+                        flat = flat_xy if coord is not None else np.full(b_ni * b_nj, z_len * k / nz)
+                        for chunk in range(0,len(flat),6000):
+                            if progress_callback:
+                                progress_callback(int(95*(plane+chunk/max(1,len(flat)))/total_planes),f'Запись Plot3D: блок {block_index+1}/{len(result.blocks)}, слой {k+1}/{nz+1}')
+                            end=min(chunk+6000,len(flat))
+                            f.writelines(' '.join(f'{v:.16e}' for v in flat[start:min(start+6,end)])+'\n' for start in range(chunk,end,6))
+                        plane+=1
+        if progress_callback:progress_callback(97,"Завершение записи Plot3D")
         os.replace(temp, target)
     finally:
         if os.path.exists(temp):

@@ -125,6 +125,8 @@ class BundleMeshJobsMixin:
         if getattr(self,'_close_after_mesh_job',False):self.close()
 
     def closeEvent(self,event):
+        from mesh_export_jobs import defer_export_close
+        if defer_export_close(self):event.ignore();return
         if getattr(self,'_mesh_thread',None) is not None:
             self._close_after_mesh_job=True;self._cancel_mesh_job();event.ignore();return
         super().closeEvent(event)
