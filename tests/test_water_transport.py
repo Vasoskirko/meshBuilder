@@ -114,3 +114,16 @@ class WaterTransportTests(unittest.TestCase):
             code=generate_starccm_java_macro('water.xyz',mesh,None,props,restored.last_yplus_result,{})
             value=float(re.search(r'"lambda",\s*([\d.eE+-]+),',code).group(1))
             self.assertTrue(math.isclose(value,props['lambda'],rel_tol=1e-3))
+
+    def test_second_star_state_without_changing_transport_formula(self):
+        # User scalar-scene values, 290 C and 16.2 MPa. Conductivity differs
+        # by 7.57e-6 W/(m K); this is recorded, not fitted away or called exact.
+        r=water_iapws97(290,16.2,conductivity_model='background')
+        self.assertAlmostEqual(r['density'],747.339,delta=.0005)
+        self.assertAlmostEqual(r['dyn_vis'],9.27175e-5,delta=5e-11)
+        self.assertAlmostEqual(r['cp'],5225.098,delta=.0005)
+        self.assertAlmostEqual(r['lambda'],.5753275671409854,delta=1e-12)
+        self.assertLess(abs(r['lambda']-.57532),1e-5)
+        self.assertGreater(abs(r['lambda']-.57532),5e-6)
+        full=water_iapws97(290,16.2,conductivity_model='full')
+        self.assertAlmostEqual(full['lambda'],.5801910046304146,delta=1e-12)
