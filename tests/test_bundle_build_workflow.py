@@ -72,9 +72,11 @@ class InteractiveJobTests(unittest.TestCase):
         results=[];ticks=[];timer=QTimer();timer.setInterval(5);timer.timeout.connect(lambda:ticks.append(1));timer.start()
         self.window._run_mesh_task('test',self.task,lambda value:results.append((value,QThread.currentThread())),'error')
         self.wait(lambda:len(ticks)>=3)
+        self.assertFalse(self.window.centralWidget().isEnabled())
         self.assertEqual(results,[]);self.assertNotEqual(self.worker_thread,self.app.thread())
         self.gate.set();self.wait(lambda:self.window._mesh_thread is None)
         self.assertEqual(results,[(42,self.app.thread())]);self.error.assert_not_called();timer.stop()
+        self.assertTrue(self.window.centralWidget().isEnabled())
     def test_cancel_and_stale_results_are_not_applied(self):
         results=[];self.window._run_mesh_task('test',self.task,results.append,'error')
         self.window._cancel_mesh_job();self.gate.set();self.wait(lambda:self.window._mesh_thread is None)

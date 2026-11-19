@@ -3,7 +3,7 @@
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from matplotlib.figure import Figure
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QComboBox, QDoubleSpinBox, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QPushButton, QScrollArea, QSplitter, QStackedWidget, QTableWidget, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QComboBox, QDoubleSpinBox, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QPushButton, QScrollArea, QSplitter, QStackedWidget, QTableWidget, QTabWidget, QVBoxLayout, QWidget
 from mesh_subchannel_subpanel import MeshSubpanel
 
 
@@ -217,6 +217,11 @@ class BundleBuilderUiMixin:
         self.combo_detail.addItem("1:10 (только контуры)", 10)
         self.combo_detail.currentIndexChanged.connect(self.redraw_mesh_views)
         bar_mesh.addWidget(self.combo_detail)
+
+        self.chk_compare_core=QCheckBox('До сглаживания — серый пунктир',self)
+        self.chk_compare_core.setChecked(True);self.chk_compare_core.setEnabled(False)
+        self.chk_compare_core.toggled.connect(self.redraw_mesh_views)
+        bar_mesh.addWidget(self.chk_compare_core)
 
         self.btn_ruler = QPushButton("📏 Линейка ячеек", self)
         self.btn_ruler.setCheckable(True)

@@ -302,6 +302,14 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         self.core_help = QLabel("r задаёт скачок на стыке; q — рост соседних шагов; целевой размер — плато. В строгом режиме ограничения не превышаются: при несовместимости настройте r/q/размер. Общее число слоёв сохраняет конформность блоков.",self)
         self.core_help.setWordWrap(True); b_core.addWidget(self.core_help)
 
+        self.chk_smooth_core=QCheckBox('Эксперимент: сгладить внутренние узлы ядра',self)
+        self.chk_smooth_core.setToolTip('Призма, первый шаг ядра и границы блоков фиксированы. Неподходящие перемещения отклоняются. Серый пунктир покажет исходную сетку.')
+        self.chk_smooth_core.toggled.connect(self.on_core_field_changed)
+        b_core.addWidget(self.chk_smooth_core)
+        self.smoothing_row=self.row(b_core,'Максимум шагов сглаживания:',
+            self.integer('core_smoothing_iterations',15,1,100,onchange=self.on_core_field_changed))
+        self.smoothing_row.setEnabled(False)
+        self.chk_smooth_core.toggled.connect(self.smoothing_row.setEnabled)
         self.lbl_core_preview = QLabel(self)
         self.lbl_core_preview.setWordWrap(True)
         self.lbl_core_preview.setStyleSheet("padding: 6px; border-radius: 4px; font-size: 11px; background: #e8f5e9; color: #1b5e20; border: 1px solid #c8e6c9;")

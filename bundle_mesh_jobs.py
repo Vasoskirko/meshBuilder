@@ -49,7 +49,11 @@ class BundleMeshJobsMixin:
         captured=self.mesh_inputs()
         thread=QThread(self);worker=MeshWorker(compute);worker.moveToThread(thread)
         dialog=QProgressDialog(title,'Отменить',0,100,self)
-        dialog.setWindowModality(Qt.WindowModal);dialog.setMinimumDuration(0)
+        # Non-modal avoids QProgressDialog.setValue() re-entering Qt's event
+        # loop while queued worker signals are being delivered.
+        dialog.setWindowModality(Qt.NonModal);dialog.setMinimumDuration(0)
+        self._mesh_controls_enabled=self.centralWidget().isEnabled()
+        self.centralWidget().setEnabled(False)
         dialog.setAutoClose(False);dialog.setAutoReset(False)
         dialog.setValue(0)
         self._mesh_thread=thread;self._mesh_worker=worker;self._mesh_cancel=worker.cancelled;self._mesh_progress=dialog
@@ -97,6 +101,7 @@ class BundleMeshJobsMixin:
         self._mesh_thread=None;self._mesh_worker=None
         dialog.canceled.disconnect(self._cancel_mesh_job)
         dialog.close();dialog.deleteLater()
+        self.centralWidget().setEnabled(self._mesh_controls_enabled)
         if outcome is not None and not cancelled:
             result,error=outcome
             if error is not None:
