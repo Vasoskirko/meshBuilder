@@ -68,6 +68,7 @@ class YPlusDialog(QDialog if HAS_QT else object):
         f_fluid.addRow("Динамическая вязкость (μ, Па·с):", self.edit_visc)
 
         self.lbl_extra_props = QLabel(self)
+        self.lbl_extra_props.setWordWrap(True)
         self.lbl_extra_props.setStyleSheet("font-size: 11px; color: #004d40; background: #e0f2f1; padding: 4px; border-radius: 3px;")
         f_fluid.addRow("Справочно (CFD):", self.lbl_extra_props)
 
@@ -201,12 +202,14 @@ class YPlusDialog(QDialog if HAS_QT else object):
             if "IAPWS" in m_name:
                 p_props = water_iapws97(t_c, p_mpa)
                 self.current_fluid_props = p_props
+                self.lbl_extra_props.setToolTip(p_props["desc"])
                 rho = p_props["density"]
                 mu = p_props["dyn_vis"]
-                self.edit_density.setText(str(rho))
+                self.edit_density.setText(f"{rho:.6f}")
                 self.edit_visc.setText(f"{mu:.3e}")
                 self.lbl_extra_props.setText(
-                    f"Cp = {p_props['cp']:.1f} Дж/(кг·К) | λ = {p_props['lambda']:.3f} Вт/(м·К) | Pr = {p_props['prandtl']:.2f}"
+                    f"Cp = {p_props['cp']:.1f} Дж/(кг·К) | λ = {p_props['lambda']:.6f} Вт/(м·К) | Pr = {p_props['prandtl']:.5f}\n"
+                    "Свойства: IF97; вязкость — IAPWS 2008; теплопроводность — IAPWS 2011"
                 )
             elif "газ" in m_name:
                 comp = ("сжимаемый" in m_name)
