@@ -56,11 +56,13 @@ pip install -r requirements.txt
 - `mesh_quality.py` — расчёт и интерпретация метрик качества сетки.
 - `mesh_project.py` — сохранение и загрузка проектов (`.json`).
 - `bundle_geometry.py`, `bundle_subchannel_builder.py`, `mesh_subchannel.py` — подканальная геометрия и построение.
+- `bundle_project.py` — полный проект конструктора, проверка формата и атомарная запись JSON.
 - `fluid_properties.py`, `yplus_calculator.py` — свойства теплоносителя и расчёт `y+`.
 - `starccm_macro_generator.py` — генератор Java-кода для STAR-CCM+; `setup_starccm_subchannels.java` — имя создаваемого файла, а не входной шаблон.
 
 ## Документация
 
+- [Полное сохранение проекта конструктора: Ctrl+S / Ctrl+O](docs/bundle_projects.md).
 - [Построение сетки, заполнение ядра и экспорт](docs/bundle_build_workflow.md).
 - [Проверка Fuse в STAR-CCM+](docs/starccm_fuse_validation.md).
 - [Аудит использования файлов и выполненная очистка](docs/file_usage_audit.md).

@@ -651,6 +651,14 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         log('Экспорт STAR-CCM+: подготовка сетки и макроса')
         run_export(self,'Экспорт STAR-CCM+',compute,success,failure)
 
+    def done(self, result):
+        parent=self.parent()
+        if parent is not None and hasattr(parent,'star_export_options'):
+            try:parent.star_export_options=validate_options(self.read_options(),self.sub_count)
+            except ValueError as exc:
+                if hasattr(parent,'append_mesh_message'):parent.append_mesh_message(f'Некорректные настройки экспорта не сохранены: {exc}')
+        super().done(result)
+
     def reject(self):
         from mesh_export_jobs import defer_export_close
         if not defer_export_close(self):super().reject()

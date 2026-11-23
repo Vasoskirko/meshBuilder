@@ -67,6 +67,7 @@ class YPlusDialog(QDialog if HAS_QT else object):
         self.combo_gas = QComboBox(self)
         for gname in GAS_PRESETS:
             self.combo_gas.addItem(gname)
+        self.combo_gas.setCurrentText(self.state_dict.get("gas",self.combo_gas.currentText()))
         self.combo_gas.currentIndexChanged.connect(self.recalc)
         f_fluid.addRow("Выбор газа:", self.combo_gas)
 
@@ -198,6 +199,7 @@ class YPlusDialog(QDialog if HAS_QT else object):
     def save_state(self):
         self.state_dict["conductivity_model"] = self.combo_water_conductivity.currentData()
         self.state_dict["fluid_mode"] = self.combo_fluid_mode.currentText()
+        self.state_dict["gas"] = self.combo_gas.currentText()
         self.state_dict["temp_c"] = self.edit_temp.text().strip()
         self.state_dict["press_mpa"] = self.edit_press.text().strip()
         self.state_dict["density"] = self.edit_density.text().strip()
@@ -236,6 +238,8 @@ class YPlusDialog(QDialog if HAS_QT else object):
             m_name = self.combo_fluid_mode.currentText()
             t_c = float(self.edit_temp.text().strip().replace(",", "."))
             p_mpa = float(self.edit_press.text().strip().replace(",", "."))
+            if not math.isfinite(t_c) or not math.isfinite(p_mpa) or t_c<=-273.15 or p_mpa<=0:
+                raise ValueError("Нужны конечные T > -273.15 °C и P > 0 МПа")
 
             if "IAPWS" in m_name:
                 p_props = water_iapws97(t_c, p_mpa, conductivity_model=self.combo_water_conductivity.currentData())
@@ -292,6 +296,8 @@ class YPlusDialog(QDialog if HAS_QT else object):
                 y_plus=y_target
             )
 
+            if not all(math.isfinite(res[k]) and res[k]>0 for k in ('re','u','cf','tau_w','nu','u_tau','delta_y1_um')):
+                raise ValueError('Параметры y+ должны давать конечный положительный вязкий масштаб')
             self.calculated_delta_y1_um = res["delta_y1_um"]
             self.last_yplus_result = res
             self.lbl_flow_summary.setText(

@@ -153,9 +153,9 @@ class BundleBuilderUiMixin:
 
         # 5. Экспорт / импорт
         io_row = QHBoxLayout()
-        btn_save = QPushButton("Сохранить JSON…")
+        btn_save = QPushButton("Сохранить проект…")
         btn_save.clicked.connect(self.on_save_json)
-        btn_load = QPushButton("Загрузить JSON…")
+        btn_load = QPushButton("Открыть проект…")
         btn_load.clicked.connect(self.on_load_json)
         io_row.addWidget(btn_save)
         io_row.addWidget(btn_load)

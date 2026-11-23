@@ -22,8 +22,8 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolb
 from matplotlib.collections import LineCollection
 from matplotlib.figure import Figure
 from matplotlib.patches import Circle, Polygon
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QBrush, QColor
+from PySide6.QtCore import Qt, QSignalBlocker
+from PySide6.QtGui import QBrush, QColor, QAction, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -68,6 +68,8 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
         super().__init__()
         self.setWindowTitle("Конструктор сечения ТВС и генератор сетки подканалов (CFD)")
         self.resize(1440, 880)
+        self.project_path=None
+        self.star_export_options=None
         self.model = BundleModel(s_flat=65.0, pitch=12.75, d_fuel=9.1, d_guide=12.0, d_instrument=10.3)
 
         self._pan_start = None
@@ -92,6 +94,15 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
 
         self.setStyleSheet(SCIENTIFIC_QSS)
         self.init_ui()
+        project_menu=self.menuBar().addMenu('Проект')
+        for title,shortcut,callback in (
+                ('Сохранить проект','Ctrl+S',lambda:self.on_save_json()),
+                ('Сохранить проект как…','Ctrl+Shift+S',lambda:self.on_save_json(save_as=True)),
+                ('Открыть проект…','Ctrl+O',self.on_load_json),
+                ('Экспортировать только сечение JSON…',None,self.on_export_cross_section_json)):
+            action=QAction(title,self)
+            if shortcut:action.setShortcut(QKeySequence(shortcut))
+            action.triggered.connect(callback);project_menu.addAction(action)
         self.on_rebuild_geometry(silent=True)
         for spin in self.geometry_controls():
             spin.valueChanged.connect(self.validate_mesh_inputs)
@@ -747,52 +758,116 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
         dialog = HydraulicsTableDialog(self, self.model)
         dialog.exec()
 
-    def on_save_json(self):
+    def on_export_cross_section_json(self):
         name, _ = QFileDialog.getSaveFileName(self, "Сохранить конфигурацию сечения", "bundle_selection.json", "JSON (*.json)")
         if name:
             data = self.model.export_dict()
             Path(name).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
             QMessageBox.information(self, "Успех", f"Конфигурация сечения сохранена в:\n{name}")
 
+    def _project_busy(self):
+        if getattr(self,'_mesh_thread',None) is not None or getattr(self,'_export_job',None) is not None:
+            QMessageBox.warning(self,'Проект занят','Дождитесь завершения построения/экспорта или отмените операцию.')
+            return True
+        return False
+
+    def on_save_json(self, save_as=False):
+        if self._project_busy():return
+        from bundle_project import capture_project,save_project
+        try:project=capture_project(self)
+        except Exception as exc:
+            QMessageBox.warning(self,'Не удалось сохранить проект',str(exc));return
+        path=getattr(self,'project_path',None)
+        if save_as or path is None:
+            path,_=QFileDialog.getSaveFileName(self,'Сохранить полный проект конструктора',str(path or 'bundle_project.json'),'Проект meshBuilder (*.json)')
+        if not path:return
+        try:
+            save_project(project,path)
+            self.project_path=Path(path)
+            self.setWindowTitle(f'meshBuilder — {self.project_path.name}')
+            self.append_mesh_message(f'Проект сохранён: {path}')
+        except Exception as exc:
+            QMessageBox.critical(self,'Не удалось сохранить проект',str(exc))
+
     def on_load_json(self):
-        name, _ = QFileDialog.getOpenFileName(self, "Открыть конфигурацию сечения", "", "JSON (*.json)")
-        if name:
-            try:
-                data = json.loads(Path(name).read_text(encoding="utf-8"))
-                lat = data["lattice"]
-                self.s_flat_spin.setValue(lat["s_across_flats_mm"])
-                self.pitch_spin.setValue(lat["pitch_mm"])
-                self.d_fuel_spin.setValue(lat["default_d_fuel_mm"])
-                self.d_guide_spin.setValue(lat["default_d_guide_mm"])
-                self.d_inst_spin.setValue(lat.get("default_d_instrument_mm", 10.3))
+        if self._project_busy():return
+        path,_=QFileDialog.getOpenFileName(self,'Открыть проект или старый JSON сечения','','JSON (*.json)')
+        if not path:return
+        try:
+            from bundle_project import load_project
+            project=load_project(path)  # All schema/geometry checks precede GUI mutation.
+            self.apply_bundle_project(project)
+            self.project_path=None if project.legacy else Path(path)
+            self.setWindowTitle(f'meshBuilder — {Path(path).name}')
+            self.append_mesh_message(f'Открыт проект: {path}. Для экспорта перестройте сетку.')
+            if project.legacy:self.append_mesh_message('Импортирован старый JSON сечения: параметры сетки и экспорта в нём отсутствуют; установлены значения по умолчанию.')
+        except Exception as exc:
+            QMessageBox.warning(self,'Не удалось открыть проект',str(exc))
 
-                self.model.s_flat = lat["s_across_flats_mm"]
-                self.model.pitch = lat["pitch_mm"]
-                self.model.d_fuel = lat["default_d_fuel_mm"]
-                self.model.d_guide = lat["default_d_guide_mm"]
-                self.model.d_instrument = lat.get("default_d_instrument_mm", 10.3)
+    def apply_bundle_project(self, project):
+        from bundle_project import validate_project,BundleProjectError
+        from yplus_dialog import YPlusDialog
+        if getattr(self,'_mesh_thread',None) is not None or getattr(self,'_export_job',None) is not None:
+            raise BundleProjectError('Дождитесь завершения фоновой операции')
+        # Validate again for programmatic callers; corrupt files cannot partially apply.
+        project=validate_project(project.data)
+        p=self.mesh_subpanel;core=project.data['mesh']['core'];view=project.data['view']
+        widgets=[*self.geometry_controls(),*p.fields.values(),p.radio_all,p.radio_template,p.radio_block,p.combo_templates,p.combo_blocks,p.combo_core_mode,p.combo_mesh_lines,p.combo_core_lines,p.combo_center_method,p.cu,self.combo_detail]
+        blockers=[QSignalBlocker(widget) for widget in widgets]
+        p.updating=True
+        try:
+            self.model=project.model;self.base_params=project.base
+            self.template_configs=project.templates;self.block_custom_configs=project.blocks
+            self.current_mesh_result=None;self.current_layer_result=None;self.current_quality_report=None
+            self._layer_inputs=None;self._mesh_inputs=None;self._mesh_drawn=False
+            self.highlighted_block_id=None;self.active_plot_block_idx=0
+            for widget,value in zip(self.geometry_controls(),view['geometry_inputs']):widget.setValue(value)
+            # Reset even inactive numeric drafts before changing display units.
+            for key,value in dict(z_len=project.base.z_len,ni=project.base.ni,nz=project.base.nz,
+                    layers=project.base.nj-1,h1=project.base.h1,hmax=project.base.hmax,
+                    layer_cells=project.base.wall_layers,layer_thickness=project.base.layer_thickness,
+                    layer_growth=project.base.layer_growth,growth_limit=project.base.shape if (project.base.law,project.base.mode)==('geometric','first_growth') else 1.02).items():p.fields[key].setValue(value)
+            p.apply_params(project.base)
+            p.updating=False;p.change_cell_unit(core['unit']);p.cu.setCurrentText(core['unit']);p.updating=True
+            for key in ('core_transition','core_growth','core_max_size','core_max_cells','core_layers'):p.fields[key].setValue(core[key])
+            p.combo_center_method.setCurrentIndex(p.combo_center_method.findData(core['center']))
+            p.combo_mesh_lines.setCurrentIndex(p.combo_mesh_lines.findData(core['mesh_lines']))
+            p.combo_core_mode.setCurrentIndex(p.combo_core_mode.findData(core['mode']))
+            p._fixed_core_line_index=int(core['core_lines']);p._last_core_line_mode=None
+            p.combo_core_lines.setCurrentIndex(p.combo_core_lines.findData(core['core_lines']))
+            templates,instances=classify_subchannel_blocks(self.model,selected_sub_ids=sorted(self.model.selected_subchannels))
+            self.instances_lookup={i.global_block_id:i for i in instances}
+            p.populate_scope_and_tree(templates,instances)
+            p.combo_templates.setCurrentIndex(p.combo_templates.findData(view['template']))
+            p.combo_blocks.setCurrentIndex(p.combo_blocks.findData(view['block']))
+            p.scope_mode=view['scope'];getattr(p,'radio_'+p.scope_mode).setChecked(True)
+            p.load_active_scope_to_ui()
+            p.yplus_saved_state=deepcopy(project.data['calculator'])
+            self.star_export_options=deepcopy(project.data['export'])
+            self.combo_detail.setCurrentIndex(self.combo_detail.findData(view['detail']))
+        finally:
+            p.updating=False
+            del blockers
+        p.refresh_controls()
+        for button in (p.btn_export,p.btn_export_star,p.btn_quality,p.btn_fill_core):button.setEnabled(False)
+        self.clear_ruler();self.ax_mesh.clear();self.canvas_mesh.draw_idle()
+        self.ax_layers.clear();self.canvas_layers.draw_idle();self.table_blocks.setRowCount(0)
+        self._custom_limits=None;self.update_inspector();self.on_fit_view();self.rebuild_view()
+        self.tabs.setCurrentIndex(view['tab'])
+        self.left_stack.setCurrentIndex(1 if view['tab']>0 and self.model.selected_subchannels else 0)
+        p.current_fluid_props={};p.last_yplus_result={}
+        if p.yplus_saved_state:
+            # Recompute reference quantities from inputs, never trust serialized results.
+            summary=self.model.get_selection_summary() if self.model.selected_subchannels else self.model.get_total_assembly_summary()
+            dialog=YPlusDialog(p,d_hyd_mm=summary.get('total_d_h_mm',summary.get('total_dh_mm',14.0)),a_fluid_mm2=summary.get('total_a_fluid_mm2',100.0),state_dict=deepcopy(p.yplus_saved_state))
+            if getattr(dialog,'last_yplus_result',None):
+                p.current_fluid_props=deepcopy(getattr(dialog,'current_fluid_props',{}) or {})
+                p.last_yplus_result=deepcopy(dialog.last_yplus_result)
+            dialog.close();dialog.deleteLater()
+        if view['geometry_inputs']!=[self.model.s_flat,self.model.pitch,self.model.d_fuel,self.model.d_guide,self.model.d_instrument]:
+            self.append_mesh_message('В проекте есть неприменённые параметры геометрии. Для их применения используйте кнопку перестроения пучка; она сбрасывает ручные правки стержней.')
+        self.append_mesh_message('Параметры проекта восстановлены. Построенная сетка и результаты проверки не загружаются; требуется построение.')
 
-                self.model.user_rod_types.clear()
-                self.model.user_custom_diameters.clear()
-                self.model.user_deleted_coords = set(tuple(c) for c in data.get("user_deleted_coords", []))
-                self.model.auto_deleted_clash_coords = set()
-
-                for r_info in data.get("rods", []):
-                    coord = (r_info["q"], r_info["r"])
-                    rtype = r_info.get("type", "fuel")
-                    if rtype != "fuel":
-                        self.model.user_rod_types[coord] = rtype
-                    if r_info.get("custom_diameter"):
-                        self.model.user_custom_diameters[coord] = r_info["diameter_mm"]
-
-                self.model.update_geometry()
-                self.model.selected_subchannels = {s["subchannel_id"] for s in data.get("subchannels", [])}
-                self.update_inspector()
-                self.on_fit_view()
-                self.rebuild_view()
-                QMessageBox.information(self, "Успех", f"Конфигурация сечения загружена из:\n{name}")
-            except Exception as exc:
-                QMessageBox.warning(self, "Ошибка", f"Не удалось загрузить файл: {exc}")
 
     def switch_to_mesh_mode(self):
         if not self.model.selected_subchannels:
@@ -1370,6 +1445,9 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
                 fluid_props=f_props,
                 yplus_data=yp_data,
             )
+            if self.star_export_options is not None:
+                try:dlg.apply_options(self.star_export_options)
+                except ValueError as exc:self.append_mesh_message(f'Сохранённые настройки экспорта не подходят новой сетке: {exc}. Окно открыто со значениями по умолчанию.')
             dlg.exec()
         except Exception as exc:
             QMessageBox.critical(self, "Ошибка", f"Не удалось открыть окно экспорта STAR-CCM+:\n{exc}")
