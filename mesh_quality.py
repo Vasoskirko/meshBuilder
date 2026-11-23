@@ -367,7 +367,7 @@ def _validate_interfaces(interfaces, count):
             raise QualityError("Стык блока с самим собой не поддерживается")
 
 
-def analyse_blocks(blocks, interfaces=None, *, thresholds=None, tolerance=None, profile=None):
+def analyse_blocks(blocks, interfaces=None, *, thresholds=None, tolerance=None, profile=None, progress_callback=None):
     """Сводный отчёт. interfaces=None — найти автоматически, [] — стыков нет."""
     thresholds = dict(thresholds or {})
     caution_only = {}
@@ -412,6 +412,7 @@ def analyse_blocks(blocks, interfaces=None, *, thresholds=None, tolerance=None, 
     layers, summary_blocks = {}, []
     invalid_volume = invalid_jacobian = 0
     for n, x in enumerate(arrays):
+        if progress_callback:progress_callback(.1+.8*n/len(arrays),f'Качество блока {n+1}/{len(arrays)}')
         cm = cell_metrics(x)
         for name in CELL_METRICS:
             acc[name].add(cm[name], _cell_where(n), n)
@@ -504,6 +505,7 @@ def analyse_blocks(blocks, interfaces=None, *, thresholds=None, tolerance=None, 
         report["quality_profile"] = {"version": PROFILE_VERSION,
                                      "thresholds": {k: dict(v) for k, v in profile.items()},
                                      "boundary_included_in_worse_zone": True}
+    if progress_callback:progress_callback(1.,'Проверка качества завершена')
     return report
 
 

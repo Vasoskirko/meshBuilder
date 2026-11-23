@@ -1,25 +1,14 @@
 # -*- coding: utf-8 -*-
-"""Теплофизические свойства сред: канонический IAPWS-IF97 (вода) и идеальный газ."""
+"""Вода: IF97 Region 1 + IAPWS 2008/2011; газы: идеальный газ."""
 import math
 
-R_WATER = 0.461526  # кДж/(кг*К)
-P_STAR = 16.53      # МПа
-T_STAR = 1386.0     # К
+from iapws import IAPWS97
+from iapws._iapws import _ThCond
 
-# Канонические 34 коэффициента формулировки IAPWS-IF97 (Таблица 1 официального стандарта)
-_I1 = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3, 4, 4, 4, 5, 8, 8, 21, 23, 29, 30, 31, 32]
-_J1 = [-2, -1, 0, 1, 2, 3, 4, 5, -9, -7, -1, 0, 1, 3, -3, 0, 1, 3, 17, -4, 0, 6, -5, -2, 10, -8, -11, -6, -29, -31, -38, -39, -40, -41]
-_N1 = [
-    0.14632971213167, -0.84548187169114, -0.37563603672040e1, 0.33855169168385e1,
-    -0.95791963387872, 0.15772038513228, -0.16616417199501e-1, 0.81214629983568e-3,
-    0.28319080123804e-3, -0.60706301565874e-3, -0.18990068218419e-1, -0.32529748770505e-1,
-    -0.21841717175414e-1, -0.52838357969930e-4, -0.47184321073267e-3, -0.30001780793026e-3,
-    0.47661393906987e-4, -0.44141845330846e-5, -0.72694996297594e-15, -0.31679644845054e-4,
-    -0.28270797985312e-5, -0.85205128120103e-9, -0.22425281908000e-5, -0.65171222895601e-6,
-    -0.14341729937924e-12, -0.40516996860117e-6, -0.12734301741641e-8, -0.17424871230634e-9,
-    -0.68762131295531e-18, 0.14478307828521e-19, 0.26335781662795e-22, -0.11947622640071e-22,
-    0.18228094581404e-23, -0.93537087292458e-25
-]
+WATER_CONDUCTIVITY_MODELS = {
+    "background": "Базовая теплопроводность λ (без добавочного вклада)",
+    "full": "Теплопроводность λ с добавочным вкладом около критической точки",
+}
 
 def _saturation_pressure_mpa(T):
     """IF97 Region 4 saturation pressure; T is in kelvin."""
@@ -34,8 +23,34 @@ def _saturation_pressure_mpa(T):
     return (2 * C / (-B + math.sqrt(B * B - 4 * A * C))) ** 4
 
 
-def water_iapws97(t_c: float, p_mpa: float) -> dict:
+def _saturation_properties(t_c, p_mpa, p_sat):
+    """Reference coexistence states at P; no separate phases at/above Pc."""
+    result = dict(saturation_pressure_mpa=p_sat, pressure_margin_mpa=p_mpa-p_sat,
+        saturation_temperature_c=None, subcooling_k=None,
+        saturated_liquid_density=None, saturated_vapor_density=None,
+        saturated_liquid_enthalpy=None, saturated_vapor_enthalpy=None, latent_heat=None)
+    if p_mpa < 0.000611657:
+        result['saturation_status'] = 'P ниже давления тройной точки: состояния насыщения при P не рассчитываются'
+    elif p_mpa >= 22.064:
+        result['saturation_status'] = 'P ≥ 22.064 МПа: отдельных жидкой и паровой фаз насыщения при P нет'
+    else:
+        liquid = IAPWS97(P=p_mpa, x=0)
+        vapor = IAPWS97(P=p_mpa, x=1)
+        tsat = float(liquid.T - 273.15)
+        margin = tsat-t_c
+        result.update(saturation_temperature_c=tsat,
+            subcooling_k=0.0 if abs(margin)<1e-9 else margin,
+            saturated_liquid_density=float(liquid.rho), saturated_vapor_density=float(vapor.rho),
+            saturated_liquid_enthalpy=float(liquid.h*1000), saturated_vapor_enthalpy=float(vapor.h*1000),
+            latent_heat=float((vapor.h-liquid.h)*1000),
+            saturation_status='Свойства насыщенной жидкости и пара рассчитаны при заданном P')
+    return result
+
+
+def water_iapws97(t_c: float, p_mpa: float, *, conductivity_model="background") -> dict:
     """Свойства воды: Регион 1 IAPWS-IF97 (жидкость при 0..350 °C, p до 100 МПа)."""
+    if conductivity_model not in WATER_CONDUCTIVITY_MODELS:
+        raise ValueError("Неизвестная модель теплопроводности воды")
     if not math.isfinite(t_c) or not math.isfinite(p_mpa):
         raise ValueError("Температура и давление должны быть конечными")
     T = t_c + 273.15
@@ -46,33 +61,33 @@ def water_iapws97(t_c: float, p_mpa: float) -> dict:
     if p_mpa < _saturation_pressure_mpa(T):
         raise ValueError("Регион 1 IAPWS-IF97: давление ниже давления насыщения; жидкая вода не поддерживается в этой точке")
 
-    Pi = p_mpa / P_STAR
-    tau = T_STAR / T
+    # The T,P classifier may choose vapor at saturation due to floating-point
+    # roundoff (notably at 100 °C). This API intentionally returns liquid there.
+    saturation = _saturation_pressure_mpa(T)
+    if math.isclose(p_mpa, saturation, rel_tol=1e-12, abs_tol=1e-14):
+        state = IAPWS97(T=T, x=0)
+    else:
+        state = IAPWS97(T=T, P=p_mpa)
+    if state.region != 1:
+        raise ValueError("Требуется жидкая вода в регионе 1 IAPWS-IF97")
 
-    g_pi = 0.0
-    g_tt = 0.0
-    for i in range(34):
-        if _I1[i] > 0:
-            g_pi -= _N1[i] * _I1[i] * ((7.1 - Pi) ** (_I1[i] - 1)) * ((tau - 1.222) ** _J1[i])
-        g_tt += _N1[i] * ((7.1 - Pi) ** _I1[i]) * _J1[i] * (_J1[i] - 1) * ((tau - 1.222) ** (_J1[i] - 2))
-
-    v = (R_WATER * T / (P_STAR * 1000.0)) * g_pi
-    rho = 1.0 / v
-    cp_kj = -R_WATER * (tau ** 2) * g_tt
-    cp_j = cp_kj * 1000.0
-
-    # Эмпирическая корреляция вязкости (типа Фогеля) с поправкой на давление
-    mu = 2.414e-5 * (10.0 ** (247.8 / (T - 140.0))) * (1.0 + 0.001 * max(0.0, p_mpa - 0.1))
-
-    # Полиномиальная аппроксимация теплопроводности
-    lam = max(0.2, min(0.75, 0.565 + 0.0018 * t_c - 6e-6 * (t_c ** 2)))
-    pr = (mu * cp_j) / lam
-
-    return {
-        "density": round(rho, 2), "dyn_vis": mu, "cp": round(cp_j, 1),
-        "lambda": round(lam, 3), "prandtl": round(pr, 2),
-        "desc": f"Вода IAPWS-97 (вязкость и теплопроводность — приближения; T={t_c:.1f} °C, P={p_mpa:.2f} МПа)"
+    # R15-11 separates background conductivity lambda0*lambda1 from the
+    # additive critical enhancement. STAR's reported 300 C / 15 MPa value
+    # agrees with the background form; do not emulate it with a fitted factor.
+    # The pinned, documented _ThCond kernel omits enhancement without a phase.
+    conductivity = _ThCond(state.rho, state.T) if conductivity_model == "background" else state.k
+    rho, mu, cp_j, lam = map(float, (state.rho, state.mu, state.cp * 1000.0, conductivity))
+    if any(not math.isfinite(value) or value <= 0 for value in (rho, mu, cp_j, lam)):
+        raise ValueError("IAPWS вернул недопустимые свойства воды")
+    result = {
+        "density": rho, "dyn_vis": mu, "kin_vis": mu / rho, "cp": cp_j,
+        "lambda": lam, "prandtl": mu * cp_j / lam, "enthalpy": float(state.h*1000),
+        "t_ref_c": t_c, "p_ref_mpa": p_mpa, "conductivity_model": conductivity_model,
+        "desc": f"Вода: IF97, μ — IAPWS 2008, λ — IAPWS 2011 ({WATER_CONDUCTIVITY_MODELS[conductivity_model]}); T={t_c:.1f} °C, P={p_mpa:.2f} МПа"
     }
+    result.update(_saturation_properties(t_c, p_mpa, saturation))
+    return result
+
 
 GASES = {
     "Воздух": (0.0289647, 1005.0, 1.40, 1.716e-5, 110.4),

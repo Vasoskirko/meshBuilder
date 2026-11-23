@@ -16,6 +16,7 @@ from mesh_core_fill import (  # noqa: F401
     CoreFillError,
     MeshDiagnosticError,
     capped_distribution,
+    controlled_distribution,
     fill_core,
     fixed_count_distribution,
     save_diagnostic,

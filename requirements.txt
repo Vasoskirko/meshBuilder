@@ -2,3 +2,4 @@ numpy
 matplotlib
 PySide6
 scipy
+iapws==1.5.5

@@ -57,4 +57,17 @@ pip install -r requirements.txt
 - `mesh_project.py` — сохранение и загрузка проектов (`.json`).
 - `bundle_geometry.py`, `bundle_subchannel_builder.py`, `mesh_subchannel.py` — подканальная геометрия и построение.
 - `fluid_properties.py`, `yplus_calculator.py` — свойства теплоносителя и расчёт `y+`.
-- `starccm_macro_generator.py`, `setup_starccm_subchannels.java` — генерация макросов для STAR-CCM+.
+- `starccm_macro_generator.py` — генератор Java-кода для STAR-CCM+; `setup_starccm_subchannels.java` — имя создаваемого файла, а не входной шаблон.
+
+## Документация
+
+- [Построение сетки, заполнение ядра и экспорт](docs/bundle_build_workflow.md).
+- [Проверка Fuse в STAR-CCM+](docs/starccm_fuse_validation.md).
+- [Аудит использования файлов и выполненная очистка](docs/file_usage_audit.md).
+- [Архив исторических отчётов](docs/archive/README.md).
+
+## Свойства воды
+
+Для жидкой воды используются IF97 (регион 1), вязкость IAPWS 2008 и теплопроводность IAPWS 2011 с явным выбором критического усиления через `iapws==1.5.5`.
+После обновления установите зависимости из `requirements.txt`.
+Диапазон, единицы, контрольные значения и ограничения описаны в [docs/water_transport.md](docs/water_transport.md).

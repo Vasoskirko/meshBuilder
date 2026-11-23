@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 
 try:
-    from PySide6.QtCore import Qt, QObject, QThread, Signal, Slot
+    from PySide6.QtCore import Qt, QObject, QThread, Signal, Slot, QSignalBlocker
     from PySide6.QtWidgets import (
         QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox, QLineEdit,
         QSpinBox, QComboBox, QCheckBox, QPushButton, QLabel, QFileDialog,
@@ -135,8 +135,10 @@ class MeshSubpanel(QWidget if HAS_QT else object):
 
         row_z = QHBoxLayout()
         lbl_z = QLabel("Z (мм):")
+        lbl_z.setToolTip("Общая высота всей сетки; не переопределяется шаблоном или блоком.")
         w_z = self.number("z_len", 0.05, 1e-3, 1e-18, 1000.0, onchange=self.on_field_changed)
         lbl_nz = QLabel("nz (слоёв):")
+        lbl_nz.setToolTip("Общее число осевых ячеек для всех блоков.")
         w_nz = self.integer("nz", 10, 1, 1000000, onchange=self.on_field_changed)
         row_z.addWidget(lbl_z)
         row_z.addWidget(w_z, 1)
@@ -252,11 +254,12 @@ class MeshSubpanel(QWidget if HAS_QT else object):
             self
         )
         self.lbl_center_desc.setWordWrap(True)
-        self.chk_hermite_tfi = QCheckBox("Ортогонализация к центру (Hermite TFI)", self)
-        self.chk_hermite_tfi.setChecked(True)
-        self.chk_hermite_tfi.setToolTip("Кубическое сглаживание по Эрмиту: выпрямляет лучи к центру подканала и ребру стыка секторов (O -> M) под углом ~90°.")
-        self.chk_hermite_tfi.toggled.connect(self.on_field_changed)
-        b_center.addWidget(self.chk_hermite_tfi)
+        self.combo_mesh_lines = QComboBox(self)
+        self.combo_mesh_lines.addItem('Прямые', False)
+        self.combo_mesh_lines.addItem('Плавное сопряжение (Hermite)', True)
+        self.combo_mesh_lines.setCurrentIndex(1)
+        self.combo_mesh_lines.currentIndexChanged.connect(self.on_field_changed)
+        self.mesh_lines_row=self.row(b_center,'Форма линий сетки:',self.combo_mesh_lines)
         b_center.addWidget(self.lbl_center_desc)
 
         layout.addWidget(grp_center)
@@ -268,18 +271,26 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         b_core = QVBoxLayout(self.core_group); b_core.setSpacing(6)
 
         self.combo_core_mode = QComboBox(self)
-        self.combo_core_mode.addItem("Плавный рост от призмы (CFD)", "cfd_growth")
-        self.combo_core_mode.addItem("Изотропное ядро (Аспект ≈ 1.0)", "isotropic")
-        self.combo_core_mode.addItem("Фиксированное число слоёв", "fixed_count")
+        self.combo_core_mode.addItem('Плавный рост от пристеночного слоя', 'controlled_growth')
+        self.combo_core_mode.addItem('Ячейки ядра около 1:1 — экспериментальный', 'aspect_alignment')
+        self.combo_core_mode.addItem('Заданное число слоёв', 'fixed_count')
         self.combo_core_mode.currentIndexChanged.connect(self.on_core_mode_changed)
-        self.row(b_core, "Режим ядра:", self.combo_core_mode)
+        self.row(b_core, 'Способ заполнения ядра:', self.combo_core_mode)
+        self.combo_core_lines=QComboBox(self)
+        self.combo_core_lines.addItem('Прямые',False)
+        self.combo_core_lines.addItem('Плавное сопряжение (Hermite)',True)
+        self.combo_core_lines.currentIndexChanged.connect(self.on_core_field_changed)
+        self.core_lines_row=self.row(b_core,'Форма линий ядра:',self.combo_core_lines)
+        self.lbl_core_lines=QLabel('Прямые линии сохраняют ограничения нормальных шагов. Hermite доступен в способе «Заданное число слоёв».',self)
+        self.lbl_core_lines.setWordWrap(True)
+        b_core.addWidget(self.lbl_core_lines)
 
         self.core_transition_row = self.row(
-            b_core, "Коэф. перехода (ядро / призма):",
+            b_core, "Переход r = первый шаг ядра / последний шаг слоя:",
             self.number("core_transition", 1.1, minimum=0.1, maximum=10.0, onchange=self.on_core_field_changed)
         )
         self.core_growth_row = self.row(
-            b_core, "Коэф. роста в ядре (q):",
+            b_core, "Рост шагов до плато (q):",
             self.number("core_growth", 1.1, minimum=1.0, maximum=100.0, onchange=self.on_core_field_changed)
         )
 
@@ -296,7 +307,10 @@ class MeshSubpanel(QWidget if HAS_QT else object):
             b_core, "Число слоёв ядра (слои):",
             self.integer("core_layers", 20, 1, 500, onchange=self.on_core_field_changed)
         )
-        self.integer("core_max_cells", 5000, 1, 100000, onchange=self.on_core_field_changed).setVisible(False)
+        self.core_limit_row = self.row(b_core, "Не более слоёв ядра:",
+            self.integer("core_max_cells",5000,1,100000,onchange=self.on_core_field_changed))
+        self.core_help = QLabel("r задаёт скачок на стыке; q — рост соседних шагов; целевой размер — плато. В строгом режиме ограничения не превышаются: при несовместимости настройте r/q/размер. Общее число слоёв сохраняет конформность блоков.",self)
+        self.core_help.setWordWrap(True); b_core.addWidget(self.core_help)
 
         self.lbl_core_preview = QLabel(self)
         self.lbl_core_preview.setWordWrap(True)
@@ -340,7 +354,7 @@ class MeshSubpanel(QWidget if HAS_QT else object):
 
         self.lbl_status = QLabel("Настройте параметры и нажмите кнопку построения.")
         self.lbl_status.setWordWrap(True)
-        layout.addWidget(self.lbl_status)
+        self.lbl_status.hide()  # Detailed status is displayed once, in the mesh journal.
 
         layout.addStretch()
 
@@ -398,6 +412,7 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         layer = (law == "wall_core")
 
         self.core_group.setVisible(layer)
+        self.mesh_lines_row.setVisible(not layer)
         self.hyper_row.setVisible(hyper)
         self.btn_build_layer.setVisible(layer)
 
@@ -411,9 +426,27 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         self.layer_growth_row.setVisible(layer and mode in ("layer_growth", "layer_first_growth"))
         if hasattr(self, "combo_core_mode"):
             cmode = self.combo_core_mode.currentData()
-            self.core_growth_row.setVisible(cmode in ("cfd_growth", "isotropic"))
-            self.core_maxsize_row.setVisible(cmode == "cfd_growth")
+            self.core_growth_row.setVisible(cmode in ("controlled_growth", "aspect_alignment"))
+            self.core_maxsize_row.setVisible(cmode in ("controlled_growth","aspect_alignment"))
+            self.core_limit_row.setVisible(cmode in ("controlled_growth","aspect_alignment"))
+            self.core_maxsize_row.layout().itemAt(0).widget().setText(
+                'Максимальный допустимый шаг ядра:' if cmode in ('controlled_growth','aspect_alignment') else 'Целевой размер в ядре:')
+            self.w_core_max_size.setToolTip('В строгом режиме это верхняя граница. Плато на разных лучах может быть меньше для сохранения общего числа слоёв.')
             self.core_layers_row.setVisible(cmode == "fixed_count")
+            self.core_lines_row.setVisible(True)
+            self.combo_core_lines.setEnabled(cmode == 'fixed_count')
+            previous=getattr(self,'_last_core_line_mode',None)
+            if previous == 'fixed_count' and cmode != 'fixed_count':
+                self._fixed_core_line_index=self.combo_core_lines.currentIndex()
+            if cmode != 'fixed_count' or previous != 'fixed_count':
+                with QSignalBlocker(self.combo_core_lines):
+                    self.combo_core_lines.setCurrentIndex(getattr(self,'_fixed_core_line_index',0) if cmode=='fixed_count' else 0)
+            self._last_core_line_mode=cmode
+            self.lbl_core_lines.setVisible(cmode != 'fixed_count')
+            self.core_help.setText(
+                'Задайте число слоёв и переход r. Ограничения q и максимального размера в этом режиме не применяются.'
+                if cmode == 'fixed_count' else
+                'r — первый шаг ядра / последний шаг слоя; q — максимальный рост соседних шагов. Размер — строгий верхний предел. При несовместимых ограничениях построение остановится с пояснением.')
             self.update_core_preview()
         self.update_live_advisor_hint()
 
@@ -452,6 +485,10 @@ class MeshSubpanel(QWidget if HAS_QT else object):
             n_layers = self.fields["core_layers"].value()
             max_cells = self.fields["core_max_cells"].value()
             cmode = self.combo_core_mode.currentData()
+            if cmode == 'aspect_alignment':
+                self.lbl_core_preview.setStyleSheet('padding: 6px; background: #e8f5e9; color: #1b5e20;')
+                self.lbl_core_preview.setText('Подбирается общее число слоёв под местный поперечный шаг. Цель — пропорции около 1:1 во внешней половине ядра; пристеночный слой сохранён. Ограничения: r, q, максимальный размер и лимит слоёв. Используются прямые линии. Точный результат — после заполнения; 1:1 не гарантируется.')
+                return
             p_curr = self.read_params()
 
             if p_curr.law == "wall_core":
@@ -483,20 +520,26 @@ class MeshSubpanel(QWidget if HAS_QT else object):
                         rems.append(g["lengths"] - g["layer_thickness"])
                     rem = np.concatenate(rems)
                     delta_built = float(np.sum(layer_res.layer_widths[0])) if getattr(layer_res, "layer_widths", None) is not None else delta_new
-                    rem = rem + (delta_built - delta_new)
+                    if cmode != "controlled_growth": rem = rem + (delta_built - delta_new)
                     h0v = np.full(rem.shape, h_last, dtype=float)
+                    if cmode == 'controlled_growth' and layer_res.all_block_widths:
+                        h0v=np.concatenate([w[:,-1] for w in layer_res.all_block_widths])
+                    if rem.size*min(max_cells,max(1,int(np.min(rem/np.maximum(h0v*q_trans,1e-30)))))>200000:
+                        raise ValueError('Подробный прогноз большой сетки отложен до построения в фоне; параметры не изменены.')
                     eff_max = max(h_target, h_core1 * 1.01)
-                    if cmode == "fixed_count":
+                    if cmode == 'controlled_growth':
+                        dist=mc.controlled_distribution(rem,h0v,q_core,h_target,max_cells,transition_ratio=q_trans)
+                    elif cmode == "fixed_count":
                         dist = mc.fixed_count_distribution(rem, h0v, n_layers, transition_ratio=q_trans)
                     else:
                         dist = mc.capped_distribution(rem, h0v, q_core, eff_max, max_cells, transition_ratio=q_trans)
                     plat_min = float(dist.plateau.min())
                     plat_max = float(dist.plateau.max())
                     lmin_disp = float(rem.min()) * scale
-                    est_lines.append(f"N = ⌊{lmin_disp:.{nd}f} / {h_core1*scale:.{nd}f}⌋ = {dist.count} "
-                                     f"(узкий луч ÷ h₁ ядра)")
+                    est_lines.append(f"Общее число слоёв N = {dist.count}; длина узкого луча {lmin_disp:.{nd}f} {unit_lbl}. "
+                                     f"(одинаково для всех блоков)")
                     est_lines.append(f"последняя ячейка: зазор ≈ {plat_min*scale:.{nd}f} … центр ≈ {plat_max*scale:.{nd}f} {unit_lbl}")
-                    if q_core <= 1.0 + 1e-12:
+                    if cmode == "controlled_growth" and q_core <= 1.0 + 1e-12:
                         est_lines.append("режим: равномерное ядро (все ячейки ≈ h₁)")
                     opp_steps = [float(g["ds_opp"]) for g in layer_res.geom_data if "ds_opp" in g]
                     if opp_steps:
@@ -506,25 +549,19 @@ class MeshSubpanel(QWidget if HAS_QT else object):
                                          f"(шаг по лучу {plat_max*scale:.{nd}f} / поперёк {ds_min*scale:.{nd}f} {unit_lbl})")
                         if ar_center > 1.6:
                             warn = (f"ячейки в центре вытянуты (≈{ar_center:.1f}:1). Чтобы приблизить к 1:1 — "
-                                    f"уменьшите целевой размер, увеличьте N (меньше коэф. перехода / тоньше призма) "
-                                    f"или уменьшите ni.")
-                except Exception:
-                    pass
+                                    + ("увеличьте заданное число слоёв или скорректируйте поперечное разбиение." if cmode == "fixed_count" else
+                                       "уменьшите максимальный размер или скорректируйте переход r и поперечное разбиение."))
+                except Exception as exc:
+                    warn = str(exc)
 
             hl = h_last * scale
             hc = h_core1 * scale
             ht = h_target * scale
             lines = []
             lines.append(f"▪ Призма (посл. слой): h_призм = {hl:.{nd}f} {unit_lbl}")
-            if cmode == "cfd_growth" and q_core <= 1.0 + 1e-12:
-                lines.append(f"▪ Ядро: h₁ = q_пер × h_призм = {q_trans:.2f} × {hl:.{nd}f} = {hc:.{nd}f} {unit_lbl}")
-                lines.append(f"▪ Режим: равномерное ядро, все ячейки ≈ h₁")
-            elif cmode == "cfd_growth":
-                lines.append(f"▪ Ядро: h₁ = q_пер × h_призм = {q_trans:.2f} × {hl:.{nd}f} = {hc:.{nd}f} {unit_lbl}")
-                lines.append(f"▪ Рост: q = {q_core:.2f} → плато h_t = {ht:.{nd}f} {unit_lbl}")
-            elif cmode == "isotropic":
-                lines.append(f"▪ Ядро: h₁ = q_пер × h_призм = {q_trans:.2f} × {hl:.{nd}f} = {hc:.{nd}f} {unit_lbl}")
-                lines.append(f"▪ Рост: q = {q_core:.2f}, цель ≈ шаг поперёк лучей")
+            if cmode == 'controlled_growth':
+                lines.append(f'▪ Первый шаг ядра: {hc:.{nd}f} {unit_lbl}; r = {q_trans:.2f}')
+                lines.append(f'▪ Максимальный рост q = {q_core:.2f}; максимальный шаг {ht:.{nd}f} {unit_lbl}')
             else:
                 lines.append(f"▪ Ядро: h₁ = q_пер × h_призм = {q_trans:.2f} × {hl:.{nd}f} = {hc:.{nd}f} {unit_lbl}")
                 lines.append(f"▪ Задано слоёв: {n_layers}")
@@ -553,6 +590,7 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         except ValueError as exc:
             self.parent_window.validate_mesh_inputs()
             self.lbl_status.setText(f"Проверьте ввод: {exc}")
+            self.parent_window.append_mesh_message(f"Проверьте ввод: {exc}")
             return
         self.parent_window.validate_mesh_inputs()
         self.update_tree_status()
@@ -634,9 +672,9 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         dlg = YPlusDialog(self, d_hyd_mm=dh, a_fluid_mm2=af, target_field=self.fields["h1"], state_dict=self.yplus_saved_state)
         dlg.exec()
         for _attr in ("current_fluid_props", "last_yplus_result"):
-            _val = getattr(dlg, _attr, None)
-            if _val: setattr(self, _attr, _val)
+            setattr(self, _attr, getattr(dlg, _attr, None) or {})
         self.on_field_changed()
+        self.parent_window.report_viscous_units()
 
     def change_cell_unit(self, u):
         if self.updating:
@@ -654,6 +692,9 @@ class MeshSubpanel(QWidget if HAS_QT else object):
 
     def read_params(self):
         f = self.fields
+        if not f['nz'].hasAcceptableInput():
+            raise ValueError('nz: требуется положительное целое число осевых ячеек')
+        with QSignalBlocker(f['nz']):f['nz'].interpretText()
         law = self.current_law()
         mode = self.goal.currentData() or "first_count"
 
@@ -727,8 +768,18 @@ class MeshSubpanel(QWidget if HAS_QT else object):
             self.updating = False
         self.refresh_controls()
 
+    def sync_global_axial(self, p):
+        # Z/nz describe one extrusion, never a template/block-local setting.
+        owner=self.parent_window
+        owner.base_params=mc.replace(owner.base_params,z_len=p.z_len,nz=p.nz)
+        for mapping in (owner.template_configs,owner.block_custom_configs):
+            for key,value in list(mapping.items()):
+                if value.z_len != p.z_len or value.nz != p.nz:
+                    mapping[key]=mc.replace(value,z_len=p.z_len,nz=p.nz)
+
     def save_current_ui_to_active_scope(self):
         p = self.read_params()
+        self.sync_global_axial(p)
         if self.scope_mode == "all":
             self.parent_window.base_params = p
         elif self.scope_mode == "template":
@@ -754,6 +805,7 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         else:
             p = self.parent_window.base_params
 
+        p=mc.replace(p,z_len=self.parent_window.base_params.z_len,nz=self.parent_window.base_params.nz)
         self.apply_params(p)
 
     def on_scope_changed(self):

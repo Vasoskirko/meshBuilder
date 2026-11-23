@@ -103,18 +103,17 @@ class FusedExportTests(unittest.TestCase):
         self.assertIn('[!] Отчет',macro)
         self.assertNotIn('ПОЛНОСТЬЮ НАСТРОЕНА И ГОТОВА К РАСЧЕТУ',macro)
         self.assertNotIn('createHeatReport(sim, "Heat_Flux_Rods_Total"',self.macro(enable_thermal=False))
-    def test_fused_sector_choice_is_rejected_and_disabled_in_ui(self):
-        with self.assertRaisesRegex(ValueError,'60'):
-            self.macro(rod_wall_mode='sectors_60')
+    def test_fused_sector_choice_preserves_boundaries_before_fuse(self):
+        code=self.macro(rod_wall_mode='sectors_60')
+        self.assertLess(code.index('Preserve source-sector boundaries BEFORE'),code.index('meshMgr.combineRegions(subchannelRegions'))
+        self.assertIn('"SRC_s"+(source+1)',code)
+        self.assertIn('"rod_"+source+"_R"',code)
+        self.assertNotIn('if (group.size() > 1) meshMgr.combineBoundaries(group)',code)
         dialog=StarCcmExportDialog(mesh_result=self.result,bundle_model=self.model)
         try:
-            dialog.rb_wall_60.setChecked(True)
-            dialog.rb_inter_fuse.setChecked(True)
-            self.assertFalse(dialog.rb_wall_60.isEnabled())
-            self.assertFalse(dialog.rb_wall_60.isChecked())
-            self.assertTrue(dialog.rb_wall_by_rod.isChecked())
-            dialog.rb_inter_intf.setChecked(True)
-            self.assertTrue(dialog.rb_wall_60.isEnabled())
+            dialog.rb_wall_60.setChecked(True);dialog.rb_inter_fuse.setChecked(True)
+            self.assertTrue(dialog.rb_wall_60.isEnabled());self.assertTrue(dialog.rb_wall_60.isChecked())
+            self.assertEqual(dialog.read_options()['rod_wall_mode'],'sectors_60')
         finally:dialog.deleteLater()
     def test_nonfused_mode_does_not_create_thresholds(self):
         macro=generate_starccm_java_macro('mesh.xyz',self.result,self.model,{}, {},{})

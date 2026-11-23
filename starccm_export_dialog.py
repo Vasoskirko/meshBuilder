@@ -2,6 +2,7 @@
 """Диалог экспорта сетки Plot3D и генерации Java-макроса для Simcenter STAR-CCM+."""
 from yplus_calculator import export_yplus_data
 from pathlib import Path
+from number_field import NumberField
 from starccm_export_profile import save_profile, load_profile, validate_options, FIELD_CHOICES, REPORT_CHOICES, MEAN_CHOICES
 
 try:
@@ -95,7 +96,7 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         self.bg_wall = QButtonGroup(self)
         self.rb_wall_by_rod = QRadioButton("По отдельным стержням: rod_1, rod_2, rod_3 (каждый ТВЭЛ — своя стенка)", grp_wall)
         self.rb_wall_by_rod.setChecked(True)
-        self.rb_wall_60 = QRadioButton("Секторы по 60°: rod_{sub}_{sec} (для анализа азимутального профиля q'')", grp_wall)
+        self.rb_wall_60 = QRadioButton("Исходные секторы по 60° — отдельно для каждого подканала", grp_wall)
         self.rb_wall_rod = QRadioButton("Монолитная стенка ячейки: rod_{sub} (все стержни ячейки в один контур)", grp_wall)
         self.bg_wall.addButton(self.rb_wall_by_rod)
         self.bg_wall.addButton(self.rb_wall_60)
@@ -372,11 +373,15 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         means_layout = QVBoxLayout(self.mean_group); self.mean_checkboxes = {}
         for key, label in MEAN_CHOICES.items():
             cb = QCheckBox(label, self.mean_group); self.mean_checkboxes[key] = cb; means_layout.addWidget(cb)
-        start_row = QHBoxLayout(); start_row.addWidget(QLabel("Начальный временной шаг:", self.mean_group))
+        start_row = QHBoxLayout(); start_row.addWidget(QLabel("Номер шага начала усреднения (целый):", self.mean_group))
         self.spin_mean_start = QSpinBox(self.mean_group); self.spin_mean_start.setRange(1, 1000000000)
         start_row.addWidget(self.spin_mean_start); means_layout.addLayout(start_row)
+        dt_row=QHBoxLayout();dt_row.addWidget(QLabel('Шаг времени Δt (с), параметр TimeStep:',self))
+        self.field_time_step=NumberField(1e-4,minimum=1e-15,maximum=1e12)
+        self.field_time_step.setToolTip('Положительное число секунд, например 0.0001 или 1e-4. Создаётся параметр TimeStep и связь с решателем. При повторном запуске существующий TimeStep сохраняется; если его ещё нет, параметр добавляется со значением из этого поля без переинициализации.')
+        dt_row.addWidget(self.field_time_step);means_layout.addLayout(dt_row)
         mean_note = QLabel("Один отсчёт на временной шаг; используйте постоянный Δt. Начните после переходного процесса. "
-            "Повторный запуск сохраняет накопленную статистику; настройка шага применяется только к новым мониторам. "
+            "Повторный запуск сохраняет накопленную статистику; номер начала усреднения применяется только к новым мониторам. "
             "Решатель автоматически не запускается.", self.mean_group)
         mean_note.setWordWrap(True); means_layout.addWidget(mean_note)
         analysis_layout.addWidget(self.mean_group); analysis_layout.addStretch()
@@ -451,7 +456,7 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
             self.rb_io_split.setChecked(True)
             self.rb_io_split.setEnabled(True)
             self.rb_io_single.setEnabled(False)
-            self.rb_wall_by_rod.setChecked(True)
+            if self.rb_wall_rod.isChecked():self.rb_wall_by_rod.setChecked(True)
             self.rb_wall_by_rod.setEnabled(True)
             self.rb_wall_60.setEnabled(True)
             self.rb_wall_60.setToolTip("")
@@ -460,10 +465,9 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
             self.rb_io_single.setChecked(True)
             self.rb_io_single.setEnabled(True)
             self.rb_io_split.setEnabled(False)
-            self.rb_wall_by_rod.setChecked(True)
             self.rb_wall_by_rod.setEnabled(True)
-            self.rb_wall_60.setEnabled(False)
-            self.rb_wall_60.setToolTip("После Fuse исходные секторы 60° не сохраняются; доступна группировка по стержням.")
+            self.rb_wall_60.setEnabled(True)
+            self.rb_wall_60.setToolTip("Сохранить исходные секторы перед Fuse; сливаются регионы, а не rod-секторы.")
             self.rb_wall_rod.setEnabled(True)
 
     def update_dz_hint(self):
@@ -520,6 +524,7 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
             "subchannel_reports": [k for k, cb in self.report_checkboxes.items() if cb.isChecked()],
             "time_mean_fields": [k for k, cb in self.mean_checkboxes.items() if cb.isChecked()],
             "mean_start_step": self.spin_mean_start.value(),
+            "time_step": self.field_time_step.value(),
             "selected_subchannels": sel_subs
         }
 
@@ -554,6 +559,7 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         for key, checkboxes in (('field_functions', self.field_checkboxes), ('subchannel_reports', self.report_checkboxes), ('time_mean_fields', self.mean_checkboxes)):
             for name, checkbox in checkboxes.items(): checkbox.setChecked(name in values[key])
         self.spin_mean_start.setValue(values['mean_start_step'])
+        self.field_time_step.setValue(values['time_step'])
         self.update_dz_hint()
         self.update_dependencies()
 
@@ -570,6 +576,9 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
             except (OSError, ValueError) as exc:QMessageBox.warning(self, "Профиль экспорта", str(exc))
 
     def generate_and_save(self):
+        if getattr(self,'_export_job',None) is not None:return
+        if not getattr(self.mesh_result,'complete',True):
+            QMessageBox.warning(self,'Экспорт недоступен','Сначала заполните ядро сетки.');return
         import starccm_macro_generator as smg
         import mesh_subchannel as ms
 
@@ -591,36 +600,62 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
             QMessageBox.critical(self, "Совпадение путей", "Файл сетки XYZ и Java-макрос должны иметь разные пути.")
             return
 
-        try:
-            ms.export_subchannel_plot3d(self.mesh_result, str(p_xyz))
+        # Read all widgets in GUI thread before starting file work.
+        try:opts=self.read_options()
         except Exception as exc:
-            QMessageBox.critical(self, "Ошибка сохранения сетки", f"Не удалось экспортировать файл сетки:\n{exc}")
-            return
-
-        opts = self.read_options()
-
-        try:
-            java_code = smg.generate_starccm_java_macro(
-                xyz_filename=p_xyz.name,
-                mesh_result=self.mesh_result,
-                bundle_model=self.bundle_model,
-                fluid_props=self.fluid_props,
-                yplus_data=self.yplus_data,
-                options=opts
-            )
-        except Exception as exc:
-            QMessageBox.critical(self, "Ошибка генерации макроса", f"Не удалось сгенерировать Java-макрос:\n{exc}\nФайл сетки уже экспортирован: {p_xyz}")
-            return
-
-        try:
-            p_macro.write_text(java_code, encoding="utf-8")
-            QMessageBox.information(
-                self, "Успешно",
-                f"Сетка и Java-макрос успешно созданы!\n\n"
-                f"• Файл сетки Plot3D: {p_xyz.name}\n"
-                f"• Скрипт STAR-CCM+: {p_macro.name}\n\n"
-                f"Для запуска в STAR-CCM+: File -> Macro -> Play Macro... -> выберите {p_macro.name}"
-            )
+            QMessageBox.critical(self,'Проверьте параметры',str(exc));return
+        parent=self.parent()
+        if parent is not None and hasattr(parent,'can_export_mesh') and (not parent.can_export_mesh() or parent.current_mesh_result is not self.mesh_result):
+            QMessageBox.warning(self,'Экспорт недоступен','Сетка устарела; перестройте её.');return
+        from copy import deepcopy
+        import os,tempfile
+        from mesh_export_jobs import run_export,ExportCancelled
+        result=self.mesh_result;model=deepcopy(self.bundle_model)
+        fluid=deepcopy(self.fluid_props);yp=deepcopy(self.yplus_data)
+        def log(text):
+            if parent is not None and hasattr(parent,'append_mesh_message'):parent.append_mesh_message(text)
+        def compute(progress):
+            progress(2,'Генерация Java-макроса')
+            java_code=smg.generate_starccm_java_macro(xyz_filename=p_xyz.name,
+                mesh_result=result,bundle_model=model,fluid_props=fluid,yplus_data=yp,options=opts)
+            # Stage in destination directories; cancellation never publishes a
+            # partial file. The two final replacements are separate OS actions.
+            temporary=[]
+            try:
+                for target in (p_xyz,p_macro):
+                    fd,name=tempfile.mkstemp(prefix='.mesh_export_',suffix='.tmp',dir=target.parent)
+                    os.close(fd);temporary.append(name)
+                progress(10,'Сохранение сетки Plot3D')
+                ms.export_subchannel_plot3d(result,temporary[0],
+                    progress_callback=lambda value,text:progress(10+int(value*.8),text))
+                progress(91,'Сохранение Java-макроса')
+                Path(temporary[1]).write_text(java_code,encoding='utf-8')
+                progress(97,'Публикация готовых файлов')
+                os.replace(temporary[0],p_xyz)
+                try:os.replace(temporary[1],p_macro)
+                except OSError as exc:
+                    raise OSError(f'Сетка сохранена: {p_xyz}. Макрос не заменён: {p_macro}. {exc}') from exc
+            finally:
+                for name in temporary:
+                    if os.path.exists(name):os.unlink(name)
+            return p_xyz,p_macro
+        def success(paths):
+            log(f'Экспорт STAR-CCM+ завершён: {paths[0]} и {paths[1]}')
+            QMessageBox.information(self,'Успешно',
+                f'Сетка и Java-макрос созданы!\n{paths[0]}\n{paths[1]}\nВ STAR-CCM+: File → Macro → Play Macro…')
             self.accept()
-        except Exception as exc:
-            QMessageBox.critical(self, "Ошибка сохранения макроса", f"Не удалось записать Java файл:\n{exc}")
+        def failure(exc):
+            log(f'Экспорт STAR-CCM+: {exc or "отменён"}')
+            if not isinstance(exc,ExportCancelled):
+                QMessageBox.critical(self,'Ошибка экспорта',f'Не удалось завершить экспорт:\n{exc}')
+        log('Экспорт STAR-CCM+: подготовка сетки и макроса')
+        run_export(self,'Экспорт STAR-CCM+',compute,success,failure)
+
+    def reject(self):
+        from mesh_export_jobs import defer_export_close
+        if not defer_export_close(self):super().reject()
+
+    def closeEvent(self,event):
+        from mesh_export_jobs import defer_export_close
+        if defer_export_close(self):event.ignore();return
+        super().closeEvent(event)

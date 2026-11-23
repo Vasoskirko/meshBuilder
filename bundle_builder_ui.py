@@ -3,7 +3,8 @@
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from matplotlib.figure import Figure
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QComboBox, QDoubleSpinBox, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QPushButton, QScrollArea, QSplitter, QStackedWidget, QTableWidget, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtGui import QFontDatabase
+from PySide6.QtWidgets import QPlainTextEdit, QComboBox, QDoubleSpinBox, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QPushButton, QScrollArea, QSplitter, QStackedWidget, QTableWidget, QTabWidget, QVBoxLayout, QWidget
 from mesh_subchannel_subpanel import MeshSubpanel
 
 
@@ -225,7 +226,31 @@ class BundleBuilderUiMixin:
         bar_mesh.addWidget(self.btn_ruler)
         lay_canvas.addLayout(bar_mesh)
 
-        lay_canvas.addWidget(self.canvas_mesh, 1)
+        mesh_output_splitter=QSplitter(Qt.Vertical,self)
+        mesh_output_splitter.addWidget(self.canvas_mesh)
+        output_widget=QWidget(self)
+        output_layout=QVBoxLayout(output_widget)
+        output_layout.setContentsMargins(0,0,0,0)
+        output_bar=QHBoxLayout()
+        output_bar.addWidget(QLabel('Журнал сообщений и размеры в вязких единицах',self),1)
+        clear_output=QPushButton('Очистить',self)
+        clear_output.setMaximumWidth(100)
+        output_bar.addWidget(clear_output)
+        output_layout.addLayout(output_bar)
+        self.mesh_console=QPlainTextEdit(self)
+        self.mesh_console.setReadOnly(True)
+        self.mesh_console.setFont(QFontDatabase.systemFont(QFontDatabase.FixedFont))
+        self.mesh_console.setStyleSheet('QPlainTextEdit { font-family: "Consolas", "DejaVu Sans Mono", monospace; font-size: 9pt; }')
+        self.mesh_console.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self.mesh_console.setMaximumBlockCount(600)
+        self.mesh_console.setMinimumHeight(95)
+        self.mesh_console.setPlaceholderText('Здесь появятся сообщения построения и размеры Δφ+, Δz+, Δn+. Для вязких единиц откройте калькулятор y+.')
+        clear_output.clicked.connect(self.mesh_console.clear)
+        output_layout.addWidget(self.mesh_console)
+        mesh_output_splitter.addWidget(output_widget)
+        mesh_output_splitter.setSizes([550,230])
+        mesh_output_splitter.setStretchFactor(0,1)
+        lay_canvas.addWidget(mesh_output_splitter, 1)
         self.mesh_splitter.addWidget(left_canvas_widget)
 
         right_table_widget = QWidget()
@@ -245,7 +270,7 @@ class BundleBuilderUiMixin:
             "Шаг у стенки h1 (мкм)",
             "Слоёв по нормали",
             "Ячеек по дуге",
-            "Шаг по дуге Δs (мкм)",
+            "Шаг по дуге Δφ (мкм)",
             "Параметр закона",
             "Шаг в ядре (мкм)",
             "Вытянутость AR",
@@ -256,13 +281,13 @@ class BundleBuilderUiMixin:
         self.table_blocks.itemSelectionChanged.connect(self.on_table_block_selected)
         lay_tbl.addWidget(self.table_blocks, 1)
 
-        self.mesh_splitter.addWidget(right_table_widget)
+        # Block table belongs with the normal-step plots on tab 3.
         self.mesh_splitter.setStretchFactor(0, 6)
         self.mesh_splitter.setStretchFactor(1, 4)
         self.mesh_splitter.setSizes([600, 420])
 
         lay_mesh.addWidget(self.mesh_splitter, 1)
-        self.tabs.addTab(tab_mesh, "2. Сетка в сечении и таблица блоков")
+        self.tabs.addTab(tab_mesh, "2. Сетка в сечении")
 
         self.canvas_mesh.mpl_connect("button_press_event", self.on_ruler_click)
         self.canvas_mesh.mpl_connect("motion_notify_event", self.on_ruler_motion)
@@ -275,8 +300,16 @@ class BundleBuilderUiMixin:
         self.canvas_layers = FigureCanvasQTAgg(self.fig_layers)
         self.ax_layers = self.fig_layers.add_subplot(111)
         self.toolbar_layers = NavigationToolbar2QT(self.canvas_layers, self)
-        lay_layers.addWidget(self.toolbar_layers)
-        lay_layers.addWidget(self.canvas_layers, 1)
+        layer_plot_widget = QWidget()
+        layer_plot_layout = QVBoxLayout(layer_plot_widget)
+        layer_plot_layout.setContentsMargins(0,0,0,0)
+        layer_plot_layout.addWidget(self.toolbar_layers)
+        layer_plot_layout.addWidget(self.canvas_layers, 1)
+        self.layers_splitter = QSplitter(Qt.Horizontal, self)
+        self.layers_splitter.addWidget(right_table_widget)
+        self.layers_splitter.addWidget(layer_plot_widget)
+        self.layers_splitter.setSizes([450,650])
+        lay_layers.addWidget(self.layers_splitter,1)
         self.tabs.addTab(tab_layers, "3. Шаги по нормали к стенке")
 
         splitter.addWidget(self.tabs)

@@ -130,97 +130,6 @@ def save_diagnostic(error, filename, context=None):
     return str(target)
 
 
-def _core_nominal_capacity(count, h0, logq, m, cap):
-    """O(lines) nominal sum for diagnostics only, without allocating count cells."""
-    count = float(count)
-    with np.errstate(over="ignore", divide="ignore", invalid="ignore", under="ignore"):
-        if logq == 0:
-            return count * h0
-        k = np.minimum(count, m)
-        logtotal = np.log(h0) + k * logq + np.log(-np.expm1(-k * logq)) - math.log(-math.expm1(-logq))
-        rising = np.where(k > 0, np.exp(logtotal), 0.0)
-        return rising + np.maximum(0.0, count - k) * cap
-
-
-def _core_count_failure(lengths, h0, growth, max_size, max_cells, upper, physical_ratio, m, cap, capacity):
-    with np.errstate(over="ignore", divide="ignore"):
-        ratios = lengths / h0
-    limiting = int(np.argmin(ratios))
-    deficits = lengths - capacity
-    blocking = int(np.argmax(deficits / lengths))
-    physical = None
-    physical_capacity = None
-    if math.isfinite(physical_ratio):
-        physical = int(math.floor(physical_ratio + 1e-11))
-        physical_capacity = (
-            capacity.copy() if physical == upper else _core_nominal_capacity(physical, h0, math.log(growth), m, cap)
-        )
-    if physical_capacity is not None and np.any(physical_capacity < lengths * (1 - 1e-12)):
-        code = "CORE_NO_COMMON_COUNT"
-        category = "incompatible_constraints"
-        message = (
-            "Нет общего количества ячеек: даже без лимита поиска длинной линии не хватает длины "
-            "при максимальном числе ячеек, допустимом короткой линией."
-        )
-        assessment = "infeasible_at_physical_upper_with_algorithm_tolerance"
-        i = int(np.argmax((lengths - physical_capacity) / lengths))
-        blocking = i
-        hint = (
-            "Одного увеличения max_cells недостаточно. Пересмотрите предел/рост ядра или "
-            "параметры слоя; убывающий переход этот алгоритм не поддерживает."
-        )
-    else:
-        code = "CORE_CELL_LIMIT_REACHED"
-        category = "search_limit"
-        message = (
-            "Достигнут лимит числа ячеек ядра; допустимость за пределами текущего поиска "
-            "проверена отдельно, если численно представима."
-        )
-        assessment = (
-            "feasible_at_physical_upper_with_algorithm_tolerance"
-            if physical_capacity is not None
-            else "not_checked_nonfinite_physical_upper"
-        )
-        hint = (
-            "Можно увеличить max_cells; это не меняет исходный слой. "
-            "Также можно пересмотреть предел и рост ядра."
-        )
-    message += (
-        f" Проверено N={upper}: линия {blocking + 1}, требуется {lengths[blocking]:.8g} м, "
-        f"номинально доступно {capacity[blocking]:.8g} м."
-    )
-    if physical is not None:
-        message += f" Линия {limiting + 1} ограничивает общее количество сверху: N <= {physical}."
-    values = {
-        "growth_requested": growth,
-        "max_size_requested_m": max_size,
-        "max_cells_requested": max_cells,
-        "tested_count_upper": upper,
-        "physical_count_upper": physical,
-        "physical_count_upper_assessment": assessment,
-        "limiting_line": limiting + 1,
-        "limiting_length_m": lengths[limiting],
-        "limiting_last_layer_width_m": h0[limiting],
-        "blocking_line": blocking + 1,
-        "blocking_length_m": lengths[blocking],
-        "blocking_last_layer_width_m": h0[blocking],
-        "nominal_plateau_m": cap[blocking],
-        "capacity_at_tested_upper_m": capacity[blocking],
-        "deficit_at_tested_upper_m": lengths[blocking] - capacity[blocking],
-        "capacity_at_physical_upper_m": None if physical_capacity is None else physical_capacity[blocking],
-        "length_tolerance_relative": 1e-12,
-        "beyond_limit_check": "closed_form_nominal_sum_not_mesh_generation",
-    }
-    return CoreFillError(
-        message + " Пристеночный слой не изменён.",
-        code=code,
-        category=category,
-        location={"scope": "distribution_input", "line": blocking + 1, "index_base": 1},
-        values=values,
-        hint=hint,
-    )
-
-
 @dataclass(frozen=True)
 class CoreDistribution:
     widths: np.ndarray
@@ -554,3 +463,58 @@ def fill_core(layer, growth, max_size, max_cells=5000):
         complete=True,
         **metadata,
     )
+
+
+def controlled_distribution(lengths, last_layer_width, growth, max_size, max_cells=5000, transition_ratio=1.0):
+    """Fixed first step, prescribed growth to a per-ray plateau, common count.
+
+    Unlike capped_distribution, never silently exceeds growth or max_size.
+    Incompatible constraints are rejected before any mesh is changed.
+    """
+    lengths = _positive_vector(lengths, 'Длина ядра')
+    first = np.broadcast_to(np.asarray(last_layer_width, dtype=float), lengths.shape).copy()
+    first = _positive_vector(first, 'Последний шаг слоя') * float(transition_ratio)
+    if not math.isfinite(transition_ratio) or transition_ratio <= 0 or not np.all(np.isfinite(first)):
+        raise ValueError('Переход r должен быть положительным конечным числом')
+    if not math.isfinite(growth) or growth < 1 or not math.isfinite(max_size) or max_size <= 0:
+        raise ValueError('Нужны q ≥ 1 и положительный максимальный размер ядра')
+    if isinstance(max_cells,(bool,np.bool_)) or not isinstance(max_cells,(int,np.integer)) or max_cells<1:
+        raise ValueError('Ограничение числа слоёв должно быть положительным целым')
+    if np.any(first>max_size*(1+1e-12)) or np.any(first>lengths*(1+1e-12)):
+        raise ValueError('Первый шаг ядра r × h_слоя больше максимального размера или остатка. Уменьшите r либо увеличьте размер ядра.')
+    nmax=min(int(max_cells),int(np.floor(np.min(lengths/first)+1e-10)))
+    if growth == 1:
+        n=int(round(float(lengths[0]/first[0])))
+        if n<1 or n>nmax or not np.allclose(n*first,lengths,rtol=1e-10,atol=1e-15):
+            raise ValueError('При q=1 одинаковое число равных шагов не заполняет все лучи. Задайте q>1 или измените переход r.')
+        widths=np.repeat(first[:,None],n,axis=1)
+        return CoreDistribution(widths,first.copy(),first.copy(),widths.copy(),np.zeros(len(first),dtype=int),n)
+    logq=math.log(growth)
+    # Number of geometric terms before reaching the requested cap.
+    k=np.maximum(1,np.ceil(np.minimum((math.log(max_size)-np.log(first))/logq,max_cells)).astype(int))
+    def capacity(n):
+        m=np.minimum(k,n)
+        last=np.exp(np.minimum(np.log(first)+(m-1)*logq,math.log(max_size)))
+        return last*(-np.expm1(-m*logq))/(-math.expm1(-logq))+(n-m)*max_size
+    if nmax<1 or np.any(capacity(nmax)<lengths*(1-1e-12)):
+        raise ValueError('Нет общего числа слоёв с заданными r, q и максимальным размером: узкий луч ограничивает N, широкий не заполняется. Уменьшите r, увеличьте q/размер или лимит слоёв.')
+    lo,hi=1,nmax
+    while lo<hi:
+        mid=(lo+hi)//2
+        if np.all(capacity(mid)>=lengths*(1-1e-12)):hi=mid
+        else:lo=mid+1
+    n=lo;j=np.arange(n,dtype=float)
+    widths=np.empty((len(first),n));nominal=np.empty_like(widths);plateau=np.empty(len(first))
+    for i,(L,h) in enumerate(zip(lengths,first)):
+        geo=np.exp(np.log(h)+np.minimum(j*logq,math.log(max_size)-math.log(h)))
+        nominal[i]=geo
+        low,high=h,max_size
+        for _ in range(64):
+            mid=(low+high)/2
+            if np.minimum(geo,mid).sum()<L:low=mid
+            else:high=mid
+        w=np.minimum(geo,(low+high)/2)
+        w[-1]+=L-w.sum()
+        widths[i]=w;plateau[i]=w[-1]
+    count=(widths<plateau[:,None]*(1-1e-9)).sum(axis=1)
+    return CoreDistribution(widths,plateau,np.full(len(first),max_size),nominal,count,n)

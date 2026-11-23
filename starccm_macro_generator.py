@@ -113,6 +113,10 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     for selected, choices in ((field_choices, FIELD_CHOICES), (analysis_choices, REPORT_CHOICES), (mean_choices, MEAN_CHOICES)):
         if not isinstance(selected, list) or any(type(v) is not str or v not in choices for v in selected) or len(set(selected)) != len(selected):
             raise ValueError("Неизвестный или повторяющийся выбор полей/отчётов")
+    time_step=options.get('time_step',1e-4)
+    if isinstance(time_step,bool) or not isinstance(time_step,(int,float)) or not math.isfinite(time_step) or time_step<=0:
+        raise ValueError('Шаг времени Δt должен быть положительным конечным числом')
+    preserve_sectors=inter_fuse and rod_mode=='sectors_60'
     mean_start = options.get("mean_start_step", 1)
     if type(mean_start) is not int or not 1 <= mean_start <= 1000000000:
         raise ValueError("Неверный начальный шаг усреднения")
@@ -127,8 +131,6 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     is_single_io = (inlet_outlet_mode == "single")
 
     signatures, domains = export_geometry(mesh_result, bundle_model)
-    if inter_fuse and rod_mode == "sectors_60":
-        raise ValueError("Секторы 60° не поддерживаются после Fuse; выберите группировку по стержням")
     if inter_fuse and len(domains) != subchannels_count:
         raise ValueError("Для анализа подканалов после Fuse нужна геометрия исходных подканалов")
     sub_centers = [d["center"] for d in domains]
@@ -250,6 +252,15 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('            }')
     c.append('        }')
     c.append('')
+    if preserve_sectors:
+        c.append('        // Preserve source-sector boundaries BEFORE inter-subchannel Fuse.')
+        c.append('        for (int source=0;source<subchannelRegions.size();source++) {')
+        c.append('            Region original=subchannelRegions.get(source);')
+        c.append('            Boundary originalWall=original.getBoundaryManager().getBoundary("wall");')
+        c.append('            if (originalWall!=null) meshMgr.splitBoundariesByAngle(60.0,Collections.singletonList(originalWall));')
+        c.append('            int part=0; for (Boundary boundary : original.getBoundaryManager().getBoundaries())')
+        c.append('                boundary.setPresentationName("SRC_s"+(source+1)+"_part"+(++part));')
+        c.append('        }')
     if inter_fuse:
         c.append('        if (subchannelRegions.size() > 1) {')
         c.append('            sim.println(">>> Fuse Conformal: конформное слияние подканалов в единый монолит...");')
@@ -259,16 +270,17 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
         c.append('            subchannelRegions = Collections.singletonList(rMonolith);')
         c.append('        }')
         c.append('')
-    c.append('        // 3. Разделение по углу 60 градусов')
-    c.append('        for (Region curReg : subchannelRegions) {')
-    c.append('            Boundary wallBase = curReg.getBoundaryManager().getBoundary("wall");')
-    c.append('            if (wallBase != null) {')
-    c.append('                try {')
-    c.append('                    meshMgr.splitBoundariesByAngle(60.0, Collections.singletonList(wallBase));')
-    c.append('                } catch (Exception ignored) {}')
-    c.append('            }')
-    c.append('        }')
-    c.append('')
+    if not preserve_sectors:
+        c.append('        // 3. Разделение по углу 60 градусов')
+        c.append('        for (Region curReg : subchannelRegions) {')
+        c.append('            Boundary wallBase = curReg.getBoundaryManager().getBoundary("wall");')
+        c.append('            if (wallBase != null) {')
+        c.append('                try {')
+        c.append('                    meshMgr.splitBoundariesByAngle(60.0, Collections.singletonList(wallBase));')
+        c.append('                } catch (Exception ignored) {}')
+        c.append('            }')
+        c.append('        }')
+        c.append('')
     c.append('        // 4. Инициализация физического континуума (STAR-CCM+ 21.02.007)')
     c.append('        sim.println(">>> [3/7] Настройка физических моделей жидкости (STAR-CCM+ 21.02.007)...");')
     c.append('        PhysicsContinuum phys;')
@@ -402,7 +414,11 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('            List<Boundary> rodBnds = new ArrayList<>();')
     c.append('            for (int rIdx = 0; rIdx < rods.size(); rIdx++) {')
     c.append('                BoundaryData bd = rods.get(rIdx);')
-    c.append('                bd.bnd.setPresentationName(String.format("rod_R%d_part%d", rodIds.get(bd.bnd), rIdx + 1));')
+    if preserve_sectors:
+        c.append('                String source=bd.bnd.getPresentationName().split("_",3)[1];')
+        c.append('                bd.bnd.setPresentationName("rod_"+source+"_R"+rodIds.get(bd.bnd)+"_part"+(rIdx+1));')
+    else:
+        c.append('                bd.bnd.setPresentationName(String.format("rod_R%d_part%d", rodIds.get(bd.bnd), rIdx + 1));')
     c.append('                rodBnds.add(bd.bnd);')
     c.append('                sim.println(String.format("  %-13s | %12.2f | (%8.3f, %8.3f, %8.3f) | СТЕРЖЕНЬ (rod)", bd.bnd.getPresentationName(), bd.area, bd.cx*1e3, bd.cy*1e3, bd.cz*1e3));')
     c.append('            }')
@@ -456,6 +472,10 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('')
     c.append('        List<Boundary> externalGaps = new ArrayList<>();')
     c.append('        for (GapCandidate gap : gapCandidates) if (!gap.paired) externalGaps.add(gap.bnd);')
+    if preserve_sectors:
+        c.append('        // Merge only end caps; retain the separate source rod sectors.')
+        c.append('        if (allInlets.size()>1) { Boundary inlet=allInlets.get(0); meshMgr.combineBoundaries(new ArrayList<>(allInlets)); allInlets.clear(); allInlets.add(inlet); inlet.setPresentationName("Inlet"); }')
+        c.append('        if (allOutlets.size()>1) { Boundary outlet=allOutlets.get(0); meshMgr.combineBoundaries(new ArrayList<>(allOutlets)); allOutlets.clear(); allOutlets.add(outlet); outlet.setPresentationName("Outlet"); }')
     c.append('        markBoundaryRoles(sim,allInlets,allOutlets,allRods,externalGaps);')
     c.append('        for (int i=0;i<subchannelRegions.size();i++) {')
     c.append('            Region region=subchannelRegions.get(i); own(sim,region);')
@@ -509,6 +529,18 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('        physicalValuesConfigured = configurePhysicalValues(sim,setupPhysics,subchannelRegions,' + str(use_iapws).lower() + ',' + str(enable_thermal or use_iapws).lower() + ');')
     c.append('        }')
     c.append('        initializeFirstSolution(sim,reuse,' + str(initialize_solution).lower() + ',physicalValuesConfigured);')
+    if turbulence_model=='hybrid_srh':
+        c.append('        try {')
+        c.append('            GlobalParameterManager timeManager=sim.get(GlobalParameterManager.class);')
+        c.append('            ScalarGlobalParameter timeParameter=findOwned(sim,timeManager,"TimeStep",ScalarGlobalParameter.class);')
+        c.append('            if (!reuse || timeParameter==null) {')
+        c.append('                createParam(sim,timeManager,null,"TimeStep",'+f'{float(time_step):.16e}'+',"s",Dimensions.Builder().time(1).build(),null);')
+        c.append('                if (findOwned(sim,timeManager,"TimeStep",ScalarGlobalParameter.class)==null) throw new IllegalStateException("TimeStep parameter unavailable");')
+        c.append('                sim.getSolverManager().getSolver(ImplicitUnsteadySolver.class).getTimeStep().setDefinition("${TimeStep}");')
+        c.append('                if (reuse) sim.println("  • Added TimeStep parameter and solver binding to existing simulation; no reinitialization.");')
+        c.append('            }')
+        c.append('        } catch (Exception e) { warn(sim,"  [!] TimeStep binding: "+e.getMessage()); }')
+
     if create_field_functions:
         c.append('        supportFunctions(sim,' + f'{lz_m:.16e}' + ', Arrays.asList(' + ','.join(json.dumps(v) for v in field_choices) + '));')
     # 9. Создание Derived Parts (PlaneSection и LineSection) по точному рекордеру 21.02.007:
