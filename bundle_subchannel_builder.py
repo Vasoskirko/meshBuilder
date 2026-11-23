@@ -1384,21 +1384,15 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
             tid = self.get_template_for_block(gid)
             has_tmpl = tid in self.template_configs
 
-            if is_active:
-                border_col, border_lw = "red", 2.4
-            elif is_custom:
-                border_col, border_lw = "#e67e22", 2.0
-            elif has_tmpl:
-                border_col, border_lw = "#2980b9", 1.6
-            else:
-                border_col, border_lw = "black", 0.8
-
+            # Ownership/selection belongs to the block badge, not its physical
+            # boundary: otherwise rod walls look like faulty interfaces.
+            border_col, border_lw = '#555555', .7
             border = [v[0], v[-1], v[:, 0], v[:, -1]]
             self.ax_mesh.add_collection(LineCollection(border, colors=border_col, linewidths=border_lw))
 
             cx, cy = float(np.mean(bx * 1e3)), float(np.mean(by * 1e3))
             badge_lbl = f"Б{gid} ★" if is_custom else (f"Б{gid} [T{tid}]" if has_tmpl else f"Б{gid}")
-            badge_col = "#ffe0b2" if is_custom else ("#d4e6f1" if has_tmpl else "#ffffff")
+            badge_col = "#087ac1" if is_active else "#eeeeee" if is_custom else ("#d4e6f1" if has_tmpl else "#ffffff")
 
             self.ax_mesh.text(
                 cx,
@@ -1406,7 +1400,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
                 badge_lbl,
                 fontsize=7.5,
                 fontweight="bold",
-                color="#111",
+                color="white" if is_active else "#111",
                 ha="center",
                 va="center",
                 bbox=dict(boxstyle="round,pad=0.2", facecolor=badge_col, alpha=0.9, edgecolor=border_col, linewidth=0.8),
@@ -1423,11 +1417,10 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
         self.ax_mesh.set_xlabel("X (мм)")
         self.ax_mesh.set_ylabel("Y (мм)")
         self.ax_mesh.set_title(f"Сетка выбранной области: {len(res.blocks)} блоков")
-        from mesh_interface_diagnostics import face_nodes
-        for issue in res.diagnostics.get('interface_problems',[]):
-            for side in ('a','b'):
-                nodes=face_nodes(res.blocks[issue['block_'+side]],issue['face_'+side])*1e3
-                self.ax_mesh.plot(nodes[:,0],nodes[:,1],color='#d000d0' if issue['kind']=='geometry_mismatch' else '#ff7700',linewidth=2.5,linestyle='--')
+        from mesh_interface_overlay import draw_interface_overlay
+        draw_interface_overlay(self.ax_mesh,res,
+            selected=bool(self.mesh_subpanel.selected_block_ids()) if self.mesh_subpanel.scope_mode=='block' else self.highlighted_block_id is not None,
+            custom=bool(self.block_custom_configs))
         self.draw_mesh_diagnostics()
         self.canvas_mesh.draw_idle()
         self.redraw_layer_plot_for_block(self.active_plot_block_idx)
