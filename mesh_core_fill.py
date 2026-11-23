@@ -465,7 +465,7 @@ def fill_core(layer, growth, max_size, max_cells=5000):
     )
 
 
-def controlled_distribution(lengths, last_layer_width, growth, max_size, max_cells=5000, transition_ratio=1.0):
+def controlled_distribution(lengths, last_layer_width, growth, max_size, max_cells=5000, transition_ratio=1.0, *, count_only=False):
     """Fixed first step, prescribed growth to a per-ray plateau, common count.
 
     Unlike capped_distribution, never silently exceeds growth or max_size.
@@ -487,6 +487,7 @@ def controlled_distribution(lengths, last_layer_width, growth, max_size, max_cel
         n=int(round(float(lengths[0]/first[0])))
         if n<1 or n>nmax or not np.allclose(n*first,lengths,rtol=1e-10,atol=1e-15):
             raise ValueError('При q=1 одинаковое число равных шагов не заполняет все лучи. Задайте q>1 или измените переход r.')
+        if count_only:return n,n
         widths=np.repeat(first[:,None],n,axis=1)
         return CoreDistribution(widths,first.copy(),first.copy(),widths.copy(),np.zeros(len(first),dtype=int),n)
     logq=math.log(growth)
@@ -503,6 +504,7 @@ def controlled_distribution(lengths, last_layer_width, growth, max_size, max_cel
         mid=(lo+hi)//2
         if np.all(capacity(mid)>=lengths*(1-1e-12)):hi=mid
         else:lo=mid+1
+    if count_only:return lo,nmax
     n=lo;j=np.arange(n,dtype=float)
     widths=np.empty((len(first),n));nominal=np.empty_like(widths);plateau=np.empty(len(first))
     for i,(L,h) in enumerate(zip(lengths,first)):

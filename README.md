@@ -63,6 +63,7 @@ pip install -r requirements.txt
 ## Документация
 
 - [Полное сохранение проекта конструктора: Ctrl+S / Ctrl+O](docs/bundle_projects.md).
+- [Прогноз ресурсов, подсветка ячеек, сравнение A/B и источники параметров](docs/mesh_planning_diagnostics.md).
 - [Построение сетки, заполнение ядра и экспорт](docs/bundle_build_workflow.md).
 - [Проверка Fuse в STAR-CCM+](docs/starccm_fuse_validation.md).
 - [Аудит использования файлов и выполненная очистка](docs/file_usage_audit.md).

@@ -102,6 +102,11 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         self.combo_blocks = QComboBox(self)
         self.combo_blocks.currentIndexChanged.connect(self.on_block_combo_changed)
         b_scope.addWidget(self.combo_blocks)
+        self.lbl_parameter_origin=QLabel(self)
+        self.lbl_parameter_origin.setWordWrap(True)
+        self.lbl_parameter_origin.setStyleSheet('padding: 5px; background: #edf5fc; color: #263b53;')
+        b_scope.addWidget(self.lbl_parameter_origin)
+
 
         row_reset = QHBoxLayout()
         self.btn_reset_override = QPushButton("Сбросить переопределения в «По умолчанию»", self)
@@ -327,6 +332,9 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         # -------------------------------------------------------------
         # Кнопки действия и статус
         # -------------------------------------------------------------
+        self.btn_estimate_mesh=QPushButton('Оценить размер и память…',self)
+        self.btn_estimate_mesh.clicked.connect(self.parent_window.on_estimate_mesh)
+        layout.addWidget(self.btn_estimate_mesh)
         self.btn_build = QPushButton("Собрать полную 3D сетку", self)
         self.btn_build.setProperty("btnClass", "primary")
         self.btn_build.setMinimumHeight(32)
@@ -448,6 +456,7 @@ class MeshSubpanel(QWidget if HAS_QT else object):
                 if cmode == 'fixed_count' else
                 'r — первый шаг ядра / последний шаг слоя; q — максимальный рост соседних шагов. Размер — строгий верхний предел. При несовместимых ограничениях построение остановится с пояснением.')
             self.update_core_preview()
+        self.update_parameter_origin()
         self.update_live_advisor_hint()
 
     def law_changed(self):
@@ -479,12 +488,12 @@ class MeshSubpanel(QWidget if HAS_QT else object):
     def update_core_preview(self):
         if not hasattr(self, "lbl_core_preview"): return
         try:
-            q_trans = self.fields["core_transition"].value()
-            q_core = self.fields["core_growth"].value()
-            h_target = self.fields["core_max_size"].value()
-            n_layers = self.fields["core_layers"].value()
-            max_cells = self.fields["core_max_cells"].value()
             cmode = self.combo_core_mode.currentData()
+            q_trans = self.fields["core_transition"].value()
+            q_core = self.fields["core_growth"].value() if cmode!='fixed_count' else 1.1
+            h_target = self.fields["core_max_size"].value() if cmode!='fixed_count' else .00012
+            n_layers = self.fields["core_layers"].value() if cmode=='fixed_count' else 20
+            max_cells = self.fields["core_max_cells"].value() if cmode!='fixed_count' else 5000
             if cmode == 'aspect_alignment':
                 self.lbl_core_preview.setStyleSheet('padding: 6px; background: #e8f5e9; color: #1b5e20;')
                 self.lbl_core_preview.setText('Подбирается общее число слоёв под местный поперечный шаг. Цель — пропорции около 1:1 во внешней половине ядра; пристеночный слой сохранён. Ограничения: r, q, максимальный размер и лимит слоёв. Используются прямые линии. Точный результат — после заполнения; 1:1 не гарантируется.')
@@ -692,11 +701,12 @@ class MeshSubpanel(QWidget if HAS_QT else object):
 
     def read_params(self):
         f = self.fields
-        if not f['nz'].hasAcceptableInput():
-            raise ValueError('nz: требуется положительное целое число осевых ячеек')
-        with QSignalBlocker(f['nz']):f['nz'].interpretText()
         law = self.current_law()
         mode = self.goal.currentData() or "first_count"
+        integers=['ni','nz']+(['layer_cells'] if law=='wall_core' else ['layers'] if mode in ('first_count','shape_count') else [])
+        for name in integers:
+            if not f[name].hasAcceptableInput():raise ValueError(f'{name}: проверьте целое число узлов/слоёв')
+            with QSignalBlocker(f[name]):f[name].interpretText()
 
         pitch_val = self.parent_window.model.pitch * 1e-3 if hasattr(self.parent_window, "model") else 0.01275
         dfuel_val = getattr(self.parent_window.model, "d_fuel", getattr(self.parent_window.model, "dfuel", 9.1)) * 1e-3 if hasattr(self.parent_window, "model") else 0.0091
@@ -876,7 +886,22 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         self.update_tree_status()
         self.update_live_advisor_hint()
 
+    def update_parameter_origin(self):
+        if not hasattr(self,'lbl_parameter_origin'):return
+        owner=self.parent_window
+        if self.scope_mode=='all':text='Источник: общие параметры для блоков без переопределений.'
+        elif self.scope_mode=='template':
+            tid=self.combo_templates.currentData()
+            text=f'Шаблон T{tid}: '+('собственные параметры.' if tid in owner.template_configs else 'наследует общие параметры; редактирование создаст переопределение шаблона.')
+        else:
+            gid=self.combo_blocks.currentData();tid=owner.get_template_for_block(gid)
+            source='собственное переопределение' if gid in owner.block_custom_configs else (f'шаблон T{tid}' if tid in owner.template_configs else 'общие параметры')
+            text=f'Блок {gid}: источник — {source}. Редактирование создаёт/обновляет индивидуальное переопределение.'
+        self.lbl_parameter_origin.setText(text+'\nZ и nz общие во всех областях; ni меняется в «Ко всем блокам». Настройки ядра также общие.')
+        self.fields['ni'].setEnabled(self.scope_mode=='all')
+
     def update_tree_status(self):
+        self.update_parameter_origin()
         for i in range(self.tree_blocks.topLevelItemCount()):
             t_item = self.tree_blocks.topLevelItem(i)
             tid = t_item.data(0, Qt.UserRole)[1]

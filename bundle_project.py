@@ -148,12 +148,16 @@ def validate_project(data):
     return BundleProject(deepcopy(data),model,base,templates,blocks)
 
 
-def capture_project(owner):
+def commit_active_inputs(owner):
     p=owner.mesh_subpanel
     from PySide6.QtCore import QSignalBlocker
     for widget in owner.geometry_controls():
         if not widget.hasAcceptableInput():raise BundleProjectError('Проверьте ввод геометрии')
         with QSignalBlocker(widget):widget.interpretText()
+    if p.current_law()=='wall_core':
+        name='core_layers' if p.combo_core_mode.currentData()=='fixed_count' else 'core_max_cells'
+        if not p.fields[name].hasAcceptableInput():raise BundleProjectError('Проверьте число слоёв ядра')
+        with QSignalBlocker(p.fields[name]):p.fields[name].interpretText()
     current=p.read_params()
     original=owner.base_params
     if p.scope_mode=='template':original=owner.template_configs.get(p.combo_templates.currentData(),original)
@@ -165,6 +169,12 @@ def capture_project(owner):
     elif p.scope_mode=='template' and p.combo_templates.currentData() is not None:owner.template_configs[p.combo_templates.currentData()]=merged
     elif p.scope_mode=='block' and p.combo_blocks.currentData() is not None:owner.block_custom_configs[p.combo_blocks.currentData()]=merged
     owner.validate_mesh_inputs()
+    p.update_tree_status()
+
+
+def capture_project(owner):
+    commit_active_inputs(owner)
+    p=owner.mesh_subpanel
     tb,bb=bindings(owner.model)
     def encode(mapping,bind):
         if any(str(k) not in bind for k in mapping):raise BundleProjectError('Есть переопределения для прежней геометрии. Сбросьте их перед сохранением.')

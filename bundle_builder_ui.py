@@ -4,7 +4,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolb
 from matplotlib.figure import Figure
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFontDatabase
-from PySide6.QtWidgets import QPlainTextEdit, QComboBox, QDoubleSpinBox, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QPushButton, QScrollArea, QSplitter, QStackedWidget, QTableWidget, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QMenu, QToolButton, QCheckBox, QPlainTextEdit, QComboBox, QDoubleSpinBox, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QPushButton, QScrollArea, QSplitter, QStackedWidget, QTableWidget, QTabWidget, QVBoxLayout, QWidget
 from mesh_subchannel_subpanel import MeshSubpanel
 
 
@@ -224,7 +224,41 @@ class BundleBuilderUiMixin:
         self.btn_ruler.setStyleSheet("QPushButton:checked { background-color: #ffcc80; font-weight: bold; }")
         self.btn_ruler.toggled.connect(self.on_toggle_ruler)
         bar_mesh.addWidget(self.btn_ruler)
+        variants_button=QToolButton(self);variants_button.setText('Варианты')
+        variants_button.setPopupMode(QToolButton.InstantPopup)
+        variants_menu=QMenu(variants_button)
+        variants_menu.addAction('Запомнить текущую сетку как A',self.remember_mesh_variant)
+        variants_menu.addAction('Сравнить текущую сетку с A',self.compare_mesh_variant)
+        variants_menu.addAction('Очистить A / освободить память',self.clear_mesh_variant)
+        variants_button.setMenu(variants_menu);bar_mesh.addWidget(variants_button)
+        self.chk_mesh_variant_a=QCheckBox('A — серый',self)
+        self.chk_mesh_variant_a.setEnabled(False)
+        self.chk_mesh_variant_a.toggled.connect(self.redraw_mesh_views)
+        bar_mesh.addWidget(self.chk_mesh_variant_a)
+
         lay_canvas.addLayout(bar_mesh)
+        from mesh_visual_diagnostics import METRICS
+        diagnostics_bar=QHBoxLayout()
+        self.combo_mesh_diagnostic=QComboBox(self)
+        for key,spec in METRICS.items():self.combo_mesh_diagnostic.addItem(spec['title'],key)
+        diagnostics_bar.addWidget(self.combo_mesh_diagnostic)
+        diagnostics_bar.addWidget(QLabel('Порог:',self))
+        self.spin_diagnostic_threshold=QDoubleSpinBox(self)
+        self.spin_diagnostic_threshold.setDecimals(3)
+        diagnostics_bar.addWidget(self.spin_diagnostic_threshold)
+        self.btn_mesh_diagnostic=QPushButton('Найти ячейки',self)
+        self.btn_mesh_diagnostic.setEnabled(False)
+        self.btn_mesh_diagnostic.clicked.connect(self.on_mesh_diagnostic)
+        diagnostics_bar.addWidget(self.btn_mesh_diagnostic)
+        self.chk_mesh_diagnostic=QCheckBox('Подсветка',self)
+        diagnostics_bar.addWidget(self.chk_mesh_diagnostic)
+        self.chk_mesh_diagnostic.toggled.connect(self.redraw_mesh_views)
+        self.combo_mesh_diagnostic.currentIndexChanged.connect(self.on_diagnostic_metric_changed)
+        self.spin_diagnostic_threshold.valueChanged.connect(self.clear_mesh_diagnostics)
+        self.on_diagnostic_metric_changed()
+        lay_canvas.addLayout(diagnostics_bar)
+        self.canvas_mesh.mpl_connect('button_press_event',self.on_diagnostic_click)
+
 
         mesh_output_splitter=QSplitter(Qt.Vertical,self)
         mesh_output_splitter.addWidget(self.canvas_mesh)

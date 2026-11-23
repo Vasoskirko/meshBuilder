@@ -60,10 +60,11 @@ from mesh_subchannel_subpanel import MeshSubpanel
 
 
 from bundle_builder_ui import BundleBuilderUiMixin
+from bundle_diagnostics_ui import BundleDiagnosticsMixin
 from bundle_mesh_jobs import BundleMeshJobsMixin, analyse_subchannel_result
 
 
-class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow):
+class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBuilderUiMixin, QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Конструктор сечения ТВС и генератор сетки подканалов (CFD)")
@@ -82,6 +83,9 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
         self.base_params = mc.MeshParams(law="geometric", mode="first_count", h1=2.5e-6, nj=100)
         self.template_configs = {}
         self.block_custom_configs = {}
+        self._mesh_variant_a=None
+        self._mesh_diagnostic=None
+        self._selected_diagnostic=None
         self._mesh_drawn = False
         self.highlighted_block_id = None
         self.instances_lookup = {}
@@ -150,7 +154,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
         keys=('core_transition','core_layers') if cmode=='fixed_count' else (
             'core_transition','core_growth','core_max_size','core_max_cells')
         core=(cmode,tuple(panel.fields[k].value() for k in keys),
-              panel.combo_core_lines.currentData() if cmode=='fixed_count' else False)
+              panel.combo_core_lines.currentData() if cmode=='fixed_count' else False) if self.base_params.law=='wall_core' else None
         return layer, core
 
     def validate_mesh_inputs(self, *args):
@@ -167,6 +171,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
             self._layer_inputs = None
         if self._mesh_inputs is not None and (layer, core) != self._mesh_inputs:
             self.current_mesh_result = None
+            self.clear_mesh_diagnostics()
             self.current_quality_report = None
             self._mesh_inputs = None
             panel = self.mesh_subpanel
@@ -819,6 +824,8 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
             self.model=project.model;self.base_params=project.base
             self.template_configs=project.templates;self.block_custom_configs=project.blocks
             self.current_mesh_result=None;self.current_layer_result=None;self.current_quality_report=None
+            self.clear_mesh_diagnostics()
+            self.clear_mesh_variant()
             self._layer_inputs=None;self._mesh_inputs=None;self._mesh_drawn=False
             self.highlighted_block_id=None;self.active_plot_block_idx=0
             for widget,value in zip(self.geometry_controls(),view['geometry_inputs']):widget.setValue(value)
@@ -939,6 +946,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
                 return res,rep
             def completed(payload):
                 res,rep=payload
+                self.clear_mesh_diagnostics()
                 self.current_mesh_result = res
                 self.accept_mesh_inputs(res)
                 self.current_quality_report = rep
@@ -1006,6 +1014,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
                 return res,rep
             def completed(payload):
                 res,rep=payload
+                self.clear_mesh_diagnostics()
                 self.current_mesh_result = res
                 self.accept_mesh_inputs(res)
                 self.current_quality_report = rep
@@ -1039,17 +1048,15 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
             return
         try:
             f = self.mesh_subpanel.fields
-            growth = f["core_growth"].value()
-            maxsize = f["core_max_size"].value()
-            maxcells = f["core_max_cells"].value()
-
-            q_trans = f["core_transition"].value() if "core_transition" in f else 1.0
-            cmode = (
-                self.mesh_subpanel.combo_core_mode.currentData()
-                if hasattr(self.mesh_subpanel, "combo_core_mode")
-                else "controlled_growth"
-            )
-            clayers = f["core_layers"].value() if "core_layers" in f else 20
+            cmode=self.mesh_subpanel.combo_core_mode.currentData()
+            from bundle_project import commit_active_inputs
+            commit_active_inputs(self)
+            if self.current_layer_result is not layer_src:raise ValueError('Параметры слоя изменены; перестройте пристеночный слой перед заполнением ядра')
+            growth=f['core_growth'].value() if cmode!='fixed_count' else 1.1
+            maxsize=f['core_max_size'].value() if cmode!='fixed_count' else .00012
+            maxcells=f['core_max_cells'].value() if cmode!='fixed_count' else 5000
+            q_trans=f['core_transition'].value()
+            clayers=f['core_layers'].value()
             h_tfi = cmode == 'fixed_count' and bool(self.mesh_subpanel.combo_core_lines.currentData())
             align_core = cmode == 'aspect_alignment'
             model_snapshot=deepcopy(self.model)
@@ -1076,6 +1083,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
                 return full_res,rep
             def completed(payload):
                 full_res,rep=payload
+                self.clear_mesh_diagnostics()
                 self.current_mesh_result = full_res
                 self.accept_mesh_inputs(full_res, filled=True)
                 self.mesh_subpanel.btn_quality.setEnabled(True)
@@ -1323,6 +1331,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
         self.canvas_mesh.draw_idle()
 
     def redraw_mesh_views(self):
+        self.btn_mesh_diagnostic.setEnabled(self.current_mesh_result is not None)
         if self.current_mesh_result is None:
             return
         res = self.current_mesh_result
@@ -1337,8 +1346,9 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
             else 1
         )
 
-        total_points=sum(x.size for x,y in res.blocks)
+        total_points=sum(x.size for x,y in res.blocks)+self.comparison_point_count()
         render_stride=max(int(stride),int(np.ceil(np.sqrt(total_points/250000))))
+        self.draw_mesh_comparison(render_stride)
         self.combo_detail.setToolTip(f'Фактическое отображение 1:{render_stride}. Авторазрежение больших сеток влияет только на рисунок; экспорт полный.')
         for k, (bx, by) in enumerate(res.blocks):
             v = np.stack((bx * 1e3, by * 1e3), axis=-1)
@@ -1393,6 +1403,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
         self.ax_mesh.set_xlabel("X (мм)")
         self.ax_mesh.set_ylabel("Y (мм)")
         self.ax_mesh.set_title(f"Сетка выбранной области: {len(res.blocks)} блоков")
+        self.draw_mesh_diagnostics()
         self.canvas_mesh.draw_idle()
         self.redraw_layer_plot_for_block(self.active_plot_block_idx)
 
