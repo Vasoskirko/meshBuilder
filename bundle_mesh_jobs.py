@@ -139,11 +139,15 @@ def analyse_subchannel_result(result, progress):
     from mesh_viscous_units import edge_ranges
     result.diagnostics["edge_ranges_m"]=edge_ranges(result)
     z=np.linspace(0,result.params.z_len,result.params.nz+1)
-    blocks=[]
-    for n,block in enumerate(result.blocks):
-        progress(55+int(10*n/len(result.blocks)),f'3D-блок {n+1}/{len(result.blocks)}')
-        blocks.extend(quality.extrude_blocks([block],z))
+    def blocks():
+        for n, block in enumerate(result.blocks):
+            progress(55+int(37*(.1+.8*n/len(result.blocks))),f'Качество блока {n+1}/{len(result.blocks)}')
+            yield quality.extrude_blocks([block],z)[0]
+    lo=np.min([(x.min(),y.min(),0.) for x,y in result.blocks],axis=0)
+    hi=np.max([(x.max(),y.max(),result.params.z_len) for x,y in result.blocks],axis=0)
+    tolerance=1e-10*float(np.linalg.norm(hi-lo))
     interfaces=[(it.block_a,it.face_a,it.block_b,it.face_b,it.reversed)
         for it in result.interfaces if result.complete or not it.face_a.startswith('j_')]
-    return quality.analyse_blocks(blocks,interfaces=interfaces,
-        progress_callback=lambda fraction,text:progress(65+int(27*fraction),text))
+    return quality.analyse_blocks(blocks(),interfaces=interfaces,
+        block_count=len(result.blocks),tolerance=tolerance,
+        progress_callback=lambda fraction,text:progress(55+int(37*fraction),text))

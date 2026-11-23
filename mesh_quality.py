@@ -75,9 +75,11 @@ def extrude_blocks(blocks2d, z_nodes):
         y = np.asarray(y, dtype=float)
         if x.shape != y.shape or x.ndim != 2:
             raise QualityError(f"Блок {n + 1}: x и y должны быть двумерными одинаковой формы")
-        out.append(np.stack([np.repeat(x[:, :, None], z.size, 2),
-                             np.repeat(y[:, :, None], z.size, 2),
-                             np.broadcast_to(z, x.shape + (z.size,)).copy()], axis=-1))
+        block = np.empty(x.shape + (z.size, 3), dtype=float)
+        block[..., 0] = x[:, :, None]
+        block[..., 1] = y[:, :, None]
+        block[..., 2] = z
+        out.append(block)
     return out
 
 
@@ -142,16 +144,19 @@ def _centers_volumes(x, faces):
     return centre, (vi + vj + vk) / 3.0
 
 
-def cell_metrics(block):
+def cell_metrics(block, *, _geometry=None):
     """Поячеечные массивы формы (ni-1, nj-1, nk-1) для одного блока."""
     x = as_block(block)
     p = [[[_corner(x, a, b, c) for c in (0, 1)] for b in (0, 1)] for a in (0, 1)]
     ei = [[p[1][b][c] - p[0][b][c] for c in (0, 1)] for b in (0, 1)]
     ej = [[p[a][1][c] - p[a][0][c] for c in (0, 1)] for a in (0, 1)]
     ek = [[p[a][b][1] - p[a][b][0] for b in (0, 1)] for a in (0, 1)]
-    length_i = sum(_norm(ei[b][c]) for b in (0, 1) for c in (0, 1)) / 4.0
-    length_j = sum(_norm(ej[a][c]) for a in (0, 1) for c in (0, 1)) / 4.0
-    length_k = sum(_norm(ek[a][b]) for a in (0, 1) for b in (0, 1)) / 4.0
+    norms_i = [[_norm(e) for e in row] for row in ei]
+    norms_j = [[_norm(e) for e in row] for row in ej]
+    norms_k = [[_norm(e) for e in row] for row in ek]
+    length_i = sum(norms_i[b][c] for b in (0, 1) for c in (0, 1)) / 4.0
+    length_j = sum(norms_j[a][c] for a in (0, 1) for c in (0, 1)) / 4.0
+    length_k = sum(norms_k[a][b] for a in (0, 1) for b in (0, 1)) / 4.0
     longest = np.maximum(np.maximum(length_i, length_j), length_k)
     shortest = np.minimum(np.minimum(length_i, length_j), length_k)
     aspect = np.full(longest.shape, np.inf)
@@ -160,22 +165,25 @@ def cell_metrics(block):
     deviation = np.zeros(longest.shape)
     for a, b, c in itertools.product((0, 1), repeat=3):
         u, v, w = ei[b][c], ej[a][c], ek[a][b]
-        nu, nv, nw = _norm(u), _norm(v), _norm(w)
+        nu, nv, nw = norms_i[b][c], norms_j[a][c], norms_k[a][b]
         scaled = _divide(_dot(u, np.cross(v, w)), nu * nv * nw, 0.0)
         sj_min = np.minimum(sj_min, scaled)
         su, sv, sw = u * (1 - 2 * a), v * (1 - 2 * b), w * (1 - 2 * c)
         for s, t in ((su, sv), (sv, sw), (su, sw)):
             angle = np.arctan2(_norm(np.cross(s, t)), _dot(s, t))
             deviation = np.maximum(deviation, np.abs(angle - 0.5 * math.pi))
-    _, volume = _centers_volumes(x, _faces(x))
+    _, volume = _centers_volumes(x, _faces(x)) if _geometry is None else _geometry[1]
     return {"volume": volume, "scaled_jacobian": sj_min, "skewness": deviation / (0.5 * math.pi),
             "aspect_ratio": aspect, "length_i": length_i, "length_j": length_j, "length_k": length_k}
 
 
-def _internal_face_metrics(x):
+def _internal_face_metrics(x, *, _geometry=None):
     """Для каждого направления: угол неортогональности и отношение объёмов соседей."""
-    faces = _faces(x)
-    centre, volume = _centers_volumes(x, faces)
+    if _geometry is None:
+        faces = _faces(x)
+        centre, volume = _centers_volumes(x, faces)
+    else:
+        faces, (centre, volume) = _geometry
     out = []
     for axis, (s, _) in enumerate(faces):
         n = volume.shape[axis]
@@ -367,8 +375,13 @@ def _validate_interfaces(interfaces, count):
             raise QualityError("Стык блока с самим собой не поддерживается")
 
 
-def analyse_blocks(blocks, interfaces=None, *, thresholds=None, tolerance=None, profile=None, progress_callback=None):
-    """Сводный отчёт. interfaces=None — найти автоматически, [] — стыков нет."""
+def analyse_blocks(blocks, interfaces=None, *, thresholds=None, tolerance=None, profile=None, progress_callback=None, block_count=None):
+    """Сводный отчёт. interfaces=None — найти автоматически, [] — стыков нет.
+
+    block_count enables one-pass consumption without retaining block coordinates.
+    It requires explicit interfaces and tolerance (no global geometry prepass).
+    Interface boundary layers are copied and retained until matching completes.
+    """
     thresholds = dict(thresholds or {})
     caution_only = {}
     if profile is not None:
@@ -390,8 +403,28 @@ def analyse_blocks(blocks, interfaces=None, *, thresholds=None, tolerance=None, 
             raise QualityError(f"Порог для {name!r} не поддерживается")
         if not math.isfinite(float(thresholds[name])):
             raise QualityError(f"Порог {name} должен быть конечным числом")
-    arrays = [as_block(b, n) for n, b in enumerate(blocks)]
-    if not arrays:
+    if block_count is None:
+        arrays = [as_block(b, n) for n, b in enumerate(blocks)]
+        count = len(arrays)
+    else:
+        if type(block_count) is not int or block_count < 1:
+            raise QualityError("block_count должен быть положительным целым числом")
+        if interfaces is None or tolerance is None:
+            raise QualityError("Потоковая проверка требует явных стыков и допуска")
+        if not math.isfinite(tolerance) or tolerance < 0:
+            raise QualityError("Допуск должен быть конечным и неотрицательным")
+        count = block_count
+        def validated_blocks():
+            seen = 0
+            for n, block in enumerate(blocks):
+                if n >= count:
+                    raise QualityError("Поток содержит больше блоков, чем block_count")
+                yield as_block(block, n)
+                seen += 1
+            if seen != count:
+                raise QualityError("Поток содержит меньше блоков, чем block_count")
+        arrays = validated_blocks()
+    if not count:
         raise QualityError("Пустой список блоков")
     warnings = []
     source = "explicit"
@@ -400,7 +433,7 @@ def analyse_blocks(blocks, interfaces=None, *, thresholds=None, tolerance=None, 
         source = "detected"
     else:
         interfaces = interfaces_from_topology(interfaces)
-        _validate_interfaces(interfaces, len(arrays))
+        _validate_interfaces(interfaces, count)
         if tolerance is None:
             lo = np.min([a.reshape(-1, 3).min(axis=0) for a in arrays], axis=0)
             hi = np.max([a.reshape(-1, 3).max(axis=0) for a in arrays], axis=0)
@@ -412,8 +445,10 @@ def analyse_blocks(blocks, interfaces=None, *, thresholds=None, tolerance=None, 
     layers, summary_blocks = {}, []
     invalid_volume = invalid_jacobian = 0
     for n, x in enumerate(arrays):
-        if progress_callback:progress_callback(.1+.8*n/len(arrays),f'Качество блока {n+1}/{len(arrays)}')
-        cm = cell_metrics(x)
+        if progress_callback:progress_callback(.1+.8*n/count,f'Качество блока {n+1}/{count}')
+        faces = _faces(x)
+        geometry = (faces, _centers_volumes(x, faces))
+        cm = cell_metrics(x, _geometry=geometry)
         for name in CELL_METRICS:
             acc[name].add(cm[name], _cell_where(n), n)
             if name in thresholds:
@@ -426,7 +461,7 @@ def analyse_blocks(blocks, interfaces=None, *, thresholds=None, tolerance=None, 
                 acc[name].add_threshold(cm[name], float(thresholds[name]), caution=caution)
         invalid_volume += int(np.count_nonzero(~(cm["volume"] > 0)))
         invalid_jacobian += int(np.count_nonzero(~(cm["scaled_jacobian"] > 0)))
-        faces_internal, centre, volume = _internal_face_metrics(x)
+        faces_internal, centre, volume = _internal_face_metrics(x, _geometry=geometry)
         for axis, item in zip("ijk", faces_internal):
             if item is None:
                 continue
@@ -445,7 +480,7 @@ def analyse_blocks(blocks, interfaces=None, *, thresholds=None, tolerance=None, 
                 layers[(n, face)] = _layer(x, centre, volume, face)
         summary_blocks.append({"index": n + 1, "dims": [int(v) for v in x.shape[:3]],
                                "cells": int(cm["volume"].size), "nodes": int(x.shape[0] * x.shape[1] * x.shape[2])})
-        del cm, faces_internal, centre, volume
+        del cm, faces_internal, centre, volume, faces, geometry, x
     interface_report = []
     for number, it in enumerate(interfaces):
         xa, ca, va = layers[(it.block_a, it.face_a)]
@@ -493,7 +528,7 @@ def analyse_blocks(blocks, interfaces=None, *, thresholds=None, tolerance=None, 
         interface_report.append(record)
     report = {"format": FORMAT, "version": VERSION, "units": {"length": "input", "angle": "deg"},
             "definitions": DEFINITIONS, "blocks": summary_blocks,
-            "totals": {"blocks": len(arrays), "cells": sum(b["cells"] for b in summary_blocks),
+            "totals": {"blocks": count, "cells": sum(b["cells"] for b in summary_blocks),
                        "nodes": sum(b["nodes"] for b in summary_blocks)},
             "interfaces": {"source": source, "count": len(interfaces), "matched": sum(1 for r in interface_report if r["matched"]),
                            "tolerance": float(tolerance), "items": interface_report},
