@@ -1,3 +1,5 @@
+> Архивировано 23 ноября 2026 года. Исторический отчёт для указанных в нём коммитов; статусы проверок и список ограничений не описывают текущую версию. Актуальная документация: [README проекта](../../README.md).
+
 # Refactoring audit
 
 No full manual review of all project files is certified yet. Prior merges were not backed by executed tests.

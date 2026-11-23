@@ -1,3 +1,5 @@
+> Архивировано 23 ноября 2026 года. Исторический отчёт для указанных в нём коммитов; статусы проверок и список ограничений не описывают текущую версию. Актуальная документация: [README проекта](../../README.md).
+
 # GUI audit checkpoint
 
 ## Scope and evidence
@@ -29,4 +31,4 @@ Both tests checks and both compare checks reported success for that PR head. Evi
 - Saving quality reports through the bundle parent, profile editing, project transitions, and detailed user interactions remain to be tested.
 - Full semantic review of extracted modules, core mathematics and STAR-CCM+ macro compatibility is not certified.
 
-The original refactoring_audit.md is an initial inventory; this checkpoint supplements it and does not certify completion of its pending items.
+The original [refactoring_audit.md](refactoring_audit.md) is an initial inventory; this checkpoint supplements it and does not certify completion of its pending items.
