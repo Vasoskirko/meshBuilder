@@ -779,13 +779,15 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         self.refresh_controls()
 
     def sync_global_axial(self, p):
-        # Z/nz describe one extrusion, never a template/block-local setting.
+        # ni, Z/nz must agree at all block interfaces. ni is edited globally.
         owner=self.parent_window
-        owner.base_params=mc.replace(owner.base_params,z_len=p.z_len,nz=p.nz)
+        ni=p.ni if self.scope_mode=='all' else owner.base_params.ni
+        common=dict(ni=ni,z_len=p.z_len,nz=p.nz)
+        owner.base_params=mc.replace(owner.base_params,**common)
         for mapping in (owner.template_configs,owner.block_custom_configs):
             for key,value in list(mapping.items()):
-                if value.z_len != p.z_len or value.nz != p.nz:
-                    mapping[key]=mc.replace(value,z_len=p.z_len,nz=p.nz)
+                if (value.ni,value.z_len,value.nz)!=(ni,p.z_len,p.nz):
+                    mapping[key]=mc.replace(value,**common)
 
     def save_current_ui_to_active_scope(self):
         p = self.read_params()
@@ -815,7 +817,7 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         else:
             p = self.parent_window.base_params
 
-        p=mc.replace(p,z_len=self.parent_window.base_params.z_len,nz=self.parent_window.base_params.nz)
+        p=mc.replace(p,ni=self.parent_window.base_params.ni,z_len=self.parent_window.base_params.z_len,nz=self.parent_window.base_params.nz)
         self.apply_params(p)
 
     def on_scope_changed(self):
@@ -839,7 +841,10 @@ class MeshSubpanel(QWidget if HAS_QT else object):
                 self.parent_window.highlight_mesh_block(gid)
 
     def on_reset_override(self):
-        if self.scope_mode == "template":
+        if self.scope_mode == "all":
+            self.parent_window.template_configs.clear()
+            self.parent_window.block_custom_configs.clear()
+        elif self.scope_mode == "template":
             tid = self.combo_templates.currentData()
             self.parent_window.template_configs.pop(tid, None)
         elif self.scope_mode == "block":
@@ -899,6 +904,11 @@ class MeshSubpanel(QWidget if HAS_QT else object):
             text=f'Блок {gid}: источник — {source}. Редактирование создаёт/обновляет индивидуальное переопределение.'
         self.lbl_parameter_origin.setText(text+'\nZ и nz общие во всех областях; ni меняется в «Ко всем блокам». Настройки ядра также общие.')
         self.fields['ni'].setEnabled(self.scope_mode=='all')
+        self.btn_reset_override.setText({
+            'all':'Сбросить все переопределения шаблонов и блоков',
+            'template':'Сбросить переопределение выбранного шаблона',
+            'block':'Сбросить переопределение выбранного блока',
+        }[self.scope_mode])
 
     def update_tree_status(self):
         self.update_parameter_origin()
