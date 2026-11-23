@@ -939,6 +939,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
                     auto_fill_core=False,
                     center_method=cm_method,
                     hermite_tfi=hermite_snapshot,
+                    progress_callback=lambda fraction,text:progress(5+int(48*fraction),text),
                 )
                 rep = analyse_subchannel_result(res,progress)
                 progress(92,"Расчёт завершён")
@@ -1007,6 +1008,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
                     auto_fill_core=False if is_layer_mode else True,
                     center_method=cm_method,
                     hermite_tfi=hermite_snapshot,
+                    progress_callback=lambda fraction,text:progress(5+int(48*fraction),text),
                 )
                 rep = analyse_subchannel_result(res,progress)
                 progress(92,"Расчёт завершён")

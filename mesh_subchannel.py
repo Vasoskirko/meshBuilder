@@ -4,6 +4,7 @@ import math, os, sys
 import tempfile
 from dataclasses import dataclass, field
 import numpy as np
+from scipy.spatial import cKDTree
 
 import mesh_core as mc
 import mesh_quality as mq
@@ -385,7 +386,24 @@ def generate_subchannel_mesh(center_A, r_A, center_B, r_B, center_C, r_C, params
         all_block_widths=[w0, w1, w2, w3, w4, w5]
     )
 
-def build_mesh_from_bundle_model(bundle_model, base_params, template_overrides=None, block_custom_overrides=None, selected_sub_ids=None, auto_fill_core=False, center_method="equi_clearance", hermite_tfi=False):
+def _candidate_face_pairs(faces, tolerance):
+    """Spatial broad phase only; callers still validate every face node.
+
+    Index both endpoints so reversed faces and points on bin boundaries are
+    included. Sorted indices preserve the former deterministic traversal order.
+    """
+    if not faces:
+        return
+    endpoints = np.array([v[[0, -1]] for _, _, v in faces])
+    tree = cKDTree(endpoints.reshape(-1, 2))
+    radius = np.nextafter(float(tolerance), np.inf)
+    for i, (_, _, v) in enumerate(faces):
+        neighbors = tree.query_ball_point(v[0], radius, p=np.inf)
+        for j in sorted({n // 2 for n in neighbors if n // 2 > i}):
+            yield i, j
+
+
+def build_mesh_from_bundle_model(bundle_model, base_params, template_overrides=None, block_custom_overrides=None, selected_sub_ids=None, auto_fill_core=False, center_method="equi_clearance", hermite_tfi=False, progress_callback=None):
     if template_overrides is None: template_overrides = {}
     if block_custom_overrides is None: block_custom_overrides = {}
 
@@ -402,6 +420,8 @@ def build_mesh_from_bundle_model(bundle_model, base_params, template_overrides=N
     if not valid_subs: raise ValueError("Нет внутренних треугольных подканалов среди выбранных.")
 
     for sub_idx, sid in enumerate(valid_subs):
+        if progress_callback:
+            progress_callback(.8 * sub_idx / len(valid_subs), f"Подканал {sub_idx+1}/{len(valid_subs)}")
         s = bundle_model.subchannels[sid]
         rA, rB, rC = bundle_model.rods[s.rod_ids[0]], bundle_model.rods[s.rod_ids[1]], bundle_model.rods[s.rod_ids[2]]
         cA = np.array([rA.x, rA.y]) * 1e-3; cB = np.array([rB.x, rB.y]) * 1e-3; cC = np.array([rC.x, rC.y]) * 1e-3
@@ -494,26 +514,28 @@ def build_mesh_from_bundle_model(bundle_model, base_params, template_overrides=N
         faces.append((k, "j_min", bv[:, 0])); faces.append((k, "j_max", bv[:, -1]))
 
     existing_pairs = {frozenset(((it.block_a, it.face_a), (it.block_b, it.face_b))) for it in all_interfaces}
-    for i in range(len(faces)):
+    if progress_callback:
+        progress_callback(.8, "Поиск общих граней")
+    pairs = () if is_layer_only else _candidate_face_pairs(faces, tol)
+    for i, j in pairs:
         ka, fa, va = faces[i]
-        for j in range(i + 1, len(faces)):
-            kb, fb, vb = faces[j]
-            if ka == kb: continue
-            if is_layer_only:
-                continue
-            endpoints_match = (np.allclose(va[[0, -1]], vb[[0, -1]], rtol=0, atol=tol)
-                               or np.allclose(va[[0, -1]], vb[[-1, 0]], rtol=0, atol=tol))
-            if endpoints_match and (va.shape != vb.shape or
-                    min(np.max(np.abs(va - vb)), np.max(np.abs(va - vb[::-1]))) > tol):
-                raise ValueError("Несовместимые узлы на общей грани подканалов; согласуйте переопределения")
-            if va.shape != vb.shape: continue
-            pair_key = frozenset(((ka, fa), (kb, fb)))
-            if pair_key in existing_pairs: continue
-            diff1 = np.max(np.abs(va - vb)); diff2 = np.max(np.abs(va - vb[::-1]))
-            if min(diff1, diff2) <= tol:
-                all_interfaces.append(mc.BlockInterface(ka, fa, kb, fb, diff2 < diff1))
-                existing_pairs.add(pair_key)
+        kb, fb, vb = faces[j]
+        if ka == kb: continue
+        endpoints_match = (np.allclose(va[[0, -1]], vb[[0, -1]], rtol=0, atol=tol)
+                           or np.allclose(va[[0, -1]], vb[[-1, 0]], rtol=0, atol=tol))
+        if endpoints_match and (va.shape != vb.shape or
+                min(np.max(np.abs(va - vb)), np.max(np.abs(va - vb[::-1]))) > tol):
+            raise ValueError("Несовместимые узлы на общей грани подканалов; согласуйте переопределения")
+        if va.shape != vb.shape: continue
+        pair_key = frozenset(((ka, fa), (kb, fb)))
+        if pair_key in existing_pairs: continue
+        diff1 = np.max(np.abs(va - vb)); diff2 = np.max(np.abs(va - vb[::-1]))
+        if min(diff1, diff2) <= tol:
+            all_interfaces.append(mc.BlockInterface(ka, fa, kb, fb, diff2 < diff1))
+            existing_pairs.add(pair_key)
 
+    if progress_callback:
+        progress_callback(.95, "Проверка ориентации ячеек")
     min_jac = _check_quad_jacobians(all_blocks)
 
     diagnostics = {
