@@ -12,7 +12,7 @@ from yplus_calculator import FLUID_MODES
 from fluid_properties import GAS_PRESETS
 
 FORMAT='meshBuilder-bundle-project'
-VERSION=1
+VERSION=2
 CALCULATOR_KEYS={'conductivity_model','fluid_mode','gas','temp_c','press_mpa','density','dyn_vis','re','vel','flow','yplus','flow_mode'}
 CORE_DEFAULTS=dict(mode='controlled_growth',core_transition=1.1,core_growth=1.1,core_max_size=120e-6,core_max_cells=5000,core_layers=20,mesh_lines=True,core_lines=False,center='equi_clearance',unit='мкм')
 
@@ -28,6 +28,9 @@ def integer(value,label,lo,hi):
     if type(value) is not int or not lo<=value<=hi:raise BundleProjectError(f'{label}: требуется целое {lo}…{hi}')
 
 def params(data):
+    from bundle_local_core import DEFAULTS
+    if not isinstance(data,dict):raise BundleProjectError('Параметры сетки: требуется объект')
+    data=dict(DEFAULTS,**data)
     defaults=asdict(MeshParams());keys(data,defaults,'Параметры сетки')
     for k,v in data.items():
         if type(defaults[k]) is float:
@@ -108,7 +111,8 @@ class BundleProject:
 
 def validate_project(data):
     keys(data,('format','version','geometry','mesh','calculator','export','view'),'Проект')
-    if data['format']!=FORMAT or type(data['version']) is not int or data['version']!=VERSION:raise BundleProjectError('Неизвестный формат или версия проекта')
+    if data['format']!=FORMAT or type(data['version']) is not int or data['version'] not in (1,VERSION):raise BundleProjectError('Неизвестный формат или версия проекта')
+    data=deepcopy(data);data['version']=VERSION
     model=restore_geometry(data['geometry'])
     mesh=data['mesh'];keys(mesh,('base','templates','blocks','core'),'Сетка');base=params(mesh['base'])
     tbind,bbind=bindings(model)
@@ -123,6 +127,9 @@ def validate_project(data):
             result[int(key)]=p
         return result
     templates=overrides(mesh['templates'],tbind);blocks=overrides(mesh['blocks'],bbind)
+    mesh['base']=asdict(base)
+    for name,values in (('templates',templates),('blocks',blocks)):
+        for key,p in values.items():mesh[name][str(key)]['params']=asdict(p)
     core=mesh['core'];keys(core,CORE_DEFAULTS,'Ядро')
     if core['mode'] not in ('controlled_growth','aspect_alignment','fixed_count') or core['center'] not in ('equi_clearance','centroid') or core['unit'] not in UNITS:raise BundleProjectError('Неизвестная настройка ядра/единиц')
     for name in ('mesh_lines','core_lines'):
@@ -158,16 +165,11 @@ def commit_active_inputs(owner):
         name='core_layers' if p.combo_core_mode.currentData()=='fixed_count' else 'core_max_cells'
         if not p.fields[name].hasAcceptableInput():raise BundleProjectError('Проверьте число слоёв ядра')
         with QSignalBlocker(p.fields[name]):p.fields[name].interpretText()
-    current=p.read_params()
-    original=owner.base_params
-    if p.scope_mode=='template':original=owner.template_configs.get(p.combo_templates.currentData(),original)
-    elif p.scope_mode=='block':
-        gid=p.combo_blocks.currentData();original=owner.block_custom_configs.get(gid,owner.template_configs.get(owner.get_template_for_block(gid),original))
-    merged=merge_project_inputs(original,current)
-    p.sync_global_axial(merged)
-    if p.scope_mode=='all':owner.base_params=merged
-    elif p.scope_mode=='template' and p.combo_templates.currentData() is not None:owner.template_configs[p.combo_templates.currentData()]=merged
-    elif p.scope_mode=='block' and p.combo_blocks.currentData() is not None:owner.block_custom_configs[p.combo_blocks.currentData()]=merged
+    p.save_current_ui_to_active_scope()
+    if p.current_law()=='wall_core':
+        from bundle_block_editor import save_core
+        save_core(p)
+
     owner.validate_mesh_inputs()
     p.update_tree_status()
 
@@ -183,6 +185,11 @@ def capture_project(owner):
     core.update(mode=p.combo_core_mode.currentData(),mesh_lines=bool(p.combo_mesh_lines.currentData()),
         core_lines=bool(p.combo_core_lines.currentData()) if p.combo_core_mode.currentData()=='fixed_count' else bool(getattr(p,'_fixed_core_line_index',0)),
         center=p.combo_center_method.currentData(),unit=p.cell_unit)
+    if p.scope_mode!='all' and hasattr(p,'_global_core_state'):
+        from bundle_block_editor import CORE_WIDGETS
+        global_core=p._global_core_state
+        for local,key in CORE_WIDGETS.items():core[key]=global_core[local]
+        core['mode']=global_core['local_core_mode'];core['core_lines']=global_core['local_core_hermite']
     view=dict(scope=p.scope_mode,template=p.combo_templates.currentData(),block=p.combo_blocks.currentData(),tab=owner.tabs.currentIndex(),detail=owner.combo_detail.currentData(),geometry_inputs=[w.value() for w in owner.geometry_controls()])
     # Geometry view may not have populated block editors yet.
     if not tb:view.update(scope='all',template=None,block=None)

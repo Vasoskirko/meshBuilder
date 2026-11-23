@@ -26,33 +26,49 @@ def forecast(model,base,templates,overrides,core,layer=None,progress=None):
     if progress:progress(5,'Подсчёт блоков и разбиений')
     _,instances=classify_subchannel_blocks(model,selected_sub_ids=sorted(model.selected_subchannels))
     if not instances:raise ValueError('Выберите внутренние треугольные подканалы')
-    specs=[]
+    specs=[];local_settings=[]
+    from bundle_local_core import inherited_settings
     for inst in instances:
         p=overrides.get((inst.subchannel_id,inst.block_index),overrides.get(inst.global_block_id,templates.get(inst.template_id,base)))
         p.validate()
-        if (p.ni,p.nz,p.z_len)!=(base.ni,base.nz,base.z_len):raise ValueError('Переопределения должны сохранять общие ni, nz и высоту')
-        if (p.law=='wall_core')!=(base.law=='wall_core'):raise ValueError('Нельзя оценивать смешанный слой и полную сетку')
+        if (p.nz,p.z_len)!=(base.nz,base.z_len):raise ValueError('Переопределения должны сохранять общие ni, nz и высоту')
         specs.append(p)
+        local_settings.append(inherited_settings(base,templates.get(inst.template_id),overrides.get((inst.subchannel_id,inst.block_index),overrides.get(inst.global_block_id))))
     notes=['Числа условны: при несовместимых стыках/параметрах построение может быть отклонено.',
            'Прогноз использует применённую геометрию, без построения массивов 3D.']
     layer_shapes=None
-    if base.law=='wall_core':
-        layer_shapes=[(p.ni,p.wall_layers+1,p.wall_layers+1) for p in specs]
-        if core['mode']=='fixed_count':nlo=nhi=core['layers']
-        elif layer is not None:
-            remaining=[];last=[]
-            if len(layer.blocks)!=len(specs):raise ValueError('Слой не соответствует выбранным блокам')
-            for i,g in enumerate(layer.geom_data):
-                front=g['arc']+g['layer_thickness']*g['direction']/g['lengths'][:,None]
-                remaining.append(np.linalg.norm(g['opposite']-front,axis=1))
-                last.append(layer.all_block_widths[i][:,-1])
-            nlo,nhi=mc.controlled_distribution(np.concatenate(remaining),np.concatenate(last),core['growth'],core['size'],core['limit'],core['transition'],count_only=True)
-            if core['mode']=='controlled_growth':nhi=nlo
-            else:notes.append('Для 1:1 показан допустимый диапазон N; конкретный выбор зависит от оптимизации пропорций.')
-        else:
-            nlo,nhi=1,core['limit']
-            notes.append('Автоматическое ядро: верхняя граница задана лимитом слоёв, это не ожидаемый расход. Постройте слой и повторите оценку для уточнения.')
-        shapes=[(p.ni,p.wall_layers+nlo+1,p.wall_layers+nhi+1) for p in specs]
+    if any(p.law=='wall_core' for p in specs):
+        layer_shapes=[(p.ni,p.wall_layers+1,p.wall_layers+1) if p.law=='wall_core' else (p.ni,p.nj,p.nj) for p in specs]
+        from bundle_local_core import settings
+        groups={}
+        for i,p in enumerate(specs):
+            if p.law!='wall_core':continue
+            local=local_settings[i]
+            cfg=dict(mode=local.get('core_mode',core['mode']),growth=local.get('growth',core['growth']),size=local.get('max_size',core['size']),limit=local.get('max_cells',core['limit']),layers=local.get('core_layers',core['layers']),transition=local.get('transition_ratio',core['transition']))
+            groups.setdefault((p.ni,tuple(sorted(cfg.items()))),[]).append(i)
+        ranges={}
+        for (_,items),indices in groups.items():
+            cfg=dict(items)
+            if cfg['mode']=='fixed_count':nlo=nhi=cfg['layers']
+            elif layer is not None:
+                remaining=[];last=[]
+                if len(layer.blocks)!=len(specs):raise ValueError('Слой не соответствует выбранным блокам')
+                for i in indices:
+                    g=layer.geom_data[i]
+                    front=g['arc']+g['layer_thickness']*g['direction']/g['lengths'][:,None]
+                    remaining.append(np.linalg.norm(g['opposite']-front,axis=1));last.append(layer.all_block_widths[i][:,-1])
+                nlo,nhi=mc.controlled_distribution(np.concatenate(remaining),np.concatenate(last),cfg['growth'],cfg['size'],cfg['limit'],cfg['transition'],count_only=True)
+                if cfg['mode']=='controlled_growth':nhi=nlo
+            else:nlo,nhi=1,cfg['limit']
+            for i in indices:ranges[i]=(nlo,nhi)
+        shapes=[]
+        for i,p in enumerate(specs):
+            if p.law=='wall_core':lo,hi=p.wall_layers+ranges[i][0]+1,p.wall_layers+ranges[i][1]+1
+            elif p.mode in ('first_count','shape_count'):lo=hi=p.nj
+            else:lo,hi=mc.minimum_count(p)+1,p.max_auto_cells+1
+            shapes.append((p.ni,lo,hi))
+            if p.law!='wall_core':layer_shapes[i]=(p.ni,lo,hi)
+        notes.append('Ядро оценивается по локальным настройкам групп. Автоматический диапазон уточняется после построения слоя; 1:1 может выбирать N внутри диапазона.')
     else:
         shapes=[]
         for p in specs:

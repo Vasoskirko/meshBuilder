@@ -11,7 +11,7 @@ try:
         QSpinBox, QComboBox, QCheckBox, QPushButton, QLabel, QFileDialog,
         QMessageBox, QSplitter, QScrollArea, QPlainTextEdit, QTreeWidget,
         QTreeWidgetItem, QRadioButton, QButtonGroup, QDialog, QDoubleSpinBox,
-        QTabWidget
+        QTabWidget, QAbstractItemView
     )
     from PySide6.QtGui import QFontDatabase
     HAS_QT = True
@@ -90,7 +90,7 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         self.radio_template.toggled.connect(self.on_scope_changed)
         lay_scope_radios.addWidget(self.radio_template)
 
-        self.radio_block = QRadioButton("Для блока", self)
+        self.radio_block = QRadioButton("Для блоков", self)
         self.radio_block.toggled.connect(self.on_scope_changed)
         lay_scope_radios.addWidget(self.radio_block)
         b_scope.addLayout(lay_scope_radios)
@@ -122,7 +122,9 @@ class MeshSubpanel(QWidget if HAS_QT else object):
 
         self.tree_blocks = QTreeWidget(self)
         self.tree_blocks.setHeaderLabels(["Элемент сетки", "Статус назначения"])
+        self.tree_blocks.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.tree_blocks.itemClicked.connect(self.on_tree_item_clicked)
+        self.tree_blocks.itemSelectionChanged.connect(lambda: __import__('bundle_block_editor').selected(self))
         b_tree.addWidget(self.tree_blocks)
 
         layout.addWidget(grp_tree)
@@ -367,13 +369,15 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         layout.addStretch()
 
     def number(self, key, val, factor=1.0, minimum=0.0, maximum=1e12, onchange=None):
-        w = NumberField(val, factor, minimum, maximum)
+        from bundle_block_editor import MixedNumberField
+        w = MixedNumberField(val, factor, minimum, maximum)
         w.edited.connect(self.on_field_changed if onchange is None else onchange)
         self.fields[key] = w
         return w
 
     def integer(self, key, val, minimum=0, maximum=5000, onchange=None):
-        w = QSpinBox()
+        from bundle_block_editor import MixedSpinBox
+        w = MixedSpinBox()
         w.setRange(minimum, maximum)
         w.setValue(val)
         w.setKeyboardTracking(False)
@@ -481,7 +485,8 @@ class MeshSubpanel(QWidget if HAS_QT else object):
     def on_core_field_changed(self):
         if self.updating:
             return
-        # Core controls are global; editing them must not create a wall override.
+        from bundle_block_editor import save_core
+        save_core(self)
         self.parent_window.validate_mesh_inputs()
         self.update_core_preview()
 
@@ -700,6 +705,24 @@ class MeshSubpanel(QWidget if HAS_QT else object):
             pass
 
     def read_params(self):
+        from bundle_local_core import DEFAULTS
+        restore=[]
+        for name,value in getattr(self,'_mixed_anchors',{}).items():
+            w=self.fields[name];edit=w if hasattr(w,'model') else w.lineEdit()
+            if edit.text()=='Разные значения':
+                with QSignalBlocker(w):w.setValue(value)
+                restore.append((w,edit))
+        try:
+            p=self._read_wall_params()
+            source=getattr(self,'_loaded_params',self.parent_window.base_params)
+            return mc.replace(p,**{k:getattr(source,k) for k in DEFAULTS})
+        finally:
+            for w,edit in restore:
+                with QSignalBlocker(w):
+                    if hasattr(w,'setMixed'):w.setMixed()
+                    else:edit.setText('Разные значения')
+
+    def _read_wall_params(self):
         f = self.fields
         law = self.current_law()
         mode = self.goal.currentData() or "first_count"
@@ -779,29 +802,20 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         self.refresh_controls()
 
     def sync_global_axial(self, p):
-        # ni, Z/nz must agree at all block interfaces. ni is edited globally.
         owner=self.parent_window
-        ni=p.ni if self.scope_mode=='all' else owner.base_params.ni
-        common=dict(ni=ni,z_len=p.z_len,nz=p.nz)
+        common=dict(z_len=p.z_len,nz=p.nz)
         owner.base_params=mc.replace(owner.base_params,**common)
         for mapping in (owner.template_configs,owner.block_custom_configs):
             for key,value in list(mapping.items()):
-                if (value.ni,value.z_len,value.nz)!=(ni,p.z_len,p.nz):
-                    mapping[key]=mc.replace(value,**common)
+                if (value.z_len,value.nz)!=(p.z_len,p.nz):mapping[key]=mc.replace(value,**common)
+
+    def selected_block_ids(self):
+        from bundle_block_editor import targets
+        return targets(self)
 
     def save_current_ui_to_active_scope(self):
-        p = self.read_params()
-        self.sync_global_axial(p)
-        if self.scope_mode == "all":
-            self.parent_window.base_params = p
-        elif self.scope_mode == "template":
-            tid = self.combo_templates.currentData()
-            if tid is not None:
-                self.parent_window.template_configs[tid] = p
-        elif self.scope_mode == "block":
-            gid = self.combo_blocks.currentData()
-            if gid is not None:
-                self.parent_window.block_custom_configs[gid] = p
+        from bundle_block_editor import save
+        save(self)
 
     def load_active_scope_to_ui(self):
         if self.scope_mode == "all":
@@ -817,8 +831,15 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         else:
             p = self.parent_window.base_params
 
-        p=mc.replace(p,ni=self.parent_window.base_params.ni,z_len=self.parent_window.base_params.z_len,nz=self.parent_window.base_params.nz)
+        p=mc.replace(p,z_len=self.parent_window.base_params.z_len,nz=self.parent_window.base_params.nz)
+        self._mixed_anchors={}
+        self._loaded_params=p
         self.apply_params(p)
+        from bundle_block_editor import load_core
+        load_core(self,p)
+        self._display_params=self.read_params()
+        self.refresh_controls()
+        self.update_parameter_origin()
 
     def on_scope_changed(self):
         if self.radio_all.isChecked():
@@ -837,6 +858,10 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         if self.radio_block.isChecked():
             gid = self.combo_blocks.currentData()
             if gid is not None:
+                with QSignalBlocker(self.tree_blocks):
+                    self.tree_blocks.clearSelection()
+                    for item in self.tree_blocks.findItems('',Qt.MatchContains|Qt.MatchRecursive,0):
+                        if item.data(0,Qt.UserRole)==('block',gid):item.setSelected(True)
                 self.load_active_scope_to_ui()
                 self.parent_window.highlight_mesh_block(gid)
 
@@ -848,8 +873,7 @@ class MeshSubpanel(QWidget if HAS_QT else object):
             tid = self.combo_templates.currentData()
             self.parent_window.template_configs.pop(tid, None)
         elif self.scope_mode == "block":
-            gid = self.combo_blocks.currentData()
-            self.parent_window.block_custom_configs.pop(gid, None)
+            for gid in self.selected_block_ids():self.parent_window.block_custom_configs.pop(gid, None)
         self.load_active_scope_to_ui()
         self.parent_window.validate_mesh_inputs()
         self.update_tree_status()
@@ -902,12 +926,15 @@ class MeshSubpanel(QWidget if HAS_QT else object):
             gid=self.combo_blocks.currentData();tid=owner.get_template_for_block(gid)
             source='собственное переопределение' if gid in owner.block_custom_configs else (f'шаблон T{tid}' if tid in owner.template_configs else 'общие параметры')
             text=f'Блок {gid}: источник — {source}. Редактирование создаёт/обновляет индивидуальное переопределение.'
-        self.lbl_parameter_origin.setText(text+'\nZ и nz общие во всех областях; ni меняется в «Ко всем блокам». Настройки ядра также общие.')
-        self.fields['ni'].setEnabled(self.scope_mode=='all')
+        from bundle_block_editor import mixed_description
+        self.lbl_parameter_origin.setText(text+'\nZ и nz общие. ni, нормаль и ядро можно менять локально.\nВыбор нескольких: Ctrl/Shift в дереве; Ctrl на рисунке.\n'+mixed_description(self))
+        self.fields['ni'].setEnabled(True)
+        from bundle_block_editor import show_mixed_fields
+        show_mixed_fields(self)
         self.btn_reset_override.setText({
             'all':'Сбросить все переопределения шаблонов и блоков',
             'template':'Сбросить переопределение выбранного шаблона',
-            'block':'Сбросить переопределение выбранного блока',
+            'block':'Сбросить переопределения выбранных блоков',
         }[self.scope_mode])
 
     def update_tree_status(self):
@@ -943,8 +970,4 @@ class MeshSubpanel(QWidget if HAS_QT else object):
             if idx >= 0:
                 self.combo_templates.setCurrentIndex(idx)
         elif kind == "block":
-            self.radio_block.setChecked(True)
-            idx = self.combo_blocks.findData(id_val)
-            if idx >= 0:
-                self.combo_blocks.setCurrentIndex(idx)
-            self.parent_window.highlight_mesh_block(id_val)
+            return  # itemSelectionChanged handles single and Ctrl/Shift selection

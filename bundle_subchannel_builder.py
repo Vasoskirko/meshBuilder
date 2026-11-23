@@ -139,22 +139,24 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
     def mesh_inputs(self):
         """Snapshot build inputs, excluding selection/highlight of the editor target."""
         panel = self.mesh_subpanel
+        from bundle_local_core import wall_params,DEFAULTS
         layer = deepcopy((
             tuple(w.value() for w in self.geometry_controls()),
             (self.model.s_flat, self.model.pitch, self.model.d_fuel,
              self.model.d_guide, self.model.d_instrument),
             sorted((rid, r.x, r.y, r.diameter, r.rod_type)
                    for rid, r in self.model.rods.items()),
-            set(self.model.selected_subchannels), self.base_params,
-            self.template_configs, self.block_custom_configs,
+            set(self.model.selected_subchannels), wall_params(self.base_params),
+            [(gid,wall_params(self.block_custom_configs.get(gid,self.template_configs.get(inst.template_id,self.base_params)))) for gid,inst in sorted(self.instances_lookup.items())],
             panel.combo_center_method.currentData(),
             panel.combo_mesh_lines.currentData() if any(p.law != "wall_core" for p in [self.base_params,*self.template_configs.values(),*self.block_custom_configs.values()]) else False,
         ))
-        cmode=panel.combo_core_mode.currentData()
-        keys=('core_transition','core_layers') if cmode=='fixed_count' else (
-            'core_transition','core_growth','core_max_size','core_max_cells')
-        core=(cmode,tuple(panel.fields[k].value() for k in keys),
-              panel.combo_core_lines.currentData() if cmode=='fixed_count' else False) if self.base_params.law=='wall_core' else None
+        from bundle_block_editor import core_state
+        data=core_state(panel) if panel.scope_mode=='all' else getattr(panel,'_global_core_state',core_state(panel))
+        def active_core(d):
+            keys=('local_core_mode','local_core_transition','local_core_layers','local_core_hermite') if d['local_core_mode']=='fixed_count' else ('local_core_mode','local_core_transition','local_core_growth','local_core_size','local_core_limit')
+            return {k:d[k] for k in keys}
+        core=(active_core(data),[{k:active_core({n:getattr(v,n) for n in DEFAULTS}) for k,v in mapping.items() if v.local_core_mode!='inherit'} for mapping in (self.template_configs,self.block_custom_configs)]) if any(p.law=='wall_core' for p in [self.base_params,*self.template_configs.values(),*self.block_custom_configs.values()]) else None
         return layer, core
 
     def validate_mesh_inputs(self, *args):
@@ -842,6 +844,8 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
             p.combo_core_mode.setCurrentIndex(p.combo_core_mode.findData(core['mode']))
             p._fixed_core_line_index=int(core['core_lines']);p._last_core_line_mode=None
             p.combo_core_lines.setCurrentIndex(p.combo_core_lines.findData(core['core_lines']))
+            from bundle_block_editor import core_state
+            p._global_core_state=core_state(p)
             templates,instances=classify_subchannel_blocks(self.model,selected_sub_ids=sorted(self.model.selected_subchannels))
             self.instances_lookup={i.global_block_id:i for i in instances}
             p.populate_scope_and_tree(templates,instances)
@@ -940,6 +944,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
                     center_method=cm_method,
                     hermite_tfi=hermite_snapshot,
                     progress_callback=lambda fraction,text:progress(5+int(48*fraction),text),
+                    allow_nonconformal=True,
                 )
                 rep = analyse_subchannel_result(res,progress)
                 progress(92,"Расчёт завершён")
@@ -947,6 +952,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
                 return res,rep
             def completed(payload):
                 res,rep=payload
+                if not self.confirm_interface_problems(res):return
                 self.clear_mesh_diagnostics()
                 self.current_mesh_result = res
                 self.accept_mesh_inputs(res)
@@ -986,7 +992,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
             return
         self.mesh_subpanel.update_tree_status()
         base_p = self.base_params
-        is_layer_mode = base_p.law == "wall_core"
+        is_layer_mode = any(p.law == "wall_core" for p in [base_p,*self.template_configs.values(),*self.block_custom_configs.values()])
 
         try:
             cm_method = (
@@ -1009,6 +1015,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
                     center_method=cm_method,
                     hermite_tfi=hermite_snapshot,
                     progress_callback=lambda fraction,text:progress(5+int(48*fraction),text),
+                    allow_nonconformal=True,
                 )
                 rep = analyse_subchannel_result(res,progress)
                 progress(92,"Расчёт завершён")
@@ -1016,13 +1023,14 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
                 return res,rep
             def completed(payload):
                 res,rep=payload
+                if not self.confirm_interface_problems(res):return
                 self.clear_mesh_diagnostics()
                 self.current_mesh_result = res
                 self.accept_mesh_inputs(res)
                 self.current_quality_report = rep
                 self.mesh_subpanel.btn_quality.setEnabled(True)
-                self.mesh_subpanel.btn_export.setEnabled(res.complete)
-                self.mesh_subpanel.btn_export_star.setEnabled(res.complete)
+                self.mesh_subpanel.btn_export.setEnabled(res.complete and not any(i['kind']=='geometry_mismatch' for i in res.diagnostics.get('interface_problems',[])))
+                self.mesh_subpanel.btn_export_star.setEnabled(res.complete and not res.diagnostics.get('interface_problems'))
                 self.mesh_subpanel.btn_fill_core.setEnabled(self.current_layer_result is not None)
 
                 d = res.diagnostics
@@ -1064,6 +1072,15 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
             model_snapshot=deepcopy(self.model)
             template_snapshot=deepcopy(self.template_configs)
             block_snapshot=deepcopy(self.block_custom_configs)
+            from bundle_local_core import inherited_settings
+            core_overrides={}
+            for i,row in enumerate(layer_src.instances_map):
+                sid,sector,tid,gid=row
+                config=inherited_settings(self.base_params,template_snapshot.get(tid),block_snapshot.get(gid))
+                if config:core_overrides[i]=config
+            global_core=getattr(self.mesh_subpanel,'_global_core_state',None)
+            if global_core:
+                cmode=global_core['local_core_mode'];growth=global_core['local_core_growth'];maxsize=global_core['local_core_size'];maxcells=global_core['local_core_limit'];clayers=global_core['local_core_layers'];q_trans=global_core['local_core_transition'];h_tfi=global_core['local_core_hermite']
             def compute(progress):
                 progress(5,"Расчёт геометрии и координат сетки")
                 full_res = ms.fill_subchannel_core(
@@ -1076,7 +1093,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
                     core_mode=cmode,
                     core_layers=clayers,
                     hermite_tfi=h_tfi,
-                    align_core=align_core,
+                    align_core=align_core,allow_nonconformal=True,core_overrides=core_overrides,
                     progress_callback=lambda fraction,text:progress(15+int(35*fraction),text),
                 )
                 rep = analyse_subchannel_result(full_res,progress)
@@ -1085,14 +1102,15 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
                 return full_res,rep
             def completed(payload):
                 full_res,rep=payload
+                if not self.confirm_interface_problems(full_res):return
                 self.clear_mesh_diagnostics()
                 self.current_mesh_result = full_res
                 self.accept_mesh_inputs(full_res, filled=True)
                 self.mesh_subpanel.btn_quality.setEnabled(True)
                 self.current_quality_report = rep
                 self.mesh_subpanel.btn_fill_core.setEnabled(True)
-                self.mesh_subpanel.btn_export.setEnabled(True)
-                self.mesh_subpanel.btn_export_star.setEnabled(True)
+                self.mesh_subpanel.btn_export.setEnabled(not any(i['kind']=='geometry_mismatch' for i in full_res.diagnostics.get('interface_problems',[])))
+                self.mesh_subpanel.btn_export_star.setEnabled(not full_res.diagnostics.get('interface_problems'))
 
                 d = full_res.diagnostics
                 extra = ""
@@ -1361,7 +1379,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
             self.ax_mesh.add_collection(LineCollection(lines, colors=c, linewidths=0.5, alpha=0.85))
 
             gid = k + 1
-            is_active = self.highlighted_block_id == gid
+            is_active = gid in self.mesh_subpanel.selected_block_ids() if self.mesh_subpanel.scope_mode=="block" else self.highlighted_block_id == gid
             is_custom = gid in self.block_custom_configs
             tid = self.get_template_for_block(gid)
             has_tmpl = tid in self.template_configs
@@ -1405,9 +1423,43 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
         self.ax_mesh.set_xlabel("X (мм)")
         self.ax_mesh.set_ylabel("Y (мм)")
         self.ax_mesh.set_title(f"Сетка выбранной области: {len(res.blocks)} блоков")
+        from mesh_interface_diagnostics import face_nodes
+        for issue in res.diagnostics.get('interface_problems',[]):
+            for side in ('a','b'):
+                nodes=face_nodes(res.blocks[issue['block_'+side]],issue['face_'+side])*1e3
+                self.ax_mesh.plot(nodes[:,0],nodes[:,1],color='#d000d0' if issue['kind']=='geometry_mismatch' else '#ff7700',linewidth=2.5,linestyle='--')
         self.draw_mesh_diagnostics()
         self.canvas_mesh.draw_idle()
         self.redraw_layer_plot_for_block(self.active_plot_block_idx)
+
+    def confirm_interface_problems(self,result):
+        issues=result.diagnostics.get('interface_problems',[])
+        if not issues:return True
+        nonconformal=sum(i['kind']=='nonconformal' for i in issues)
+        text=f'Неконформных стыков: {nonconformal}; несовпадений геометрии: {len(issues)-nonconformal}.\n'
+        for issue in issues[:12]:
+            text+=f"Б{issue['block_a']+1} {issue['face_a']} ↔ Б{issue['block_b']+1} {issue['face_b']}: {'разное разбиение' if issue['kind']=='nonconformal' else 'разная геометрия'}, узлы {issue['nodes_a']}/{issue['nodes_b']}\n"
+        if len(issues)>12:text+='Остальные стыки перечислены в отчёте качества.\n'
+        text+='Продолжить для просмотра? Проблемные стыки будут подсвечены. Текущий экспорт STAR-CCM+ для такой сетки недоступен.'
+        self.append_mesh_message(text)
+        return QMessageBox.question(self,'Проблемы стыков',text,QMessageBox.Yes|QMessageBox.No,QMessageBox.No)==QMessageBox.Yes
+
+    def on_select_mesh_block(self,event):
+        if event.inaxes is not self.ax_mesh or event.button!=1 or self.current_mesh_result is None:return
+        if self.btn_ruler.isChecked() or getattr(self.toolbar_mesh,'mode','') or getattr(self,'_mesh_diagnostic',None):return
+        from matplotlib.path import Path
+        from PySide6.QtCore import QSignalBlocker
+        for i,(x,y) in enumerate(self.current_mesh_result.blocks):
+            outline=np.column_stack((np.r_[x[0],x[1:,-1],x[-1,-2::-1],x[-2:0:-1,0]],np.r_[y[0],y[1:,-1],y[-1,-2::-1],y[-2:0:-1,0]]))*1e3
+            if Path(outline).contains_point((event.xdata,event.ydata)):
+                tree=self.mesh_subpanel.tree_blocks
+                with QSignalBlocker(tree):
+                    if 'control' not in str(event.key) and 'ctrl' not in str(event.key):tree.clearSelection()
+                    for item in tree.findItems('',Qt.MatchContains|Qt.MatchRecursive,0):
+                        if item.data(0,Qt.UserRole)==('block',i+1):item.setSelected(not item.isSelected())
+                from bundle_block_editor import selected
+                selected(self.mesh_subpanel)
+                break
 
     def highlight_mesh_block(self, global_block_id):
         self.highlighted_block_id = global_block_id
@@ -1443,6 +1495,11 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
             QMessageBox.critical(self, "Ошибка контроля качества", f"Не удалось открыть окно контроля качества:\n{exc}")
 
     def on_export_starccm_dialog(self):
+        from mesh_interface_diagnostics import require_star_conformity
+        if self.current_mesh_result is not None:
+            try:require_star_conformity(self.current_mesh_result)
+            except ValueError as exc:
+                QMessageBox.warning(self,'Экспорт недоступен',str(exc));return
         if not self.can_export_mesh():
             QMessageBox.warning(self, "Предупреждение", "Нет актуальной полной сетки. Перестройте сетку или заполните актуальный слой.")
             return

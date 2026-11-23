@@ -19,10 +19,11 @@ class BundleDiagnosticsMixin:
             p=self.mesh_subpanel;f=p.fields
             model=deepcopy(self.model);base=self.base_params
             templates=deepcopy(self.template_configs);overrides=deepcopy(self.block_custom_configs)
-            mode=p.combo_core_mode.currentData()
-            automatic=base.law=='wall_core' and mode!='fixed_count'
-            core=dict(mode=mode,growth=f['core_growth'].value() if automatic else 1.1,size=f['core_max_size'].value() if automatic else .00012,
-                      limit=f['core_max_cells'].value() if automatic else 5000,layers=f['core_layers'].value(),transition=f['core_transition'].value() if base.law=='wall_core' else 1.1)
+            from bundle_block_editor import core_state
+            data=getattr(p,'_global_core_state',None)
+            if data is None:data=core_state(p)
+            core=dict(mode=data['local_core_mode'],growth=data['local_core_growth'],size=data['local_core_size'],
+                      limit=data['local_core_limit'],layers=data['local_core_layers'],transition=data['local_core_transition'])
             layer=self.current_layer_result
             def compute(progress):return forecast(model,base,templates,overrides,core,layer,progress)
             def completed(data):

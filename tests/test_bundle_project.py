@@ -35,12 +35,14 @@ class BundleProjectTests(unittest.TestCase):
         w.template_configs={p.combo_templates.itemData(i):replace(w.base_params,h1=4e-6) for i in range(p.combo_templates.count())}
         w.block_custom_configs[gid]=replace(w.template_configs[tid],max_auto_cells=7000)
         p.radio_block.setChecked(True)
+        p.radio_all.setChecked(True)
         p.combo_core_mode.setCurrentIndex(p.combo_core_mode.findData('fixed_count'));p.combo_core_lines.setCurrentIndex(1)
         p.combo_core_mode.setCurrentIndex(p.combo_core_mode.findData('aspect_alignment'))
         p.fields['core_growth'].setValue(1.2);p.fields['core_max_size'].setValue(.0002)
         p.fields['core_layers'].setValue(17);p.cu.setCurrentText('мм')
         p.yplus_saved_state=dict(fluid_mode=FLUID_MODES[-1],gas=next(iter(GAS_PRESETS)),temp_c='300',press_mpa='15',density='1000',dyn_vis='0.001',re='50000',vel='5.62',flow='0.15',yplus='1',flow_mode='reynolds',conductivity_model='background')
         w.star_export_options=validate_options(dict(DEFAULTS,turbulence_model='hybrid_srh',time_step=2.5e-5,selected_subchannels=[1],subchannel_reports=['geometry'],time_mean_fields=['velocity']))
+        p.radio_block.setChecked(True)
         w.tabs.setCurrentIndex(2);w.combo_detail.setCurrentIndex(w.combo_detail.findData(4))
         return w
     def test_full_roundtrip_including_unselected_rods_overrides_and_export(self):

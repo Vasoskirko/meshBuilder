@@ -115,7 +115,24 @@ class MeshParams:
     layer_thickness: float = 0.35e-3
     layer_growth: float = 1.05
 
+    local_core_mode: str = 'inherit'
+    local_core_growth: float = 1.1
+    local_core_size: float = 120e-6
+    local_core_limit: int = 5000
+    local_core_layers: int = 20
+    local_core_transition: float = 1.1
+    local_core_hermite: bool = False
+
     def validate(self):
+        if self.local_core_mode not in ('inherit','controlled_growth','aspect_alignment','fixed_count'):
+            raise ValueError('Неизвестный локальный режим ядра')
+        if (not np.isfinite(self.local_core_growth) or not 1<=self.local_core_growth<=100 or
+            not np.isfinite(self.local_core_size) or not 0<self.local_core_size<=1000 or
+            not np.isfinite(self.local_core_transition) or not .1<=self.local_core_transition<=10 or
+            type(self.local_core_limit) is not int or not 1<=self.local_core_limit<=100000 or
+            type(self.local_core_layers) is not int or not 1<=self.local_core_layers<=500 or
+            type(self.local_core_hermite) is not bool):
+            raise ValueError('Некорректные локальные параметры ядра')
         if self.law == "wall_core":
             validate_layer_params(self)
             return

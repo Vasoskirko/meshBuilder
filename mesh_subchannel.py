@@ -9,6 +9,7 @@ from scipy.spatial import cKDTree
 import mesh_core as mc
 import mesh_quality as mq
 from block_classifier import classify_subchannel_blocks
+from mesh_interface_diagnostics import partition_interfaces
 
 LAW_DISPLAY_NAMES = {
     "geometric": "Геометрический",
@@ -55,6 +56,8 @@ class SubchannelMeshResult:
     geom_data: list = field(default_factory=list)
     block_metrics: list = field(default_factory=list)
     all_block_widths: list = field(default_factory=list)
+    block_params: list = field(default_factory=list)
+    intended_interfaces: tuple = ()
 
 def _face_nodes(block, face):
     v = np.stack(block, axis=-1)
@@ -314,15 +317,15 @@ def find_equi_clearance_point(cA, rA, cB, rB, cC, rC):
     best_cand = min(candidates, key=lambda c: np.linalg.norm(c[1] - centroid))[1]
     return best_cand
 
-def generate_subchannel_mesh(center_A, r_A, center_B, r_B, center_C, r_C, params_list_or_single, auto_fill_core=False, pt_center=None, center_method="equi_clearance", hermite_tfi=False):
+def generate_subchannel_mesh(center_A, r_A, center_B, r_B, center_C, r_C, params_list_or_single, auto_fill_core=False, pt_center=None, center_method="equi_clearance", hermite_tfi=False, allow_nonconformal=False):
     requested = list(params_list_or_single) if isinstance(params_list_or_single, (list, tuple)) else [params_list_or_single] * 6
     if len(requested) != 6:
         raise ValueError("Нужно шесть наборов параметров блоков")
     for p in requested:
         p.validate()
-    if len({(p.ni, p.nz, p.z_len) for p in requested}) != 1:
+    if len({(p.nz, p.z_len) for p in requested}) != 1 or (not allow_nonconformal and len({p.ni for p in requested})!=1):
         raise ValueError("Число узлов ni, nz и высота z_len должны совпадать у блоков подканала")
-    if len({p.law == "wall_core" for p in requested}) != 1:
+    if not allow_nonconformal and len({p.law == "wall_core" for p in requested}) != 1:
         raise ValueError("Нельзя смешивать независимый слой и полную сетку в одном подканале")
     cA, rA, cB, rB, cC, rC = order_ccw(center_A, r_A, center_B, r_B, center_C, r_C)
     cA = np.asarray(cA, dtype=float); cB = np.asarray(cB, dtype=float); cC = np.asarray(cC, dtype=float)
@@ -370,19 +373,25 @@ def generate_subchannel_mesh(center_A, r_A, center_B, r_B, center_C, r_C, params
     min_jac = _check_quad_jacobians(blocks)
     is_layer = any(p.law == "wall_core" and not auto_fill_core for p in (p0, p1, p2, p3, p4, p5))
 
-    _validate_interfaces(blocks, interfaces, requested[0].pitch * 1e-11, layer_only=is_layer)
+    intended=interfaces
+    if allow_nonconformal:
+        interfaces,problems=partition_interfaces(blocks,intended,requested[0].pitch*1e-11,is_layer)
+    else:
+        _validate_interfaces(blocks, interfaces, requested[0].pitch * 1e-11, layer_only=is_layer)
+        problems=[]
 
     diagnostics = {
         "blocks": 6,
         "cells_2d": sum((bx.shape[0] - 1) * (bx.shape[1] - 1) for bx, by in blocks),
         "cells_3d": sum((bx.shape[0] - 1) * (bx.shape[1] - 1) * p0.nz for bx, by in blocks),
-        "min_jacobian": min_jac, "internal_interfaces": len(interfaces), "complete": not is_layer
+        "min_jacobian": min_jac, "internal_interfaces": len(interfaces), "complete": not is_layer, "interface_problems":problems
     }
     return SubchannelMeshResult(
         params=act0, blocks=blocks, subchannels_count=1, interfaces=interfaces,
         diagnostics=diagnostics, complete=not is_layer, layer_widths=w0,
         wall_starts=[True, False, True, False, True, False],
         geom_data=[g0, g1, g2, g3, g4, g5],
+        block_params=requested,intended_interfaces=tuple(intended),
         all_block_widths=[w0, w1, w2, w3, w4, w5]
     )
 
@@ -403,17 +412,17 @@ def _candidate_face_pairs(faces, tolerance):
             yield i, j
 
 
-def build_mesh_from_bundle_model(bundle_model, base_params, template_overrides=None, block_custom_overrides=None, selected_sub_ids=None, auto_fill_core=False, center_method="equi_clearance", hermite_tfi=False, progress_callback=None):
+def build_mesh_from_bundle_model(bundle_model, base_params, template_overrides=None, block_custom_overrides=None, selected_sub_ids=None, auto_fill_core=False, center_method="equi_clearance", hermite_tfi=False, progress_callback=None, allow_nonconformal=False):
     if template_overrides is None: template_overrides = {}
     if block_custom_overrides is None: block_custom_overrides = {}
 
-    sub_ids = list(bundle_model.selected_subchannels) if selected_sub_ids is None else list(selected_sub_ids)
+    sub_ids = sorted(bundle_model.selected_subchannels) if selected_sub_ids is None else list(selected_sub_ids)
     templates, instances = classify_subchannel_blocks(bundle_model, selected_sub_ids=sub_ids)
     inst_lookup = {(inst.subchannel_id, inst.block_index): inst for inst in instances}
 
     all_blocks = []; base_act = None; base_widths = None; all_interfaces = []
     skipped_peripheral = 0; instances_map = []; all_wall_starts = []; all_geom_data = []
-    block_metrics = []; all_block_widths = []
+    block_metrics = []; all_block_widths = []; all_params=[]; intended_interfaces=[]; problems=[]
 
     valid_subs = [sid for sid in sub_ids if sid in bundle_model.subchannels and bundle_model.subchannels[sid].sub_type in ("interior", "guide_sub", "instrument_sub") and len(bundle_model.subchannels[sid].rod_ids) == 3]
     skipped_peripheral = len(sub_ids) - len(valid_subs)
@@ -440,12 +449,13 @@ def build_mesh_from_bundle_model(bundle_model, base_params, template_overrides=N
             elif gid in block_custom_overrides: p_blk = block_custom_overrides[gid]
             elif tid in template_overrides: p_blk = template_overrides[tid]
             else: p_blk = base_params
-            if (p_blk.ni, p_blk.nz, p_blk.z_len) != (base_params.ni, base_params.nz, base_params.z_len):
+            if (p_blk.nz,p_blk.z_len)!=(base_params.nz,base_params.z_len) or (not allow_nonconformal and p_blk.ni!=base_params.ni):
                 raise ValueError("Переопределения должны сохранять общие ni, nz и z_len сетки")
             sub_p_list.append(p_blk)
             instances_map.append((sid, b_idx, tid, gid))
 
-        sub_res = generate_subchannel_mesh(cA, rA_m, cB, rB_m, cC, rC_m, sub_p_list, auto_fill_core=auto_fill_core, pt_center=pt_c, center_method=center_method, hermite_tfi=hermite_tfi)
+        sub_res = generate_subchannel_mesh(cA, rA_m, cB, rB_m, cC, rC_m, sub_p_list, auto_fill_core=auto_fill_core, pt_center=pt_c, center_method=center_method, hermite_tfi=hermite_tfi,allow_nonconformal=allow_nonconformal)
+        all_params.extend(sub_p_list)
         base_act = sub_res.params
         if base_widths is None: base_widths = sub_res.layer_widths
 
@@ -497,15 +507,19 @@ def build_mesh_from_bundle_model(bundle_model, base_params, template_overrides=N
                 growth_q=q_est, aspect_ratio_wall=ar_wall, special_param_str=spec_desc
             ))
 
+        for it in sub_res.intended_interfaces or sub_res.interfaces:
+            intended_interfaces.append(mc.BlockInterface(it.block_a+offset,it.face_a,it.block_b+offset,it.face_b,it.reversed))
+        for issue in sub_res.diagnostics.get("interface_problems",[]):
+            problems.append(dict(issue,block_a=issue["block_a"]+offset,block_b=issue["block_b"]+offset))
         for it in sub_res.interfaces:
             all_interfaces.append(mc.BlockInterface(
                 it.block_a + offset, it.face_a, it.block_b + offset, it.face_b, it.reversed
             ))
 
     layer_flags = {g["layer_thickness"] is not None and not auto_fill_core for g in all_geom_data}
-    if len(layer_flags) != 1:
+    if not allow_nonconformal and len(layer_flags) != 1:
         raise ValueError("Нельзя смешивать независимый слой и полную сетку в одной сборке")
-    is_layer_only = layer_flags == {True}
+    is_layer_only = True in layer_flags
     tol = base_params.pitch * 1e-11 if hasattr(base_params, "pitch") else 1e-11
     faces = []
     for k, (bx, by) in enumerate(all_blocks):
@@ -525,7 +539,16 @@ def build_mesh_from_bundle_model(bundle_model, base_params, template_overrides=N
                            or np.allclose(va[[0, -1]], vb[[-1, 0]], rtol=0, atol=tol))
         if endpoints_match and (va.shape != vb.shape or
                 min(np.max(np.abs(va - vb)), np.max(np.abs(va - vb[::-1]))) > tol):
-            raise ValueError("Несовместимые узлы на общей грани подканалов; согласуйте переопределения")
+            if not allow_nonconformal:
+                raise ValueError("Несовместимые узлы на общей грани подканалов; согласуйте переопределения")
+            reverse=bool(np.max(np.abs(va[[0,-1]]-vb[[-1,0]]))<np.max(np.abs(va[[0,-1]]-vb[[0,-1]])))
+            it=mc.BlockInterface(ka,fa,kb,fb,reverse)
+            # Internal intended pairs were already diagnosed above.
+            if not any({(t.block_a,t.face_a),(t.block_b,t.face_b)}=={(ka,fa),(kb,fb)} for t in intended_interfaces):
+                intended_interfaces.append(it)
+                _,issues=partition_interfaces(all_blocks,[it],tol)
+                problems.extend(issues)
+            continue
         if va.shape != vb.shape: continue
         pair_key = frozenset(((ka, fa), (kb, fb)))
         if pair_key in existing_pairs: continue
@@ -544,18 +567,24 @@ def build_mesh_from_bundle_model(bundle_model, base_params, template_overrides=N
         "cells_3d": sum((bx.shape[0] - 1) * (bx.shape[1] - 1) * base_params.nz for bx, by in all_blocks),
         "min_jacobian": min_jac, "matched_interfaces": len(all_interfaces),
         "skipped_peripheral": skipped_peripheral, "templates_count": len(templates),
-        "is_layer_only": is_layer_only
+        "is_layer_only": is_layer_only, "interface_problems":problems
     }
     return SubchannelMeshResult(
         params=base_act, blocks=all_blocks, subchannels_count=len(valid_subs),
         interfaces=tuple(all_interfaces), diagnostics=diagnostics, complete=not is_layer_only,
         layer_widths=base_widths, templates=templates, instances_map=instances_map,
         wall_starts=all_wall_starts, geom_data=all_geom_data, block_metrics=block_metrics,
-        all_block_widths=all_block_widths
+        all_block_widths=all_block_widths,block_params=all_params,
+        intended_interfaces=tuple(dict.fromkeys([*intended_interfaces,*all_interfaces]))
     )
 
-def fill_subchannel_core(layer_result, bundle_model, growth=1.1, max_size=100e-6, max_cells=5000, transition_ratio=1.0, core_mode="cfd_growth", core_layers=20, hermite_tfi=False, align_core=False, progress_callback=None):
+def fill_subchannel_core(layer_result, bundle_model, growth=1.1, max_size=100e-6, max_cells=5000, transition_ratio=1.0, core_mode="cfd_growth", core_layers=20, hermite_tfi=False, align_core=False, progress_callback=None, allow_nonconformal=False, core_overrides=None, _group=False):
     if layer_result.complete: return layer_result
+    if allow_nonconformal and not _group:
+        from bundle_core_groups import fill_groups
+        return fill_groups(layer_result,bundle_model,dict(growth=growth,max_size=max_size,max_cells=max_cells,
+            transition_ratio=transition_ratio,core_mode=core_mode,core_layers=core_layers,
+            hermite_tfi=hermite_tfi,align_core=align_core),core_overrides or {},progress_callback)
     align_core = align_core or core_mode == 'aspect_alignment'
     p = layer_result.params; ni = p.ni; blocks = layer_result.blocks
     if any(x.shape != y.shape or x.shape[0] != ni for x, y in blocks):
@@ -578,7 +607,7 @@ def fill_subchannel_core(layer_result, bundle_model, growth=1.1, max_size=100e-6
     combined_rem = np.concatenate(all_rem_lines)
     h0_combined = np.full(len(combined_rem), last_w, dtype=float)
 
-    if core_mode == 'controlled_growth' or align_core:
+    if core_mode in ('controlled_growth','fixed_count') or align_core:
         h0_combined = np.concatenate([np.asarray(layer_result.all_block_widths[i])[:,-1]
             if i<len(layer_result.all_block_widths) else np.full(ni,last_w) for i in range(len(blocks))])
     h0_first = last_w * float(transition_ratio)
@@ -633,13 +662,19 @@ def fill_subchannel_core(layer_result, bundle_model, growth=1.1, max_size=100e-6
         orig_w = layer_result.all_block_widths[idx] if idx < len(layer_result.all_block_widths) else layer_result.layer_widths
         filled_block_widths.append(np.column_stack((orig_w, widths_block)))
 
-    _validate_interfaces(filled_blocks, layer_result.interfaces, p.pitch * 1e-11)
+    intended=layer_result.intended_interfaces or layer_result.interfaces
+    if allow_nonconformal:
+        final_interfaces,problems=partition_interfaces(filled_blocks,intended,p.pitch*1e-11)
+    else:
+        _validate_interfaces(filled_blocks, layer_result.interfaces, p.pitch * 1e-11)
+        final_interfaces=layer_result.interfaces;problems=[]
     new_nj = filled_blocks[0][0].shape[1]
     new_p = mc.replace(p, nj=new_nj)
     min_jac = _check_quad_jacobians(filled_blocks)
 
     diag = dict(layer_result.diagnostics)
     diag["complete"] = True
+    diag["interface_problems"]=problems
     diag["cells_2d"] = len(filled_blocks) * (new_p.ni - 1) * (new_nj - 1)
     diag["cells_3d"] = diag["cells_2d"] * new_p.nz
     diag["min_jacobian"] = min_jac
@@ -673,7 +708,8 @@ def fill_subchannel_core(layer_result, bundle_model, growth=1.1, max_size=100e-6
 
     return SubchannelMeshResult(
         params=new_p, blocks=filled_blocks, subchannels_count=layer_result.subchannels_count,
-        interfaces=layer_result.interfaces, diagnostics=diag, complete=True,
+        interfaces=final_interfaces, diagnostics=diag, complete=True,
+        intended_interfaces=tuple(intended),block_params=layer_result.block_params,
         layer_widths=layer_result.layer_widths, templates=layer_result.templates,
         instances_map=layer_result.instances_map, wall_starts=layer_result.wall_starts,
         geom_data=layer_result.geom_data, block_metrics=updated_metrics,
@@ -681,6 +717,8 @@ def fill_subchannel_core(layer_result, bundle_model, growth=1.1, max_size=100e-6
     )
 
 def export_subchannel_plot3d(result, filename, progress_callback=None):
+    if any(i['kind']=='geometry_mismatch' for i in getattr(result,'diagnostics',{}).get('interface_problems',[])):
+        raise ValueError('Экспорт заблокирован: геометрия стыков не совпадает. Исправьте щели/пересечения блоков.')
     if not result.complete:
         raise ValueError("Нельзя экспортировать неполную сетку: сначала заполните ядро")
     p, nz, z_len = result.params, result.params.nz, result.params.z_len

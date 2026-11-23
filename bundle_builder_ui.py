@@ -258,6 +258,7 @@ class BundleBuilderUiMixin:
         self.on_diagnostic_metric_changed()
         lay_canvas.addLayout(diagnostics_bar)
         self.canvas_mesh.mpl_connect('button_press_event',self.on_diagnostic_click)
+        self.canvas_mesh.mpl_connect('button_press_event',self.on_select_mesh_block)
 
 
         mesh_output_splitter=QSplitter(Qt.Vertical,self)

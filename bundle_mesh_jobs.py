@@ -148,6 +148,11 @@ def analyse_subchannel_result(result, progress):
     tolerance=1e-10*float(np.linalg.norm(hi-lo))
     interfaces=[(it.block_a,it.face_a,it.block_b,it.face_b,it.reversed)
         for it in result.interfaces if result.complete or not it.face_a.startswith('j_')]
-    return quality.analyse_blocks(blocks(),interfaces=interfaces,
+    report=quality.analyse_blocks(blocks(),interfaces=interfaces,
         block_count=len(result.blocks),tolerance=tolerance,
         progress_callback=lambda fraction,text:progress(55+int(37*fraction),text))
+    issues=result.diagnostics.get('interface_problems',[])
+    if issues:
+        report['interface_problems']=issues
+        report['warnings'].append(f'Проблемных стыков: {len(issues)}. Их показатели не входят в метрики конформных интерфейсов.')
+    return report

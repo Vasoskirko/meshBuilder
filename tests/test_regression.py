@@ -73,7 +73,10 @@ class CoreRegressionTests(unittest.TestCase):
         cls.temp.cleanup()
 
     def compare(self, a, b):
-        self.assertEqual(dataclasses.asdict(a.params), dataclasses.asdict(b.params))
+        from bundle_local_core import DEFAULTS
+        actual=dataclasses.asdict(b.params)
+        self.assertEqual({k:actual[k] for k in DEFAULTS},DEFAULTS)
+        self.assertEqual(dataclasses.asdict(a.params),{k:v for k,v in actual.items() if k not in DEFAULTS})
         self.assertEqual(len(a.blocks), len(b.blocks))
         for ba, bb in zip(a.blocks, b.blocks):
             for xa, xb in zip(ba, bb):

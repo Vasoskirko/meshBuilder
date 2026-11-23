@@ -19,6 +19,8 @@ def surface_signature(lines, height):
 
 def export_geometry(result, model):
     """Use the actual block order, not the mutable GUI selection order."""
+    from mesh_interface_diagnostics import require_star_conformity
+    require_star_conformity(result)
     blocks = result.blocks
     instances = getattr(result, 'instances_map', [])
     signatures = []

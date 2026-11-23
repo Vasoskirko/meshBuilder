@@ -124,7 +124,7 @@ class MeshForecastDiagnosticsTests(unittest.TestCase):
             self.assertFalse(any(artist.get_gid()=='mesh-variant-a' for artist in w.ax_mesh.collections))
             error.assert_not_called()
         p.radio_template.setChecked(True)
-        self.assertFalse(p.fields['ni'].isEnabled());self.assertIn('наследует общие',p.lbl_parameter_origin.text())
+        self.assertTrue(p.fields['ni'].isEnabled());self.assertIn('наследует общие',p.lbl_parameter_origin.text())
         p.fields['h1'].setValue(p.fields['h1'].value()*1.01);p.fields['h1'].edited.emit()
         self.assertIn('собственные',p.lbl_parameter_origin.text())
         p.radio_block.setChecked(True);self.assertIn('шаблон T',p.lbl_parameter_origin.text())

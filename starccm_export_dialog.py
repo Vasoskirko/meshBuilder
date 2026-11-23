@@ -579,6 +579,10 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         if getattr(self,'_export_job',None) is not None:return
         if not getattr(self.mesh_result,'complete',True):
             QMessageBox.warning(self,'Экспорт недоступен','Сначала заполните ядро сетки.');return
+        from mesh_interface_diagnostics import require_star_conformity
+        try:require_star_conformity(self.mesh_result)
+        except ValueError as exc:
+            QMessageBox.warning(self,'Экспорт недоступен',str(exc));return
         import starccm_macro_generator as smg
         import mesh_subchannel as ms
 
