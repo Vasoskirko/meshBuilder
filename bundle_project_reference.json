@@ -1,0 +1,128 @@
+{
+  "format": "meshBuilder-bundle-project",
+  "version": 2,
+  "geometry": {
+    "lattice": {
+      "s_flat": 65.0,
+      "pitch": 11.64,
+      "d_fuel": 9.1,
+      "d_guide": 12.0,
+      "d_instrument": 10.3
+    },
+    "rod_types": [],
+    "rod_diameters": [],
+    "deleted": [],
+    "auto_deleted": [],
+    "selected": [
+      {
+        "id": 18,
+        "rods": [
+          [
+            -1,
+            1
+          ],
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            1
+          ]
+        ]
+      },
+      {
+        "id": 22,
+        "rods": [
+          [
+            -1,
+            1
+          ],
+          [
+            -1,
+            2
+          ],
+          [
+            0,
+            1
+          ]
+        ]
+      }
+    ]
+  },
+  "mesh": {
+    "base": {
+      "d_rod": 0.0091,
+      "pitch": 0.011640000000000001,
+      "z_len": 0.3,
+      "ni": 45,
+      "nj": 200,
+      "nz": 1000,
+      "h1": 1.163e-06,
+      "hmax": 3e-05,
+      "full": true,
+      "law": "wall_core",
+      "mode": "layer_first_growth",
+      "shape": 1.02,
+      "wall_layers": 20,
+      "transition_layers": 12,
+      "smoothing": "auto",
+      "smoothing_percent": 0.5,
+      "max_transition_layers": 64,
+      "max_auto_cells": 5000,
+      "filename": "two_channels.xyz",
+      "layer_thickness": 0.0003019994356062327,
+      "layer_growth": 1.15,
+      "local_core_mode": "inherit",
+      "local_core_growth": 1.1,
+      "local_core_size": 0.00012,
+      "local_core_limit": 5000,
+      "local_core_layers": 20,
+      "local_core_transition": 1.1,
+      "local_core_hermite": false
+    },
+    "templates": {},
+    "blocks": {},
+    "core": {
+      "core_transition": 1.2,
+      "core_growth": 1.1,
+      "core_max_size": 9.999999999999999e-05,
+      "core_max_cells": 5000,
+      "core_layers": 20,
+      "mode": "controlled_growth",
+      "mesh_lines": true,
+      "core_lines": false,
+      "center": "equi_clearance",
+      "unit": "мкм"
+    }
+  },
+  "calculator": {
+    "conductivity_model": "background",
+    "fluid_mode": "Вода IAPWS-97 (T, P)",
+    "gas": "Воздух",
+    "temp_c": "290",
+    "press_mpa": "16.2",
+    "density": "747.339081",
+    "dyn_vis": "9.2717500e-05",
+    "re": "200000",
+    "vel": "2.0",
+    "flow": "0.15",
+    "yplus": "0.8",
+    "flow_mode": "reynolds"
+  },
+  "export": null,
+  "view": {
+    "scope": "all",
+    "template": 1,
+    "block": 1,
+    "tab": 1,
+    "detail": 1,
+    "geometry_inputs": [
+      65.0,
+      11.64,
+      9.1,
+      12.0,
+      10.3
+    ]
+  }
+}
