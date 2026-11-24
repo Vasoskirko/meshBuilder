@@ -151,20 +151,28 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
             panel.combo_center_method.currentData(),
             panel.combo_mesh_lines.currentData() if any(p.law != "wall_core" for p in [self.base_params,*self.template_configs.values(),*self.block_custom_configs.values()]) else False,
         ))
-        from bundle_block_editor import core_state
-        data=core_state(panel) if panel.scope_mode=='all' else getattr(panel,'_global_core_state',core_state(panel))
+        from bundle_block_editor import core_state,pending_mixed_fields,CORE_WIDGETS
+        if not any(p.law=='wall_core' for p in [self.base_params,*self.template_configs.values(),*self.block_custom_configs.values()]):return layer,None
+        try:
+            visible=core_state(panel) if panel.current_law()=='wall_core' else None
+        except ValueError:
+            return layer,('invalid_core_draft',)
+        data=visible if panel.scope_mode=='all' and visible is not None else getattr(panel,'_global_core_state',visible)
+        if data is None:data=core_state(panel)
         def active_core(d):
             keys=('local_core_mode','local_core_transition','local_core_layers','local_core_hermite') if d['local_core_mode']=='fixed_count' else ('local_core_mode','local_core_transition','local_core_growth','local_core_size','local_core_limit')
             return {k:d[k] for k in keys}
         core=(active_core(data),[{k:active_core({n:getattr(v,n) for n in DEFAULTS}) for k,v in mapping.items() if v.local_core_mode!='inherit'} for mapping in (self.template_configs,self.block_custom_configs)]) if any(p.law=='wall_core' for p in [self.base_params,*self.template_configs.values(),*self.block_custom_configs.values()]) else None
+        if core is not None and panel.scope_mode!='all' and visible is not None and (active_core(visible)!=active_core(getattr(panel,'_display_core',visible)) or pending_mixed_fields(panel).intersection(CORE_WIDGETS[k] for k in active_core(visible) if k in CORE_WIDGETS)):
+            core=(core,'pending_local_core',active_core(visible))
         return layer, core
 
     def validate_mesh_inputs(self, *args):
         if self._layer_inputs is None and self._mesh_inputs is None:
             return
         try:
-            # Commit axial drafts even if focus/editingFinished has not fired.
-            self.mesh_subpanel.sync_global_axial(self.mesh_subpanel.read_params())
+            # Commit visible wall drafts before direct export/fill checks too.
+            self.mesh_subpanel.save_current_ui_to_active_scope()
             layer, core = self.mesh_inputs()
         except ValueError:
             layer, core = None, None

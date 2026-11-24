@@ -366,6 +366,9 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         self.lbl_status.setWordWrap(True)
         self.lbl_status.hide()  # Detailed status is displayed once, in the mesh journal.
 
+        self.law.activated.connect(self.on_field_changed)
+        self.goal.activated.connect(self.on_field_changed)
+        self.combo_core_mode.activated.connect(self.on_core_field_changed)
         layout.addStretch()
 
     def number(self, key, val, factor=1.0, minimum=0.0, maximum=1e12, onchange=None):
@@ -381,7 +384,7 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         w.setRange(minimum, maximum)
         w.setValue(val)
         w.setKeyboardTracking(False)
-        w.valueChanged.connect(self.on_field_changed if onchange is None else onchange)
+        w.edited.connect(self.on_field_changed if onchange is None else onchange)
         self.fields[key] = w
         return w
 
@@ -485,8 +488,17 @@ class MeshSubpanel(QWidget if HAS_QT else object):
     def on_core_field_changed(self):
         if self.updating:
             return
-        from bundle_block_editor import save_core
-        save_core(self)
+        from bundle_block_editor import save_core,CORE_WIDGETS
+        sender=self.sender()
+        explicit={key for key,widget in CORE_WIDGETS.items() if self.fields[widget] is sender}
+        if sender is self.combo_core_mode:explicit.add('local_core_mode')
+        if sender is self.combo_core_lines:explicit.add('local_core_hermite')
+        try:save_core(self,explicit)
+        except ValueError as exc:
+            self.parent_window.validate_mesh_inputs()
+            self.lbl_status.setText(f'Проверьте ввод ядра: {exc}')
+            return
+        self.update_tree_status()
         self.parent_window.validate_mesh_inputs()
         self.update_core_preview()
 
@@ -600,7 +612,12 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         self.update_live_advisor_hint()
         self.update_core_preview()
         try:
-            self.save_current_ui_to_active_scope()
+            sender=self.sender()
+            mapping={'layers':'nj','layer_cells':'wall_layers','growth_limit':'shape'}
+            explicit={mapping.get(key,key) for key,widget in self.fields.items() if widget is sender}
+            if sender is self.law or sender is self.hyper_func:explicit.add('law')
+            if sender is self.goal:explicit.add('mode')
+            self.save_current_ui_to_active_scope(explicit)
         except ValueError as exc:
             self.parent_window.validate_mesh_inputs()
             self.lbl_status.setText(f"Проверьте ввод: {exc}")
@@ -813,9 +830,9 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         from bundle_block_editor import targets
         return targets(self)
 
-    def save_current_ui_to_active_scope(self):
+    def save_current_ui_to_active_scope(self,explicit=()):
         from bundle_block_editor import save
-        save(self)
+        save(self,explicit)
 
     def load_active_scope_to_ui(self):
         if self.scope_mode == "all":

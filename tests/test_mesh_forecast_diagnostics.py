@@ -143,7 +143,8 @@ class MeshForecastDiagnosticsTests(unittest.TestCase):
             with patch('bundle_subchannel_builder.ms.fill_subchannel_core') as fill:
                 w.on_fill_core_clicked();fill.assert_not_called()
             self.assertIsNone(w.current_layer_result);self.assertFalse(w.can_export_mesh())
-            self.assertTrue(error.called);error.reset_mock()
+            error.assert_not_called()
+            self.assertIn('Сетка устарела',w.mesh_console.toPlainText())
             w.on_build_layer_only()
             p.combo_core_mode.setCurrentIndex(p.combo_core_mode.findData('fixed_count'))
             p.fields['core_max_size'].setText('invalid')

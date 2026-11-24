@@ -1,6 +1,6 @@
 """Batch editor helpers: patch changed fields, never copy an entire anchor block."""
 from dataclasses import asdict,replace
-from PySide6.QtCore import Qt,QSignalBlocker
+from PySide6.QtCore import Qt,QSignalBlocker,Signal
 from bundle_local_core import DEFAULTS
 
 CORE_WIDGETS=dict(local_core_growth='core_growth',local_core_size='core_max_size',
@@ -29,15 +29,22 @@ def effective_core(panel,gid):
     return dict(getattr(panel,'_global_core_state',core_state(panel)))
 
 
-def save(panel):
+def pending_mixed_fields(panel):
+    return {name for name in getattr(panel,'_mixed_anchors',{})
+            if (panel.fields[name] if hasattr(panel.fields[name],'model') else panel.fields[name].lineEdit()).text()!='Разные значения'}
+
+
+def save(panel,explicit=()):
+    mapping={'layers':'nj','layer_cells':'wall_layers','growth_limit':'shape'}
+    explicit=set(explicit)|{mapping.get(k,k) for k in pending_mixed_fields(panel)}
     p=panel.read_params();panel.sync_global_axial(p);w=panel.parent_window
     baseline=getattr(panel,'_display_params',p)
-    changed={k:v for k,v in asdict(p).items() if v!=getattr(baseline,k)}
+    changed={k:v for k,v in asdict(p).items() if v!=getattr(baseline,k) or k in explicit}
     from mesh_project import merge_project_inputs
     if panel.scope_mode=='all':w.base_params=merge_project_inputs(w.base_params,p)
     elif panel.scope_mode=='template':
         tid=panel.combo_templates.currentData()
-        if tid is not None:w.template_configs[tid]=merge_project_inputs(w.template_configs.get(tid,w.base_params),p)
+        if tid is not None and (changed or tid in w.template_configs):w.template_configs[tid]=merge_project_inputs(w.template_configs.get(tid,w.base_params),p)
     else:
         for gid in targets(panel):
             old=effective(panel,gid)
@@ -55,21 +62,26 @@ def core_state(panel):
     data={}
     for k,v in CORE_WIDGETS.items():
         w=panel.fields[v];edit=w if hasattr(w,'model') else w.lineEdit()
+        if v in active and not hasattr(w,'model') and edit.text()!='Разные значения':
+            if not w.hasAcceptableInput():raise ValueError(f'{v}: проверьте число слоёв ядра')
+            with QSignalBlocker(w):w.interpretText()
         data[k]=w.model.raw if hasattr(w,'model') and (v not in active or edit.text()=='Разные значения') else w.value()
     data.update(local_core_mode=panel.combo_core_mode.currentData(),local_core_hermite=bool(panel.combo_core_lines.currentData()))
     return data
 
 
-def save_core(panel):
+def save_core(panel,explicit=()):
+    pending=pending_mixed_fields(panel)
+    explicit=set(explicit)|{key for key,widget in CORE_WIDGETS.items() if widget in pending}
     data=core_state(panel);w=panel.parent_window
-    if panel.scope_mode!='all' and data==getattr(panel,'_display_core',data):return
+    if panel.scope_mode!='all' and not explicit and data==getattr(panel,'_display_core',data):return
     if panel.scope_mode=='all':panel._global_core_state=data
     elif panel.scope_mode=='template':
         tid=panel.combo_templates.currentData()
         if tid is not None:w.template_configs[tid]=replace(w.template_configs.get(tid,w.base_params),**data)
     else:
         previous=getattr(panel,'_display_core',data)
-        patch={k:v for k,v in data.items() if v!=previous.get(k)}
+        patch={k:v for k,v in data.items() if v!=previous.get(k) or k in explicit}
         for gid in targets(panel):
             old=effective(panel,gid)
             inherited=asdict(old) if old.local_core_mode!='inherit' else effective_core(panel,gid)
@@ -153,11 +165,20 @@ from PySide6.QtGui import QValidator
 from number_field import NumberField
 
 class MixedSpinBox(QSpinBox):
+    edited=Signal()
     def __init__(self,*args):
-        self._mixed=False
+        self._mixed=False;self._mixed_input=False
         super().__init__(*args)
         self.lineEdit().textEdited.connect(self._typed)
-    def _typed(self,*args):self._mixed=False
+        self.valueChanged.connect(lambda *_:self.edited.emit())
+        self.editingFinished.connect(self._finished)
+    def _typed(self,*args):
+        self._mixed_input=self._mixed_input or self._mixed
+        self._mixed=False
+    def _finished(self):
+        if self._mixed_input and self.hasAcceptableInput():
+            self._mixed_input=False
+            self.edited.emit()
     def textFromValue(self,value):
         return 'Разные значения' if self._mixed else super().textFromValue(value)
     def valueFromText(self,text):
