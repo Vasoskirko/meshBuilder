@@ -421,6 +421,9 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         btn_cancel.clicked.connect(self.reject)
         b_box.addWidget(btn_cancel)
         main_lay.addLayout(b_box)
+        self.generate_button = btn_gen
+        from starccm_tmc_ui import add_tmc_ui
+        add_tmc_ui(self, main_lay, lbl_header)
 
     def update_dependencies(self):
         self.spin_n_planes.setEnabled(self.chk_g_n_planes.isChecked())
@@ -481,6 +484,9 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
             self.lbl_sub_dz_hint.setText(f"• Шаг между сечениями ячейки при M = {m}: Δz_sub = {dz_sub_mm:.2f} мм")
 
     def read_options(self):
+        from starccm_tmc_ui import tmc_options
+        if self.export_mode.currentData() == "tmc_reference":
+            return tmc_options(self)
         w_mode = "by_rod"
         if self.rb_wall_60.isChecked():
             w_mode = "sectors_60"
@@ -490,6 +496,8 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         sel_subs = [idx + 1 for idx, cb in enumerate(self.sub_checkboxes) if cb.isChecked()]
 
         return {
+            "export_mode": "general",
+            "tmc_settings": dict(self._tmc_last_valid),
             "import_mesh": self.chk_import.isChecked(),
             "inner_fuse": True,
             "inter_fuse": self.rb_inter_fuse.isChecked(),
@@ -560,6 +568,9 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
             for name, checkbox in checkboxes.items(): checkbox.setChecked(name in values[key])
         self.spin_mean_start.setValue(values['mean_start_step'])
         self.field_time_step.setValue(values['time_step'])
+        from starccm_tmc_ui import apply_tmc_settings
+        apply_tmc_settings(self, values["tmc_settings"])
+        self.export_mode.setCurrentIndex(self.export_mode.findData(values["export_mode"]))
         self.update_dz_hint()
         self.update_dependencies()
 
@@ -577,6 +588,10 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
 
     def generate_and_save(self):
         if getattr(self,'_export_job',None) is not None:return
+        if self.export_mode.currentData() == 'tmc_reference':
+            from starccm_tmc_ui import export_tmc
+            export_tmc(self)
+            return
         if not getattr(self.mesh_result,'complete',True):
             QMessageBox.warning(self,'Экспорт недоступен','Сначала заполните ядро сетки.');return
         from mesh_interface_diagnostics import require_star_conformity

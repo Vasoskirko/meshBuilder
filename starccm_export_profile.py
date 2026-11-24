@@ -1,5 +1,7 @@
 """Portable, validated STAR export settings; no mesh or solver state is stored."""
 import json
+from copy import deepcopy
+from starccm_tmc_export import TMC_DEFAULTS,validate_tmc_settings,canonical_tmc_options
 import math
 import os
 import tempfile
@@ -21,7 +23,7 @@ REPORT_CHOICES = {
 MEAN_CHOICES = {'velocity': 'Вектор скорости', 'pressure': 'Давление',
     'temperature': 'Температура', 'density': 'Плотность', 'viscosity': 'Динамическая вязкость',
     'wall_shear': 'Вектор напряжения трения на стержнях', 'wall_heat_flux': 'Плотность теплового потока на стержнях'}
-DEFAULTS = dict(import_mesh=True, inner_fuse=True, inter_fuse=False,
+DEFAULTS = dict(export_mode='general',tmc_settings=deepcopy(TMC_DEFAULTS),import_mesh=True, inner_fuse=True, inter_fuse=False,
     region_mode='by_subchannel', inlet_outlet_mode='by_subchannel', rename_boundaries=True,
     rod_wall_mode='by_rod', turbulence_model='rst', use_iapws=False,
     enable_thermal=True, enable_gravity=False, gravity_axis="-Z", evaluate_solution_reports=False, create_parameters=True, create_physics=True,
@@ -30,14 +32,15 @@ DEFAULTS = dict(import_mesh=True, inner_fuse=True, inter_fuse=False,
     key_planes=True, sub_planes=True, axis_probes=True, selected_subchannels=[],
     create_bad_cells=True, group_objects=True, create_summary=True, create_field_functions=True, initialize_solution=True,
     field_functions=list(FIELD_CHOICES), subchannel_reports=[], time_mean_fields=[], mean_start_step=1, time_step=1e-4)
-ENUMS = dict(gravity_axis=('-X','+X','-Y','+Y','-Z','+Z'), region_mode=('by_subchannel','monolithic'), inlet_outlet_mode=('by_subchannel','single'),
+ENUMS = dict(export_mode=('general','tmc_reference'),gravity_axis=('-X','+X','-Y','+Y','-Z','+Z'), region_mode=('by_subchannel','monolithic'), inlet_outlet_mode=('by_subchannel','single'),
     rod_wall_mode=('by_rod','sectors_60','monolithic'), turbulence_model=('rst','hybrid_srh'))
 
 
 def validate_options(options, sub_count=None):
     if not isinstance(options,dict) or set(options)-set(DEFAULTS):
         raise ValueError('Неизвестные параметры профиля экспорта')
-    values=dict(DEFAULTS,**options)
+    values=deepcopy(DEFAULTS);values.update(deepcopy(options))
+    values['tmc_settings']=validate_tmc_settings(values['tmc_settings'])
     dt=values['time_step']
     if isinstance(dt,bool) or not isinstance(dt,(int,float)) or not math.isfinite(dt) or dt<=0:
         raise ValueError('Шаг времени Δt должен быть конечным положительным числом секунд')
@@ -69,6 +72,10 @@ def validate_options(options, sub_count=None):
             raise ValueError('Несовместимые параметры Fuse')
     elif values['region_mode']!='by_subchannel' or values['inlet_outlet_mode']!='by_subchannel' or values['rod_wall_mode']=='monolithic':
         raise ValueError('Несовместимые параметры Internal Interface')
+    if values['export_mode']=='tmc_reference':
+        if sub_count is not None and sub_count!=2:raise ValueError('Эталон TMC поддерживает два подканала')
+        for key,value in canonical_tmc_options(values['tmc_settings']).items():
+            if values[key]!=value:raise ValueError(f'TMC требует согласованную настройку {key}')
     return values
 
 
