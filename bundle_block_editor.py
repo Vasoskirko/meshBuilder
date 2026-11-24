@@ -198,3 +198,14 @@ class MixedNumberField(NumberField):
         return self.model.raw if self.text()=='Разные значения' else super().value()
     def _finish(self):
         if self.text()!='Разные значения':super()._finish()
+
+
+def core_build_options(panel):
+    """Snapshot global defaults; local overrides are resolved against the result."""
+    data=core_state(panel) if panel.scope_mode=='all' else getattr(panel,'_global_core_state',None)
+    if data is None:data=core_state(panel)
+    return dict(core_mode=data['local_core_mode'],growth=data['local_core_growth'],
+                max_size=data['local_core_size'],max_cells=data['local_core_limit'],
+                core_layers=data['local_core_layers'],transition_ratio=data['local_core_transition'],
+                hermite_tfi=data['local_core_mode']=='fixed_count' and data['local_core_hermite'],
+                align_core=data['local_core_mode']=='aspect_alignment')

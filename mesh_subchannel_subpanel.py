@@ -338,6 +338,7 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         self.btn_estimate_mesh.clicked.connect(self.parent_window.on_estimate_mesh)
         layout.addWidget(self.btn_estimate_mesh)
         self.btn_build = QPushButton("Собрать полную 3D сетку", self)
+        self.btn_build.setToolTip("Строит всю выбранную сетку. Для независимого слоя выполняет оба этапа: пристеночный слой и ядро с общими/локальными настройками.")
         self.btn_build.setProperty("btnClass", "primary")
         self.btn_build.setMinimumHeight(32)
         self.btn_build.clicked.connect(self.parent_window.on_build_multiblock_mesh)

@@ -41,3 +41,15 @@ def fill_groups(layer,model,defaults,overrides,progress):
     return replace(layer,blocks=blocks,interfaces=interfaces,diagnostics=diag,complete=True,
         params=replace(layer.params,nj=blocks[0][0].shape[1]),all_block_widths=widths,intended_interfaces=intended,
         block_metrics=[m for m in metrics if m is not None])
+
+
+def fill_with_overrides(layer,model,base,templates,blocks,options,progress=None):
+    """Shared by full-build and refill; no GUI reads occur in the worker."""
+    from bundle_local_core import inherited_settings
+    from mesh_subchannel import fill_subchannel_core
+    overrides={}
+    for i,(sid,sector,tid,gid) in enumerate(layer.instances_map):
+        config=inherited_settings(base,templates.get(tid),blocks.get((sid,sector),blocks.get(gid)))
+        if config:overrides[i]=config
+    return fill_subchannel_core(layer,model,**options,allow_nonconformal=True,
+                               core_overrides=overrides,progress_callback=progress)

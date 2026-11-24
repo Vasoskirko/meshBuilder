@@ -43,7 +43,8 @@ class BundleMeshInvalidationTests(unittest.TestCase):
             self.w.base_params = replace(self.w.base_params, law='wall_core',
                 mode='layer_first_growth', wall_layers=4, h1=5e-6, layer_growth=1.1)
             self.p.apply_params(self.w.base_params)
-        self.w.on_build_multiblock_mesh()
+        if self.w.base_params.law=='wall_core':self.w.on_build_layer_only()
+        else:self.w.on_build_multiblock_mesh()
         self.critical.assert_not_called()
         self.assertIsNotNone(self.w.current_mesh_result)
 

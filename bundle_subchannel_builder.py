@@ -993,7 +993,8 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
         if not self.model.selected_subchannels:
             return
         try:
-            self.mesh_subpanel.save_current_ui_to_active_scope()
+            from bundle_project import commit_active_inputs
+            commit_active_inputs(self)
         except ValueError as exc:
             self.validate_mesh_inputs()
             QMessageBox.warning(self, "Проверьте ввод", str(exc))
@@ -1012,6 +1013,8 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
             template_snapshot=deepcopy(self.template_configs)
             block_snapshot=deepcopy(self.block_custom_configs)
             hermite_snapshot=bool(self.mesh_subpanel.combo_mesh_lines.currentData())
+            from bundle_block_editor import core_build_options
+            core_options=core_build_options(self.mesh_subpanel) if is_layer_mode else None
             def compute(progress):
                 progress(5,"Расчёт геометрии и координат сетки")
                 res = ms.build_mesh_from_bundle_model(
@@ -1022,19 +1025,28 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
                     auto_fill_core=False if is_layer_mode else True,
                     center_method=cm_method,
                     hermite_tfi=hermite_snapshot,
-                    progress_callback=lambda fraction,text:progress(5+int(48*fraction),text),
+                    progress_callback=lambda fraction,text:progress(5+int(25*fraction),text),
                     allow_nonconformal=True,
                 )
+                layer_res=res if not res.complete else None
+                if layer_res is not None:
+                    from bundle_core_groups import fill_with_overrides
+                    progress(30,'Заполнение ядра полной сетки')
+                    res=fill_with_overrides(layer_res,model_snapshot,base_p,template_snapshot,block_snapshot,
+                        core_options,lambda fraction,text:progress(30+int(23*fraction),text))
                 rep = analyse_subchannel_result(res,progress)
                 progress(92,"Расчёт завершён")
 
-                return res,rep
+                return res,rep,layer_res
             def completed(payload):
-                res,rep=payload
+                res,rep,layer_res=payload
                 if not self.confirm_interface_problems(res):return
                 self.clear_mesh_diagnostics()
                 self.current_mesh_result = res
                 self.accept_mesh_inputs(res)
+                if layer_res is not None:
+                    self.current_layer_result=layer_res
+                    self._layer_inputs=self.mesh_inputs()[0]
                 self.current_quality_report = rep
                 self.mesh_subpanel.btn_quality.setEnabled(True)
                 self.mesh_subpanel.btn_export.setEnabled(res.complete and not any(i['kind']=='geometry_mismatch' for i in res.diagnostics.get('interface_problems',[])))
@@ -1065,45 +1077,20 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
         if layer_src is None:
             return
         try:
-            f = self.mesh_subpanel.fields
-            cmode=self.mesh_subpanel.combo_core_mode.currentData()
             from bundle_project import commit_active_inputs
             commit_active_inputs(self)
             if self.current_layer_result is not layer_src:raise ValueError('Параметры слоя изменены; перестройте пристеночный слой перед заполнением ядра')
-            growth=f['core_growth'].value() if cmode!='fixed_count' else 1.1
-            maxsize=f['core_max_size'].value() if cmode!='fixed_count' else .00012
-            maxcells=f['core_max_cells'].value() if cmode!='fixed_count' else 5000
-            q_trans=f['core_transition'].value()
-            clayers=f['core_layers'].value()
-            h_tfi = cmode == 'fixed_count' and bool(self.mesh_subpanel.combo_core_lines.currentData())
-            align_core = cmode == 'aspect_alignment'
             model_snapshot=deepcopy(self.model)
             template_snapshot=deepcopy(self.template_configs)
             block_snapshot=deepcopy(self.block_custom_configs)
-            from bundle_local_core import inherited_settings
-            core_overrides={}
-            for i,row in enumerate(layer_src.instances_map):
-                sid,sector,tid,gid=row
-                config=inherited_settings(self.base_params,template_snapshot.get(tid),block_snapshot.get(gid))
-                if config:core_overrides[i]=config
-            global_core=getattr(self.mesh_subpanel,'_global_core_state',None)
-            if global_core:
-                cmode=global_core['local_core_mode'];growth=global_core['local_core_growth'];maxsize=global_core['local_core_size'];maxcells=global_core['local_core_limit'];clayers=global_core['local_core_layers'];q_trans=global_core['local_core_transition'];h_tfi=global_core['local_core_hermite']
+            base_snapshot=self.base_params
+            from bundle_block_editor import core_build_options
+            core_options=core_build_options(self.mesh_subpanel)
             def compute(progress):
+                from bundle_core_groups import fill_with_overrides
                 progress(5,"Расчёт геометрии и координат сетки")
-                full_res = ms.fill_subchannel_core(
-                    layer_src,
-                    model_snapshot,
-                    growth=growth,
-                    max_size=maxsize,
-                    max_cells=maxcells,
-                    transition_ratio=q_trans,
-                    core_mode=cmode,
-                    core_layers=clayers,
-                    hermite_tfi=h_tfi,
-                    align_core=align_core,allow_nonconformal=True,core_overrides=core_overrides,
-                    progress_callback=lambda fraction,text:progress(15+int(35*fraction),text),
-                )
+                full_res=fill_with_overrides(layer_src,model_snapshot,base_snapshot,template_snapshot,
+                    block_snapshot,core_options,lambda fraction,text:progress(15+int(35*fraction),text))
                 rep = analyse_subchannel_result(full_res,progress)
                 progress(92,"Расчёт завершён")
 
