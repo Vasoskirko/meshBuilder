@@ -58,7 +58,7 @@ def write_stubs(root):
         (path/(name+'.java')).write_text('package '+pkg+';\npublic class '+name+(' extends '+base if base else '')+' {\n'+body+'\n}\n')
     for n,body in common.items():put('star.common',n,body,extends.get(n))
     put('star.base.report','Report','public double getReportMonitorValue(){return 0;} public star.common.ReportMonitor createMonitor(){return null;}','star.common.NamedObject')
-    for n in ('SurfaceIntegralReport','VolumeIntegralReport','VolumeAverageReport','AreaAverageReport','MassFlowAverageReport','MaximumReport'):
+    for n in ('SurfaceIntegralReport','VolumeIntegralReport','VolumeAverageReport','AreaAverageReport','MassFlowAverageReport','MaxReport'):
         put('star.base.report',n,'public void setFieldFunction(star.common.FieldFunction f){} public star.common.Parts getParts(){return null;}','Report')
     put('star.base.report','ExpressionReport','public void setDimensions(star.common.Dimensions d){} public void setDefinition(String s){} public String getDefinition(){return "";}','Report')
     put('star.energy','HeatTransferReport','public star.common.Parts getParts(){return null;}','star.base.report.Report')

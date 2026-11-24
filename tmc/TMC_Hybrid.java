@@ -244,7 +244,7 @@ public class TMC_Hybrid extends StarMacro {
         average("GapNormalVelocity",Collections.singletonList(gap),un,false,false);
         try {
             FieldFunction cflField=field("ConvectiveCourantNumber");
-            MaximumReport cfl=report("CFL_Max",MaximumReport.class);cfl.setFieldFunction(cflField);cfl.getParts().setObjects(region);sample(cfl);
+            MaxReport cfl=report("CFL_Max",MaxReport.class);cfl.setFieldFunction(cflField);cfl.getParts().setObjects(region);sample(cfl);
             average("CFL_VolumeAverage",Collections.singletonList(region),cflField,true,false);
         } catch(Exception ex) { optionalWarnings.add("CFL: "+ex.getMessage()); }
         if(value("EnableOptionalGapConduction")==1) {

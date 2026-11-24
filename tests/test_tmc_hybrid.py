@@ -63,6 +63,8 @@ public class TmcKernelTest {
         self.assertIn('setDefinition(rr("qvSource"))',source)
         self.assertIn('rr("WallHeatSigned_All")+" / "+rr("Volume_All")',source)
         self.assertNotIn('initializeSolution(',source)
+        self.assertNotIn('MaximumReport',source)
+        self.assertIn('MaxReport.class',source)
         self.assertIn('ensureContinuation(directory)',source)
         self.assertIn('Native field-mean pause API not available',source)
         self.assertIn('TMC_Effective includes molecular/mean-flow contributions',source)
