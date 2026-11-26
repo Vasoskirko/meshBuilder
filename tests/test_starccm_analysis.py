@@ -42,7 +42,7 @@ class AnalysisExportTests(unittest.TestCase):
         for key,cb in d.field_checkboxes.items():cb.setChecked(key=='z_fraction')
         for cb in d.report_checkboxes.values():cb.setChecked(True)
         for cb in d.mean_checkboxes.values():cb.setChecked(True)
-        d.spin_mean_start.setValue(125)
+        d.mean_start_auto.setChecked(False);d.spin_mean_start.setValue(125)
         original=d.read_options()
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'profile.json';save_profile(original,path)

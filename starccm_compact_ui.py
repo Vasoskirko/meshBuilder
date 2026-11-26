@@ -151,6 +151,7 @@ def install_compact(d):
             d.yplus_data=export_yplus_data(yp,default_h1=getattr(getattr(d.mesh_result,'params',None),'h1',2.5e-6))
         d._compact_sync_props_signature=signature
         if hasattr(d,'update_boundary_flow'):d.update_boundary_flow()
+        if hasattr(d,'_time_mean_refresh'):d._time_mean_refresh()
     d.sync_fluid_properties=sync_fluid;d.sync_fluid_button.clicked.connect(lambda:sync_fluid(True))
     d.fluid_sync_timer=QTimer(d);d.fluid_sync_timer.setInterval(500);d.fluid_sync_timer.timeout.connect(lambda:sync_fluid() if d.isVisible() else None);d.fluid_sync_timer.start();d.finished.connect(d.fluid_sync_timer.stop)
     # Surface and heat data are rebuilt only when grouping/topology changes.

@@ -2,7 +2,7 @@
 from copy import deepcopy
 import math
 
-WORKFLOW_DEFAULTS = dict(plane_scheme='legacy',report_subchannels=[-1],reference_density=0.,minimum_wall_distance=1e-7,boundary_conditions=[],run_mode='auto',heat_enabled=False,heat_values={},boundary_pairs=[],disabled_internal_pairs=[],quality_thresholds=dict(CellQuality=.01,FaceValidity=.95,VolumeChange=.01,SkewnessAngle=85.),fluid={},version=1, quality_enabled=False, tdc_enabled=False,tdc_equivalence=False,
+WORKFLOW_DEFAULTS = dict(mean_start_auto=False,plane_scheme='legacy',report_subchannels=[-1],reference_density=0.,minimum_wall_distance=1e-7,boundary_conditions=[],run_mode='auto',heat_enabled=False,heat_values={},boundary_pairs=[],disabled_internal_pairs=[],quality_thresholds=dict(CellQuality=.01,FaceValidity=.95,VolumeChange=.01,SkewnessAngle=85.),fluid={},version=1, quality_enabled=False, tdc_enabled=False,tdc_equivalence=False,
     viscosity_method='constant', conductivity_method='constant', initial_velocity='theory',
     initial_temperature=573.15, initial_pressure=0., initial_ux=0., initial_uy=0.,
     inner_iterations=5, warmup_duration=.45, block_duration=.45, blocks_per_run=1,

@@ -21,9 +21,13 @@ REPORT_CHOICES = {
     'wall': 'Напряжение трения на стенке, Cf и Darcy по трению',
     'thermal': 'Среднемассовая температура, температура стенки и тепловая мощность',
 }
-MEAN_CHOICES = {'enthalpy':'Полная энтальпия', 'velocity': 'Вектор скорости', 'pressure': 'Давление',
-    'temperature': 'Температура', 'density': 'Плотность', 'viscosity': 'Динамическая вязкость',
-    'wall_shear': 'Вектор напряжения трения на стержнях', 'wall_heat_flux': 'Плотность теплового потока на стержнях'}
+MEAN_CHOICES = {'enthalpy':'Полная энтальпия · h₀, Дж/кг',
+    'velocity_i':'Скорость [i] · u, м/с','velocity_j':'Скорость [j] · v, м/с','velocity_k':'Скорость [k] · w, м/с',
+    'pressure':'Давление · p, Па','temperature':'Температура · T, K',
+    'density':'Плотность · ρ, кг/м³ (IAPWS)','viscosity':'Динамическая вязкость · μ, Па·с (IAPWS)',
+    'wall_shear_i':'Напряжение на стенке [i] · τw,x, Па','wall_shear_j':'Напряжение на стенке [j] · τw,y, Па','wall_shear_k':'Напряжение на стенке [k] · τw,z, Па',
+    'wall_heat_flux':'Плотность теплового потока · q″_w, Вт/м²',
+    'velocity':'Вектор скорости (совместимость)','wall_shear':'Вектор напряжения (совместимость)'}
 DEFAULTS = dict(workflow=deepcopy(WORKFLOW_DEFAULTS),export_mode='general',tmc_settings=deepcopy(TMC_DEFAULTS),import_mesh=True, inner_fuse=True, inter_fuse=False,
     region_mode='by_subchannel', inlet_outlet_mode='by_subchannel', rename_boundaries=True,
     rod_wall_mode='by_rod', turbulence_model='rst', use_iapws=False,

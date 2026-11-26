@@ -532,7 +532,7 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
             "create_field_functions": self.chk_field_functions.isChecked(),
             "field_functions": [k for k, cb in self.field_checkboxes.items() if cb.isChecked()],
             "subchannel_reports": [k for k, cb in self.report_checkboxes.items() if cb.isChecked()],
-            "time_mean_fields": [k for k, cb in self.mean_checkboxes.items() if cb.isChecked()],
+            "time_mean_fields": [k for k, cb in self.mean_checkboxes.items() if cb.isChecked() and k not in ('velocity','wall_shear')],
             "mean_start_step": self.spin_mean_start.value(),
             "time_step": self.field_time_step.value() if workflow["run_mode"]=="unsteady" or self.rb_turb_srh.isChecked() else self.field_time_step.model.raw,
             "selected_subchannels": sel_subs
@@ -571,7 +571,7 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         for i, checkbox in enumerate(self.sub_checkboxes,1):
             checkbox.setChecked(i in values['selected_subchannels'])
         for key, checkboxes in (('field_functions', self.field_checkboxes), ('subchannel_reports', self.report_checkboxes), ('time_mean_fields', self.mean_checkboxes)):
-            for name, checkbox in checkboxes.items(): checkbox.setChecked(name in values[key])
+            for name, checkbox in checkboxes.items(): checkbox.setChecked(name in values[key] or (key=='time_mean_fields' and any(name==base+'_'+axis and base in values[key] for base in ('velocity','wall_shear') for axis in ('i','j','k'))))
         self.spin_mean_start.setValue(values['mean_start_step'])
         self.field_time_step.setValue(values['time_step'])
         from starccm_tmc_ui import apply_tmc_settings

@@ -136,6 +136,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     custom_surfaces=bool(workflow and catalog and catalog['domains'] and not workflow['tdc_enabled'])
     preserve_sectors=(inter_fuse and rod_mode=='sectors_60') or custom_surfaces
     mean_start = options.get("mean_start_step", 1)
+    if workflow and workflow['mean_start_auto'] and is_unsteady:mean_start=math.ceil(workflow['warmup_duration']/float(options.get('time_step',1e-4))-1e-12)+1
     if type(mean_start) is not int or not 1 <= mean_start <= 1000000000:
         raise ValueError("Неверный начальный шаг усреднения")
     gap_sections = inter_fuse and options.get("gap_sections", True)
@@ -689,7 +690,8 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
         c.append('        } catch (Exception e) { warn(sim,"  [!] TimeStep binding: "+e.getMessage()); }')
 
     if workflow and is_unsteady:
-        c.append('        if (!reuse) try { configureUnsteadyWorkflow(sim,'+str(workflow['inner_iterations'])+','+str(workflow['warmup_duration'])+'); } catch (Exception e) { throw new IllegalStateException("Unsteady settings incomplete; verify STAR 2602 solver options before running: "+e.getMessage(),e); }')
+        planned_end=workflow['warmup_duration'] if workflow['tdc_enabled'] else workflow['warmup_duration']+workflow['block_duration']*workflow['blocks_per_run']
+        c.append('        if (!reuse) try { configureUnsteadyWorkflow(sim,'+str(workflow['inner_iterations'])+','+str(planned_end)+'); } catch (Exception e) { throw new IllegalStateException("Unsteady settings incomplete; verify STAR 2602 solver options before running: "+e.getMessage(),e); }')
     if create_field_functions:
         c.append('        supportFunctions(sim,' + f'{lz_m:.16e}' + ', Arrays.asList(' + ','.join(json.dumps(v) for v in field_choices) + '));')
     if workflow and workflow['velocity_seed']:
@@ -819,8 +821,16 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     for key in mean_choices:
         if key in ('temperature','wall_heat_flux','enthalpy') and not (enable_thermal or use_iapws):
             continue
-        native = dict(enthalpy='TotalEnthalpy',velocity='Velocity',pressure='Pressure',temperature='Temperature',density='Density',viscosity='DynamicViscosity',wall_shear='WallShearStress',wall_heat_flux='BoundaryHeatFlux')[key]
-        parts = 'allRods' if key in ('wall_shear','wall_heat_flux') else 'subchannelRegions'
+        component=next(((base,axis,index) for base in ('velocity','wall_shear') for index,axis in enumerate(('i','j','k')) if key==base+'_'+axis),None)
+        if workflow and key in ('density','viscosity') and not use_iapws:continue
+        if component:
+            base,axis,index=component;source='Velocity' if base=='velocity' else 'WallShearStress';native=source+'_'+axis
+            dims='Dimensions.Builder().length(1).time(-1).build()' if base=='velocity' else 'Dimensions.Builder().mass(1).length(-1).time(-2).build()'
+            c.append(f'        getOrCreateFF(sim,"{native}","$${{{source}}}[{index}]").setDimensions({dims});')
+            parts='allRods' if base=='wall_shear' else 'subchannelRegions'
+        else:
+            native = dict(enthalpy='TotalEnthalpy',velocity='Velocity',pressure='Pressure',temperature='Temperature',density='Density',viscosity='DynamicViscosity',wall_shear='WallShearStress',wall_heat_flux='BoundaryHeatFlux')[key]
+            parts = 'allRods' if key in ('wall_shear','wall_heat_flux') else 'subchannelRegions'
         c.append(f'        createTimeMean(sim,{parts},"{native}",{mean_start});')
     c.append('        int[] qualityCounts = new int[] {0, 0};')
     c.append('        List<UserFieldFunction> badMasks = new ArrayList<>();')

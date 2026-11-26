@@ -183,7 +183,9 @@ def install(dialog,layout,header):
     install_compact(d)
     from starccm_parts_reports_ui import install as install_parts_reports
     install_parts_reports(d)
-    header.setText('<b>Подготовка расчёта · STAR-CCM+ 2602</b><br>Сетка → физика → производные части → отчёты → статистика → качество → TDC → итог.')
+    from starccm_time_average_ui import install as install_time_average
+    install_time_average(d)
+    header.setText('<b>Подготовка расчёта · STAR-CCM+ 2602</b><br>Сетка → физика → производные части → отчёты → среднее по времени → качество → TDC → итог.')
 
 
 def refresh(d):
@@ -223,6 +225,7 @@ def refresh(d):
             'Обычный экспорт: setup_starccm_subchannels.java + XYZ. TDC: дополнительно TDC_Hybrid.java, JSON, инструкция и анализатор CSV.',
             'Проверьте свойства, условия и сообщения [!] перед инициализацией. Неподдержанные настройки показаны неактивными.')))
         if hasattr(d,'_compact_refresh'):d._compact_refresh()
+        if hasattr(d,'_time_mean_refresh'):d._time_mean_refresh()
     finally:d._refreshing_unified=False
 
 
@@ -237,6 +240,7 @@ def read_workflow(d):
     if hasattr(d,'_parts_workflow'):result.update(d._parts_workflow())
     if result['tdc_enabled'] and d.chk_initialize.isChecked():
         raise ValueError('Для TDC инициализируйте вручную после Action=0, до разгона. Импортный макрос ещё не назначает периодичность.')
+    if hasattr(d,'_time_mean_read'):result.update(d._time_mean_read())
     return validate_workflow(result)
 
 
@@ -251,3 +255,4 @@ def apply_workflow(d,values):
     refresh(d)
     if hasattr(d,'_compact_apply'):d._compact_apply(values)
     if hasattr(d,'_apply_parts_workflow'):d._apply_parts_workflow(values)
+    if hasattr(d,'_time_mean_apply'):d._time_mean_apply(values)

@@ -62,7 +62,7 @@ class UnifiedWindowTests(unittest.TestCase):
     def test_unsteady_parameter_and_flat_folders(self):
         d=self.dialog();d.rb_turb_srh.setChecked(True);d.inner_iterations.setValue(7)
         code=self.macro(d)
-        self.assertIn('${timeStep}',code);self.assertIn('configureUnsteadyWorkflow(sim,7,0.45)',code)
+        self.assertIn('${timeStep}',code);self.assertIn('configureUnsteadyWorkflow(sim,7,0.9)',code)
         self.assertIn('"SECOND_ORDER"',code);self.assertIn('"SIMPLEC"',code)
         self.assertIn('"Maximum Steps"',code);self.assertNotIn('nativeGroupObjects(roots,"meshBuilder_"',code)
     def test_size_estimate_matches_current_ascii_writer_without_3d_allocation(self):
