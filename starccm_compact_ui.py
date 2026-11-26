@@ -31,7 +31,7 @@ def box(title):
 
 
 def install_compact(d):
-    d._compact_busy=True;d._surface_catalog=dict(domains=[],rods=[],sides=[]);d._heat_cache={};d._pairs=[];d._internal_choices={};d._heat_signature=None;d._heat_drafts={}
+    d._compact_busy=True;d._surface_catalog=dict(domains=[],rods=[],sides=[]);d._heat_cache={};d._pairs=[];d._conditions=[];d._internal_choices={};d._heat_signature=None;d._heat_drafts={}
     d._compact_stash=QWidget(d);d._compact_stash.hide()
     for index in (0,1):
         layout=d.tabs.widget(index).widget().layout()
@@ -57,18 +57,23 @@ def install_compact(d):
     d.boundary_hint.show();d.boundary_hint.setWordWrap(True);tl.addWidget(d.boundary_hint)
     pairs,pl=box('Граничные поверхности');cl.addWidget(pairs)
     d.surface_a=QComboBox();d.surface_b=QComboBox();d.surface_condition=QComboBox()
-    d.surface_condition.addItem('Periodic · перенос','periodic_translation');d.surface_condition.addItem('Internal · соседние подканалы ниже','internal');d.surface_condition.model().item(1).setEnabled(False)
+    d.boundary_selection_mode=QComboBox();d.boundary_selection_mode.addItem('Одна поверхность','single');d.boundary_selection_mode.addItem('Пара поверхностей','pair')
+    d.boundary_value=NumberField(1.,minimum=-1e12);d.boundary_value_label=QLabel('Расход, кг/с')
     form=QFormLayout();pl.addLayout(form)
-    form.addRow('Первая',d.surface_a);form.addRow('Вторая',d.surface_b);form.addRow(label_help('Условие','Это физические границы, не измерительные сечения. Для Periodic проверяется совпадение формы после переноса. Вращательная периодичность пока не поддерживается.'),d.surface_condition)
-    add=QPushButton('Добавить пару');pl.addWidget(add)
-    d.surface_pairs_table=QTableWidget(0,3);d.surface_pairs_table.setHorizontalHeaderLabels(['Первая','Вторая','Условие']);d.surface_pairs_table.setEditTriggers(QTableWidget.NoEditTriggers)
+    form.addRow('Выбор',d.boundary_selection_mode);form.addRow('Первая',d.surface_a);form.addRow('Вторая',d.surface_b);form.addRow(label_help('Условие','Условия назначаются физическим границам. Periodic сохраняет стандартное Rotational + Translational STAR; трансформацию нужно проверить. Fully Developed соединяет вход и выход одного региона. Давление — избыточное относительно опорного. Для Mass Flow Inlet используется начальная температура; входную турбулентность проверьте в STAR.'),d.surface_condition)
+    form.addRow(d.boundary_value_label,d.boundary_value)
+    add=QPushButton('Применить условие');pl.addWidget(add)
+    d.surface_pairs_table=QTableWidget(0,3);d.surface_pairs_table.setHorizontalHeaderLabels(['Поверхность A','B / значение','Условие']);d.surface_pairs_table.setEditTriggers(QTableWidget.NoEditTriggers)
     d.surface_pairs_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch);d.surface_pairs_table.setMaximumHeight(170);pl.addWidget(d.surface_pairs_table)
-    remove=QPushButton('Удалить выбранную пару');pl.addWidget(remove)
+    remove=QPushButton('Удалить выбранное назначение');pl.addWidget(remove)
     d.internal_table=QTableWidget(0,2);d.internal_table.setHorizontalHeaderLabels(['Соседние подканалы','Условие']);d.internal_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch);d.internal_table.setMaximumHeight(130);pl.addWidget(d.internal_table)
     d.surface_status=QLabel();d.surface_status.setWordWrap(True);pl.addWidget(d.surface_status);cl.addStretch()
     preview=QWidget();pv=QVBoxLayout(preview);pv.setContentsMargins(0,0,0,0);splitter.addWidget(preview)
-    pv.addWidget(label_help('Разбиение модели · вид вдоль Z','Нажмите на стенку: её группа выделится в таблице нагрева. Нажмите на внешнюю сторону: она станет первой/второй поверхностью пары. Пунктир после Fuse — исходный стык, не граничная поверхность.'))
-    d.surface_preview=SurfacePreview();pv.addWidget(d.surface_preview,1)
+    pv.addWidget(label_help('Разбиение модели · вид вдоль Z','Нажмите на стенку: её группа выделится в таблице нагрева. Вход и выход показаны справа от поперечного сечения. Для пары выберите две границы в дереве с Ctrl. Пунктир после Fuse — исходный стык, не граничная поверхность.'))
+    view_row=QHBoxLayout();pv.addLayout(view_row,1)
+    d.surface_preview=SurfacePreview();view_row.addWidget(d.surface_preview,2)
+    from starccm_boundary_tree import install_tree
+    install_tree(d,view_row)
     d.preview_selection=QLabel('Выберите поверхность на схеме');d.preview_selection.setWordWrap(True);pv.addWidget(d.preview_selection)
     splitter.setSizes([420,620])
     # Physics in two compact columns; long text is available through ?.
@@ -96,6 +101,18 @@ def install_compact(d):
     ref,rfl=box('Опорные значения');rl.addWidget(ref);form=QFormLayout();rfl.addLayout(form)
     form.addRow('Давление, МПа',compact_field(d.fluid_fields['p_ref_mpa']));form.addRow('Температура, °C',compact_field(d.fluid_fields['t_ref_c']))
     gravity=QHBoxLayout();d.chk_gravity.setText('Гравитация');gravity.addWidget(d.chk_gravity);gravity.addWidget(d.combo_gravity);gravity.addWidget(help_button('Ось и направление в лабораторной системе. Модуль ускорения 9,81 м/с².'));gravity.addStretch();rfl.addLayout(gravity);d.chk_gravity.show();d.combo_gravity.show()
+    d.reference_density_auto=QCheckBox('Из y+');d.reference_density_auto.setChecked(True)
+    d.reference_density=NumberField(float(d.fluid_props.get('density',725.553)),minimum=1e-15);d.reference_density.setEnabled(False);d.reference_density.setToolTip('0 — использовать плотность из калькулятора y+. Иначе отдельная опорная плотность для гравитации, кг/м³.')
+    d.reference_density_row=QWidget();rd=QHBoxLayout(d.reference_density_row);rd.setContentsMargins(0,0,0,0);rd.addWidget(label_help('Опорная ρ, кг/м³','ReferenceDensity — опорная плотность для гравитации. Из y+ — использовать плотность из калькулятора, иначе задать отдельно.'));rd.addWidget(d.reference_density_auto);rd.addWidget(compact_field(d.reference_density));d.reference_density_auto.toggled.connect(lambda checked:d.reference_density.setEnabled(not checked));rfl.addWidget(d.reference_density_row)
+    d.minimum_wall_distance=NumberField(1e-7,minimum=1e-15);rfl.addWidget(label_help('Минимальная дистанция до стенки, м','Minimum Allowable Wall Distance — нижний предел расстояния в модели, не размер первой ячейки.'));rfl.addWidget(compact_field(d.minimum_wall_distance))
+    d.chk_gravity.toggled.connect(d.reference_density_row.setVisible);d.reference_density_row.setVisible(d.chk_gravity.isChecked())
+    def update_auto_density():
+        if d.reference_density_auto.isChecked():
+            try:d.reference_density.setValue(d.fluid_fields['density'].value())
+            except ValueError:pass
+    d.reference_density_auto.toggled.connect(lambda *_:update_auto_density())
+    d.fluid_fields['density'].editingFinished.connect(update_auto_density)
+
     initial,il=box('Начальные условия');rl.addWidget(initial);form=QFormLayout();il.addLayout(form)
     form.addRow('Температура, K',compact_field(d.initial_temperature));form.addRow(label_help('Давление, Па','Избыточное относительно опорного. Абсолютное давление — их сумма.'),compact_field(d.initial_pressure));form.addRow('Скорость',d.initial_velocity);d.initial_velocity.show();d.initial_absolute.show();il.addWidget(d.initial_absolute)
     il.addWidget(label_help('Начальные функции · автоматически','Создаются pi, Apert, thetaZ, seedX, seedY, VelocitySeed и относительная высота. Назначение выбирается в поле «Скорость»: нулевая, осевая или VelocitySeed.'))
@@ -124,6 +141,7 @@ def install_compact(d):
         try:validate_workflow({'fluid':values})
         except ValueError:return
         for key,value in values.items():d.fluid_fields[key].setValue(value)
+        if d.reference_density_auto.isChecked():d.reference_density.setValue(values.get('density',d.fluid_fields['density'].model.raw))
         if yp:
             from yplus_calculator import export_yplus_data
             d.yplus_data=export_yplus_data(yp,default_h1=getattr(getattr(d.mesh_result,'params',None),'h1',2.5e-6))
@@ -132,7 +150,7 @@ def install_compact(d):
     d.fluid_sync_timer=QTimer(d);d.fluid_sync_timer.setInterval(500);d.fluid_sync_timer.timeout.connect(lambda:sync_fluid() if d.isVisible() else None);d.fluid_sync_timer.start();d.finished.connect(d.fluid_sync_timer.stop)
     # Surface and heat data are rebuilt only when grouping/topology changes.
     def rebuild_catalog():
-        try:d._surface_catalog=surface_catalog(d.mesh_result,d.bundle_model,d.rod_choice.currentData())
+        try:d._surface_catalog=surface_catalog(d.mesh_result,d.bundle_model,d.rod_choice.currentData(),d.rb_inter_fuse.isChecked())
         except (ValueError,TypeError,AttributeError):d._surface_catalog=dict(domains=[],rods=[],sides=[])
         d.surface_preview.draw_catalog(d._surface_catalog,d.rb_inter_fuse.isChecked())
         old={key:combo.currentData() for key,combo in getattr(d,'_internal_combos',{}).items()};d._internal_choices.update(old);d._internal_combos={}
@@ -142,17 +160,18 @@ def install_compact(d):
             if not key or key in seen:continue
             seen.add(key);i=d.internal_table.rowCount();d.internal_table.insertRow(i)
             item=QTableWidgetItem(f"Sub{row['source']} ↔ Sub{row['neighbor']}");item.setFlags(item.flags()&~Qt.ItemIsEditable);item.setToolTip(key);d.internal_table.setItem(i,0,item)
-            choice=QComboBox();choice.addItem('Internal','internal');choice.addItem('Wall · не соединять','wall');choice.setCurrentIndex(1 if d._internal_choices.get(key)=='wall' else 0);d.internal_table.setCellWidget(i,1,choice);d._internal_combos[key]=choice
+            choice=QComboBox();choice.addItem('Internal','internal');choice.addItem('Wall · не соединять','wall');choice.setCurrentIndex(1 if d._internal_choices.get(key)=='wall' else 0);d.internal_table.setCellWidget(i,1,choice);d._internal_combos[key]=choice;choice.currentIndexChanged.connect(lambda *_:d.rebuild_surface_tree())
         d.internal_table.setVisible(not d.rb_inter_fuse.isChecked())
         previous=(d.surface_a.currentData(),d.surface_b.currentData())
         for combo in (d.surface_a,d.surface_b):
             combo.clear()
             for row in d._surface_catalog['sides']:
-                if not row['shared']:combo.addItem(row['id'],row['id'])
+                if not (row['shared'] and d.rb_inter_fuse.isChecked()):combo.addItem(row['id'],row['id'])
+            for row in d._surface_catalog.get('endcaps',[])+d._surface_catalog['rods']:combo.addItem(row['id'],row['id'])
         for combo,key in zip((d.surface_a,d.surface_b),previous):
             if key is not None:combo.setCurrentIndex(max(0,combo.findData(key)))
         if previous[1] is None and d.surface_b.count()>1:d.surface_b.setCurrentIndex(1)
-        rebuild_heat()
+        rebuild_heat();d.rebuild_surface_tree()
     def rebuild_heat():
         d._heat_drafts.update({key:field.text() for key,field in getattr(d,'_heat_fields',{}).items()})
         current={key:field.model.raw for key,field in getattr(d,'_heat_fields',{}).items()}
@@ -169,27 +188,52 @@ def install_compact(d):
         d.heat_table.setFixedHeight(min(240,35+32*d.heat_table.rowCount()));d.heat_table.setEnabled(d.heat_enabled.isChecked());d.heat_table.setVisible(d.heat_enabled.isChecked());d.heat_status.setText(f'Групп ТВЭЛ: {len(d._heat_fields)}. НК и ИК не нагреваются.')
     d._edited_heat_keys=set()
     def refresh_pairs():
-        remove.setEnabled(bool(d._pairs))
-        d.surface_pairs_table.setRowCount(len(d._pairs))
+        remove.setEnabled(bool(d._pairs or d._conditions))
+        d.surface_pairs_table.setRowCount(len(d._pairs)+len(d._conditions))
         for i,row in enumerate(d._pairs):
             for j,key in enumerate(('first','second','kind')):d.surface_pairs_table.setItem(i,j,QTableWidgetItem(row[key]))
+        for i,row in enumerate(d._conditions,len(d._pairs)):
+            for j,value in enumerate((row['surface'],str(row['value']),row['kind'])):d.surface_pairs_table.setItem(i,j,QTableWidgetItem(value))
+    def update_condition_choices():
+        previous=d.surface_condition.currentData();pair=d.boundary_selection_mode.currentData()=='pair'
+        d.surface_b.setEnabled(pair and not d.tdc_enabled.isChecked());d.surface_condition.clear()
+        choices=(('Internal + Periodic','periodic'),('Fully Developed + Periodic','fully_developed'),('Internal · совпадающие поверхности','internal'),('Periodic · только перенос (проверка)','periodic_translation')) if pair else (('Wall','wall'),('Mass Flow Inlet','mass_flow_inlet'),('Pressure Outlet','pressure_outlet'),('Symmetry','symmetry'))
+        for text,key in choices:d.surface_condition.addItem(text,key)
+        index=d.surface_condition.findData(previous)
+        if index>=0:d.surface_condition.setCurrentIndex(index)
+        update_boundary_value()
+    def update_boundary_value():
+        kind=d.surface_condition.currentData();active=kind in ('mass_flow_inlet','pressure_outlet','fully_developed')
+        d.boundary_value.setVisible(active);d.boundary_value_label.setVisible(active)
+        d.boundary_value_label.setText('Давление, Па' if kind=='pressure_outlet' else 'Расход, кг/с')
+    d.boundary_selection_mode.currentIndexChanged.connect(update_condition_choices);d.surface_condition.currentIndexChanged.connect(update_boundary_value)
+    update_condition_choices()
     def add_pair():
-        pair=dict(first=d.surface_a.currentData(),second=d.surface_b.currentData(),kind=d.surface_condition.currentData())
-        try:validate_pairs(d._pairs+[pair],d._surface_catalog)
+        from starccm_surface_catalog import validate_surface_settings
+        from starccm_workflow import validate_workflow
+        first=d.surface_a.currentData();kind=d.surface_condition.currentData()
+        try:
+            if len(d.surface_tree.selectedItems())>2:raise ValueError('Для интерфейса выберите ровно две поверхности')
+            pairs=deepcopy(d._pairs);conditions=deepcopy(d._conditions)
+            if d.boundary_selection_mode.currentData()=='pair':
+                pair=dict(first=first,second=d.surface_b.currentData(),kind=kind)
+                if kind=='fully_developed':pair['mass_flow']=d.boundary_value.value()
+                pairs=[p for p in pairs if {p['first'],p['second']}!={pair['first'],pair['second']}]
+                pairs.append(pair)
+            else:
+                conditions=[bc for bc in conditions if bc['surface']!=first]
+                conditions.append(dict(surface=first,kind=kind,value=d.boundary_value.value() if kind in ('mass_flow_inlet','pressure_outlet') else 0.))
+            workflow=validate_workflow(dict(boundary_pairs=pairs,boundary_conditions=conditions,tdc_enabled=d.tdc_enabled.isChecked()))
+            validate_surface_settings(d.mesh_result,d.bundle_model,dict(workflow=workflow,inter_fuse=d.rb_inter_fuse.isChecked(),rod_wall_mode=d.rod_choice.currentData()))
         except (ValueError,TypeError) as exc:d.surface_status.setText(str(exc));return
-        d._pairs.append(pair);refresh_pairs();d.surface_status.setText('Пара добавлена. После импорта проверьте ориентацию и преобразование Periodic в STAR.')
+        d._pairs=pairs;d._conditions=conditions;refresh_pairs();d.rebuild_surface_tree();d.surface_status.setText('Назначение сохранено. Проверьте условия и преобразование интерфейса в STAR перед расчётом.')
     def remove_pair():
         i=d.surface_pairs_table.currentRow()
-        if 0<=i<len(d._pairs):d._pairs.pop(i);refresh_pairs()
+        if 0<=i<len(d._pairs):d._pairs.pop(i)
+        elif 0<=i-len(d._pairs)<len(d._conditions):d._conditions.pop(i-len(d._pairs))
+        refresh_pairs();d.rebuild_surface_tree()
     add.clicked.connect(add_pair);remove.clicked.connect(remove_pair)
     d.add_surface_pair=add_pair
-    def picked(key):
-        d.surface_preview.highlight(key);d.preview_selection.setText(key)
-        if key in d._heat_fields:
-            rows=list(d._heat_fields);d.heat_table.selectRow(rows.index(key));return
-        if d.surface_a.findData(key)>=0:
-            combo=d.surface_b if getattr(d,'_pick_second',False) else d.surface_a;combo.setCurrentIndex(combo.findData(key));d._pick_second=not getattr(d,'_pick_second',False)
-    d.surface_preview.surfacePicked.connect(picked)
     for combo in (d.surface_a,d.surface_b):combo.currentIndexChanged.connect(lambda _=0,c=combo:d.surface_preview.highlight(c.currentData()) if not d._compact_busy else None)
     d.heat_table.itemSelectionChanged.connect(lambda:d.surface_preview.highlight(list(d._heat_fields)[d.heat_table.currentRow()]) if 0<=d.heat_table.currentRow()<len(d._heat_fields) else None)
     def choices_changed():
@@ -225,7 +269,8 @@ def install_compact(d):
             d.constant_properties.setVisible(not iapws);d.iapws_transport.setVisible(iapws)
             d.heat_table.setEnabled(d.heat_enabled.isChecked());d.heat_table.setVisible(d.heat_enabled.isChecked())
             for w in (d.surface_a,d.surface_b,d.surface_condition,add):w.setEnabled(not d.tdc_enabled.isChecked())
-            remove.setEnabled(bool(d._pairs))
+            remove.setEnabled(bool(d._pairs or d._conditions))
+            d.surface_b.setEnabled(d.boundary_selection_mode.currentData()=='pair' and not d.tdc_enabled.isChecked())
             if d.tdc_enabled.isChecked():d.surface_status.setText('Боковые пары эталона TDC назначаются контроллером.')
             signature=(rod,d.rb_inter_fuse.isChecked(),d.tdc_enabled.isChecked())
             if signature!=d._heat_signature:
@@ -240,11 +285,12 @@ def install_compact(d):
         finally:d._compact_busy=False
     def compact_workflow():
         values={key:field.value() if d.heat_enabled.isChecked() else field.model.raw for key,field in d._heat_fields.items()}
-        return dict(run_mode=d.simulation_mode.currentData(),heat_enabled=d.heat_enabled.isChecked(),heat_values=values,boundary_pairs=deepcopy(d._pairs),disabled_internal_pairs=[key for key,combo in d._internal_combos.items() if combo.currentData()=='wall'] if not d.rb_inter_fuse.isChecked() else [],velocity_seed=True)
+        return dict(reference_density=0. if d.reference_density_auto.isChecked() else (d.reference_density.value() if d.chk_gravity.isChecked() else d.reference_density.model.raw),minimum_wall_distance=d.minimum_wall_distance.value(),boundary_conditions=deepcopy(d._conditions),run_mode=d.simulation_mode.currentData(),heat_enabled=d.heat_enabled.isChecked(),heat_values=values,boundary_pairs=deepcopy(d._pairs),disabled_internal_pairs=[key for key,combo in d._internal_combos.items() if combo.currentData()=='wall'] if not d.rb_inter_fuse.isChecked() else [],velocity_seed=True)
     def apply_compact(values):
         d._heat_fields={};d._heat_cache=dict(values.get('heat_values',{}));d._heat_drafts={};d._edited_heat_keys=set(d._heat_cache)
         d._internal_choices={key:'wall' for key in values.get('disabled_internal_pairs',[])};d._internal_combos={}
-        d._pairs=deepcopy(values.get('boundary_pairs',[]));d.heat_enabled.setChecked(values.get('heat_enabled',False))
+        d.reference_density_auto.setChecked(values.get('reference_density',0.)==0);d.reference_density.setValue(values.get('reference_density') or d.fluid_fields['density'].model.raw);d.minimum_wall_distance.setValue(values.get('minimum_wall_distance',1e-7))
+        d._conditions=deepcopy(values.get('boundary_conditions',[]));d._pairs=deepcopy(values.get('boundary_pairs',[]));d.heat_enabled.setChecked(values.get('heat_enabled',False))
         d._heat_signature=None;compact_refresh();refresh_pairs()
     d._compact_workflow=compact_workflow;d._compact_apply=apply_compact;d._compact_refresh=compact_refresh
     d._compact_busy=False;compact_refresh();sync_fluid()

@@ -7,9 +7,9 @@ from PySide6.QtWidgets import QGraphicsView,QGraphicsScene,QGraphicsPathItem,QGr
 class SurfaceItem(QGraphicsPathItem):
     def __init__(self,path,key,view,pen):
         super().__init__(path);self.key=key;self.view=view;self.base_pen=pen;self.setPen(pen)
-        self.setFlag(QGraphicsItem.ItemIsSelectable);self.setToolTip(key)
+        self.setAcceptedMouseButtons(Qt.LeftButton);self.setToolTip(key)
     def mousePressEvent(self,event):
-        super().mousePressEvent(event);self.view.surfacePicked.emit(self.key)
+        event.accept();self.view.extend_selection=bool(event.modifiers()&Qt.ControlModifier);self.view.surfacePicked.emit(self.key)
 
 
 class SurfacePreview(QGraphicsView):
@@ -36,6 +36,22 @@ class SurfacePreview(QGraphicsView):
             if fuse and row['shared']:
                 for line in row['lines']:scene.addPath(self.path(line),QPen(muted,0,Qt.DashLine))
             else:self.add_surface(row,base,1.)
+        bounds=scene.itemsBoundingRect();offset=bounds.width()+6
+        for role,index in (('Inlet',1),('Outlet',2)):
+            if not catalog.get('endcaps'):continue
+            label=scene.addText('Вход · Z=0' if role=='Inlet' else 'Выход · Z=L');label.setScale(.1);label.setPos(bounds.left()+offset*index,bounds.top()-2)
+            for row in catalog.get('endcaps',[]):
+                if row['role']!=role:continue
+                path=QPainterPath()
+                for domain in catalog['domains']:
+                    if domain['number'] not in row['sources']:continue
+                    points=domain['triangle'];part=QPainterPath();part.moveTo(points[0][0]*1000+offset*index,-points[0][1]*1000)
+                    for x,y in points[1:]:part.lineTo(x*1000+offset*index,-y*1000)
+                    part.closeSubpath()
+                    for rod in domain.get('rods',[]):
+                        cx,cy=rod['center'];radius=rod['radius']*1000;solid=QPainterPath();solid.addEllipse(cx*1000+offset*index-radius,-cy*1000-radius,2*radius,2*radius);part=part.subtracted(solid)
+                    path=path.united(part)
+                pen=QPen(base,1.);pen.setCosmetic(True);item=SurfaceItem(path,row['id'],self,pen);color=self.palette().highlight().color();color.setAlpha(45);item.setBrush(color);scene.addItem(item);self.items_by_id[row['id']]=[item]
         self.fitInView(scene.itemsBoundingRect().adjusted(-1,-1,1,1),Qt.KeepAspectRatio)
     @staticmethod
     def path(line):
@@ -50,11 +66,12 @@ class SurfacePreview(QGraphicsView):
             item=SurfaceItem(self.path(line),row['id'],self,pen);self.scene().addItem(item)
             self.items_by_id.setdefault(row['id'],[]).append(item)
     def highlight(self,key):
+        keys={key} if isinstance(key,str) else set(key or [])
         self.scene().clearSelection()
         for name,items in self.items_by_id.items():
             for item in items:
                 pen=QPen(item.base_pen)
-                if name==key:pen.setWidthF(4);item.setSelected(True)
+                if name in keys:pen.setWidthF(4)
                 item.setPen(pen)
     def resizeEvent(self,event):
         super().resizeEvent(event)

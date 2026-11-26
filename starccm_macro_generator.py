@@ -160,7 +160,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
 
     digest = hashlib.sha256()
     topology_settings=dict(schema=2 if custom_surfaces else 1,inter_fuse=inter_fuse,rod_mode=rod_mode,io=inlet_outlet_mode,nz=p.nz,height=lz_m)
-    if custom_surfaces:topology_settings.update(disabled_internal_pairs=workflow['disabled_internal_pairs'],pairs=workflow['boundary_pairs'],rod_kinds={str(rid):bundle_model.rods[rid].rod_type for row in catalog['rods'] for rid in row['rod_ids']})
+    if custom_surfaces:topology_settings.update(disabled_internal_pairs=workflow['disabled_internal_pairs'],pairs=workflow['boundary_pairs'],conditions=workflow['boundary_conditions'],rod_kinds={str(rid):bundle_model.rods[rid].rod_type for row in catalog['rods'] for rid in row['rod_ids']})
     digest.update(json.dumps(topology_settings,sort_keys=True).encode())
     for block in blocks:
         for coordinate in block:
@@ -191,6 +191,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('import star.rsturb.*;')
     c.append('import star.flow.*;')
     c.append('import star.kwturb.*;')
+    c.append('import star.walldistance.*;')
     c.append('import star.metrics.*;')
     c.append('import star.vis.*;')
     c.append('')
@@ -480,11 +481,23 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('        for (int i = 0; i < gapCandidates.size(); i++) {')
     c.append('            GapCandidate ci = gapCandidates.get(i);')
     c.append('            if (ci.paired) continue;')
+    manual_shared=[]
+    if custom_surfaces:
+        pair_keys={p[k] for p in workflow['boundary_pairs'] for k in ('first','second')}|{bc['surface'] for bc in workflow['boundary_conditions']}
+        manual_shared=[r for r in catalog['sides'] if r['shared'] and r['id'] in pair_keys]
+        for row in manual_shared:
+            cx,cy=row['center'];source=row['source']
+            c.append(f'            if(ci.subNum=={source} && Math.hypot(ci.cx-({cx:.16e}),ci.cy-({cy:.16e}))<1e-8)continue;')
+
     c.append('            GapCandidate bestMatch = null; double minDist = 1e9;')
     c.append('            for (int j = 0; j < gapCandidates.size(); j++) {')
     c.append('                if (i == j) continue;')
     c.append('                GapCandidate cj = gapCandidates.get(j);')
     c.append('                if (cj.paired || ci.reg.equals(cj.reg)) continue;')
+    for row in manual_shared:
+        cx,cy=row['center'];source=row['source']
+        c.append(f'                if(cj.subNum=={source} && Math.hypot(cj.cx-({cx:.16e}),cj.cy-({cy:.16e}))<1e-8)continue;')
+
     if custom_surfaces:
         seen=set()
         for row in catalog['sides']:
@@ -522,16 +535,6 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
         c.append('            if (!cg.paired) cg.bnd.setPresentationName("sym/per");')
     c.append('        }')
     if custom_surfaces:
-        for i,pair in enumerate(workflow['boundary_pairs'],1):
-            a=json.dumps(pair['first']);b=json.dumps(pair['second'])
-            c.append(f'        Boundary pairA{i}=null,pairB{i}=null;')
-            c.append(f'        for(GapCandidate candidate:gapCandidates) {{ if(candidate.bnd.getPresentationName().equals({a}))pairA{i}=candidate.bnd; if(candidate.bnd.getPresentationName().equals({b}))pairB{i}=candidate.bnd; }}')
-            c.append(f'        if(pairA{i}==null||pairB{i}==null)throw new IllegalStateException("Interface surface missing");')
-            c.append(f'        BoundaryInterface selectedPair{i}=sim.getInterfaceManager().createBoundaryInterface(pairA{i},pairB{i},"SelectedInterface_{i}"); own(sim,selectedPair{i});')
-            if pair['kind']=='periodic_translation':c.append(f'        selectedPair{i}.getTopology().setSelected(InterfaceConfigurationOption.Type.PERIODIC);')
-            c.append(f'        for(GapCandidate candidate:gapCandidates) if(candidate.bnd==pairA{i}||candidate.bnd==pairB{i})candidate.paired=true;')
-            c.append(f'        pairCount++; pairedNames.add("SelectedInterface_{i}");')
-    if custom_surfaces:
         c.append('        sim.println(String.format("Interfaces created: %d. Unpaired Side_* boundaries remain walls. Verify periodic orientation before solving.", pairCount));')
     else:
         c.append('        sim.println(String.format("  • Всего успешно сопряжено интерфейсов: %d. Внешние зазоры назначены как sym/per.", pairCount));')
@@ -540,10 +543,18 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('')
     c.append('        List<Boundary> externalGaps = new ArrayList<>();')
     c.append('        for (GapCandidate gap : gapCandidates) if (!gap.paired) externalGaps.add(gap.bnd);')
-    if preserve_sectors and inter_fuse:
+    if inter_fuse and (preserve_sectors or custom_surfaces):
         c.append('        // Merge only end caps; retain the separate source rod sectors.')
         c.append('        if (allInlets.size()>1) { Boundary inlet=allInlets.get(0); meshMgr.combineBoundaries(new ArrayList<>(allInlets)); allInlets.clear(); allInlets.add(inlet); inlet.setPresentationName("Inlet"); }')
         c.append('        if (allOutlets.size()>1) { Boundary outlet=allOutlets.get(0); meshMgr.combineBoundaries(new ArrayList<>(allOutlets)); allOutlets.clear(); allOutlets.add(outlet); outlet.setPresentationName("Outlet"); }')
+    if custom_surfaces:
+        if not inter_fuse:
+            for collection in ('allInlets','allOutlets'):
+                c.append(f'        for(Region region:subchannelRegions) {{ List<Boundary> caps=new ArrayList<>(); for(Boundary b:{collection})if(b.getRegion()==region)caps.add(b); if(caps.size()>1) {{ Boundary first=caps.get(0);meshMgr.combineBoundaries(caps);{collection}.removeAll(caps);{collection}.add(first); }} }}')
+        for cap in catalog['endcaps']:
+            collection='allInlets' if cap['role']=='Inlet' else 'allOutlets'
+            condition='true' if inter_fuse else f'b.getRegion()==subchannelRegions.get({cap["sources"][0]-1})'
+            c.append(f'        for(Boundary b:{collection}) if({condition}) b.setPresentationName("{cap["id"]}");')
     c.append('        markBoundaryRoles(sim,allInlets,allOutlets,allRods,externalGaps);')
     c.append('        for (int i=0;i<subchannelRegions.size();i++) {')
     c.append('            Region region=subchannelRegions.get(i); own(sim,region);')
@@ -598,6 +609,13 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('')
     c.append('        }')
     transport_flags='' if workflow is None else ','+str(workflow['viscosity_method']=='constant').lower()+','+str(workflow['conductivity_method']=='constant').lower()
+    if workflow:
+        c.append('        createParam(sim,gpm,null,"MinimumWallDistance",'+str(workflow['minimum_wall_distance'])+',"m",Dimensions.Builder().length(1).build(),null);')
+        c.append('        setupPhysics.getReferenceValues().get(MinimumAllowableWallDistance.class).setDefinition("${MinimumWallDistance}");')
+        if enable_gravity:
+            ref_rho=workflow['reference_density'] or rho
+            c.append('        createParam(sim,gpm,null,"ReferenceDensity",'+str(ref_rho)+',"kg/m^3",Dimensions.Builder().mass(1).length(-3).build(),null);')
+            c.append('        setupPhysics.getReferenceValues().get(ReferenceDensity.class).setDefinition("${ReferenceDensity}");')
     if workflow and use_iapws:
         c.append('        Material transportMaterial=setupPhysics.getModelManager().getModel(SingleComponentLiquidModel.class).getMaterial();')
         for key,prop,method in (('viscosity_method','DynamicViscosityProperty','IapwsDynamicViscosityMethod'),('conductivity_method','ThermalConductivityProperty','IapwsThermalConductivityMethod')):
@@ -605,6 +623,44 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
                 c.append(f'        transportMaterial.getMaterialProperties().getMaterialProperty({prop}.class).setMethod({method}.class);')
     c.append('        physicalValuesConfigured = configurePhysicalValues(sim,setupPhysics,subchannelRegions,' + str(use_iapws).lower() + ',' + str(enable_thermal or use_iapws).lower() + transport_flags + ');')
     c.append('        }')
+    if custom_surfaces and (workflow['boundary_pairs'] or workflow['boundary_conditions']):
+        c.append('        if (!reuse) {')
+        c.append('        if (!physicalValuesConfigured) throw new IllegalStateException("Boundary setup requires configured physics");')
+        c.append('        Map<String,Boundary> selectedSurfaces=new HashMap<>();')
+        c.append('        for(GapCandidate candidate:gapCandidates) if(!candidate.paired) selectedSurfaces.put(candidate.bnd.getPresentationName(),candidate.bnd);')
+        c.append('        for(Boundary wall:allRods) selectedSurfaces.put(wall.getPresentationName(),wall);')
+        for cap in catalog['endcaps']:
+            role=cap['role'];collection='allInlets' if role=='Inlet' else 'allOutlets';key=json.dumps(cap['id'])
+            condition='true' if inter_fuse else f'b.getRegion()==subchannelRegions.get({cap["sources"][0]-1})'
+            c.append(f'        for(Boundary b:{collection}) if({condition}) {{ if(selectedSurfaces.put({key},b)!=null)throw new IllegalStateException("Ambiguous end cap; merge end caps before assigning conditions"); }}')
+        for i,pair in enumerate(workflow['boundary_pairs'],1):
+            a=json.dumps(pair['first']);b=json.dumps(pair['second'])
+            c.append(f'        Boundary pairA{i}=selectedSurfaces.get({a}),pairB{i}=selectedSurfaces.get({b});')
+            c.append(f'        if(pairA{i}==null||pairB{i}==null)throw new IllegalStateException("Interface surface missing");')
+            c.append(f'        BoundaryInterface selectedPair{i}=sim.getInterfaceManager().createBoundaryInterface(pairA{i},pairB{i},"SelectedInterface_{i}"); own(sim,selectedPair{i});')
+            if pair['kind']=='fully_developed':
+                c.append(f'        selectedPair{i}.setInterfaceType((FullyDevelopedInterface)sim.get(ConditionTypeManager.class).get(FullyDevelopedInterface.class));')
+            if pair['kind']!='internal':
+                c.append(f'        selectedPair{i}.getTopology().setSelected(InterfaceConfigurationOption.Type.PERIODIC);')
+            if pair['kind']=='fully_developed':
+                c.append(f'        selectedPair{i}.getConditions().get(FullyDevelopedFlowOption.class).setSelected(FullyDevelopedFlowOption.Type.MASS_FLOW_RATE);')
+                c.append(f'        createParam(sim,sim.get(GlobalParameterManager.class),null,"PeriodicMassFlow_{i}",{pair["mass_flow"]:.16e},"kg/s",Dimensions.Builder().mass(1).time(-1).build(),null);')
+                c.append(f'        selectedPair{i}.getValues().get(FullyDevelopedMassFlowRate.class).getFullyDevelopedMassFlowRate().setDefinition("${{PeriodicMassFlow_{i}}}");')
+            c.append(f'        for(GapCandidate candidate:gapCandidates) if(candidate.bnd==pairA{i}||candidate.bnd==pairB{i})candidate.paired=true;')
+            c.append(f'        pairCount++; pairedNames.add("SelectedInterface_{i}");')
+        for i,bc in enumerate(workflow['boundary_conditions'],1):
+            kind=bc['kind'];key=json.dumps(bc['surface']);value=bc['value']
+            c.append(f'        Boundary assignedBoundary{i}=selectedSurfaces.get({key}); if(assignedBoundary{i}==null)throw new IllegalStateException("Boundary missing: "+{key});')
+            boundary_type={'wall':'WallBoundary','symmetry':'SymmetryBoundary','mass_flow_inlet':'MassFlowBoundary','pressure_outlet':'PressureBoundary'}[kind]
+            c.append(f'        assignedBoundary{i}.setBoundaryType({boundary_type}.class);')
+            if kind in ('mass_flow_inlet','pressure_outlet'):
+                profile='MassFlowRateProfile' if kind=='mass_flow_inlet' else 'StaticPressureProfile'
+                c.append(f'        assignedBoundary{i}.getValues().get({profile}.class).setMethod(ConstantScalarProfileMethod.class);')
+                c.append(f'        assignedBoundary{i}.getValues().get({profile}.class).getMethod(ConstantScalarProfileMethod.class).getQuantity().setDefinition("{value:.16e}");')
+                if kind=='mass_flow_inlet' and (enable_thermal or use_iapws):
+                    c.append(f'        assignedBoundary{i}.getValues().get(StaticTemperatureProfile.class).getMethod(ConstantScalarProfileMethod.class).getQuantity().setDefinition("${{T_init}}");')
+        c.append('        externalGaps.clear(); for(GapCandidate gap:gapCandidates) if(!gap.paired)externalGaps.add(gap.bnd);')
+        c.append('        }')
     if custom_surfaces and workflow['heat_enabled']:
         c.append('        if (!physicalValuesConfigured && !reuse) throw new IllegalStateException("Heat setup requires configured physics");')
         for i,row in enumerate((r for r in catalog['rods'] if r['kind']=='fuel'),1):

@@ -2,7 +2,7 @@
 from copy import deepcopy
 import math
 
-WORKFLOW_DEFAULTS = dict(run_mode='auto',heat_enabled=False,heat_values={},boundary_pairs=[],disabled_internal_pairs=[],quality_thresholds=dict(CellQuality=.01,FaceValidity=.95,VolumeChange=.01,SkewnessAngle=85.),fluid={},version=1, quality_enabled=False, tdc_enabled=False,tdc_equivalence=False,
+WORKFLOW_DEFAULTS = dict(reference_density=0.,minimum_wall_distance=1e-7,boundary_conditions=[],run_mode='auto',heat_enabled=False,heat_values={},boundary_pairs=[],disabled_internal_pairs=[],quality_thresholds=dict(CellQuality=.01,FaceValidity=.95,VolumeChange=.01,SkewnessAngle=85.),fluid={},version=1, quality_enabled=False, tdc_enabled=False,tdc_equivalence=False,
     viscosity_method='constant', conductivity_method='constant', initial_velocity='theory',
     initial_temperature=573.15, initial_pressure=0., initial_ux=0., initial_uy=0.,
     inner_iterations=5, warmup_duration=.45, block_duration=.45, blocks_per_run=1,
@@ -36,7 +36,17 @@ def validate_workflow(data):
         if not isinstance(key,str) or not key or type(value) not in (int,float) or not math.isfinite(value) or not 0<=value<=1e12:raise ValueError('Некорректный тепловой поток группы')
     if any(not isinstance(key,str) for key in result['disabled_internal_pairs']):raise ValueError('Неверный список внутренних интерфейсов')
     for pair in result['boundary_pairs']:
-        if not isinstance(pair,dict) or set(pair)!={'first','second','kind'} or any(not isinstance(v,str) for v in pair.values()) or pair['kind'] not in ('periodic_translation','internal'):raise ValueError('Неизвестная настройка интерфейса')
+        if not isinstance(pair,dict) or set(pair) not in ({'first','second','kind'},{'first','second','kind','mass_flow'}) or any(not isinstance(pair.get(k),str) for k in ('first','second','kind')) or pair['kind'] not in ('periodic_translation','periodic','fully_developed','internal'):raise ValueError('Неизвестная настройка интерфейса')
+    if result['reference_density']<0 or result['minimum_wall_distance']<=0:raise ValueError('Некорректные опорные значения')
+    for pair in result['boundary_pairs']:
+        if pair['kind']=='fully_developed':
+            v=pair.get('mass_flow')
+            if type(v) not in (int,float) or not math.isfinite(v) or v<=0:raise ValueError('Задайте положительный массовый расход пары')
+        elif 'mass_flow' in pair:raise ValueError('Массовый расход задаётся только для Fully Developed')
+    for bc in result['boundary_conditions']:
+        if not isinstance(bc,dict) or set(bc)!={'surface','kind','value'} or not isinstance(bc['surface'],str) or bc['kind'] not in ('wall','symmetry','mass_flow_inlet','pressure_outlet'):raise ValueError('Неизвестное граничное условие')
+        v=bc['value']
+        if type(v) not in (int,float) or not math.isfinite(v) or (bc['kind']=='mass_flow_inlet' and v<=0):raise ValueError('Некорректное значение граничного условия')
     if result['initial_velocity'] not in ('theory','zero','seed'):raise ValueError('Неизвестная начальная скорость')
     if result['initial_velocity']=='seed' and not result['velocity_seed']:raise ValueError('VelocitySeed требует создания начальных функций')
     if result['initial_temperature']<=0:raise ValueError('Начальная температура должна быть выше абсолютного нуля')

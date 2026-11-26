@@ -541,7 +541,7 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
     def apply_options(self, options):
         values = validate_options(options, self.sub_count)
         workflow=values['workflow']
-        if workflow['boundary_pairs'] or workflow['disabled_internal_pairs'] or (workflow['heat_enabled'] and workflow['heat_values']):
+        if workflow['boundary_conditions'] or workflow['boundary_pairs'] or workflow['disabled_internal_pairs'] or (workflow['heat_enabled'] and workflow['heat_values']):
             from starccm_surface_catalog import validate_surface_settings
             validate_surface_settings(self.mesh_result,self.bundle_model,values)
         # Validate everything before changing the GUI.
