@@ -41,12 +41,12 @@ def install_tree(d,layout):
         if len(keys)==1:
             existing=next((bc for bc in d._conditions if bc['surface']==keys[0]),None)
             if existing:
-                d.surface_condition.setCurrentIndex(d.surface_condition.findData(existing['kind']));d.boundary_value.setValue(existing['value'])
+                d.surface_condition.setCurrentIndex(d.surface_condition.findData('periodic' if existing['kind']=='periodic_translation' else existing['kind']));d.boundary_value.setValue(existing['value'])
         else:
             existing=next((p for p in d._pairs if set(keys)=={p['first'],p['second']}),None)
             if existing:
                 for combo,key in zip((d.surface_a,d.surface_b),(existing['first'],existing['second'])):combo.setCurrentIndex(combo.findData(key))
-                d.surface_condition.setCurrentIndex(d.surface_condition.findData(existing['kind']))
+                d.surface_condition.setCurrentIndex(d.surface_condition.findData('periodic' if existing['kind']=='periodic_translation' else existing['kind']))
                 if 'mass_flow' in existing:
                     d.boundary_flow_auto.setChecked(existing.get('mass_flow_auto',False));d.boundary_value.setValue(existing['mass_flow'])
                     if existing.get('mass_flow_auto'):d.update_boundary_flow()

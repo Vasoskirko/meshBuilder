@@ -113,7 +113,7 @@ class CompactExportTests(unittest.TestCase):
                 pair=dict(first=a['id'],second=b['id'],kind='periodic_translation')
                 try:validate_pairs([pair],d._surface_catalog)
                 except ValueError:continue
-                d.boundary_selection_mode.setCurrentIndex(1);d.surface_condition.setCurrentIndex(d.surface_condition.findData('periodic_translation'));d.surface_a.setCurrentIndex(d.surface_a.findData(a['id']));d.surface_b.setCurrentIndex(d.surface_b.findData(b['id']));d.add_surface_pair();return pair
+                d.boundary_selection_mode.setCurrentIndex(1);d.surface_condition.setCurrentIndex(d.surface_condition.findData('periodic'));d.surface_a.setCurrentIndex(d.surface_a.findData(a['id']));d.surface_b.setCurrentIndex(d.surface_b.findData(b['id']));d.add_surface_pair();return pair
         raise AssertionError('reference has no compatible periodic pair')
     def test_pair_assignment_export_and_rejections(self):
         d=self.dialog();pair=self.add_valid_pair(d);self.assertEqual(len(d._pairs),1)

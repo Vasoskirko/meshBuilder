@@ -82,7 +82,9 @@ class PartsReportsTests(unittest.TestCase):
         self.assertEqual(d.read_options(),original)
 
     def test_tabs_help_and_review_destination(self):
-        d=self.dialog();self.assertEqual(d.tabs.count(),8)
+        d=self.dialog();d.boundary_selection_mode.setCurrentIndex(1)
+        self.assertEqual([d.surface_condition.itemText(i) for i in range(d.surface_condition.count())],['Internal','Internal + Periodic','Fully Developed + Periodic'])
+        self.assertEqual(d.tabs.count(),8)
         self.assertEqual(d.tabs.tabText(2),'3. Производные части');self.assertEqual(d.tabs.tabText(3),'4. Отчёты (Репорты)')
         self.assertTrue(d.tabs.widget(3).isAncestorOf(d.chk_reports))
         self.assertTrue(all(d.tabs.widget(3).isAncestorOf(w) for w in d.report_checkboxes.values()))

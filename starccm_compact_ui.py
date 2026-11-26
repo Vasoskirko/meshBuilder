@@ -196,13 +196,15 @@ def install_compact(d):
         remove.setEnabled(bool(d._pairs or d._conditions))
         d.surface_pairs_table.setRowCount(len(d._pairs)+len(d._conditions))
         for i,row in enumerate(d._pairs):
-            for j,key in enumerate(('first','second','kind')):d.surface_pairs_table.setItem(i,j,QTableWidgetItem(row[key]))
+            for j,key in enumerate(('first','second','kind')):
+                value={'internal':'Internal','periodic':'Internal + Periodic','periodic_translation':'Internal + Periodic','fully_developed':'Fully Developed + Periodic'}.get(row[key],row[key]) if key=='kind' else row[key]
+                d.surface_pairs_table.setItem(i,j,QTableWidgetItem(value))
         for i,row in enumerate(d._conditions,len(d._pairs)):
             for j,value in enumerate((row['surface'],str(row['value']),row['kind'])):d.surface_pairs_table.setItem(i,j,QTableWidgetItem(value))
     def update_condition_choices():
         previous=d.surface_condition.currentData();pair=d.boundary_selection_mode.currentData()=='pair'
         d.surface_b.setEnabled(pair and not d.tdc_enabled.isChecked());d.surface_condition.clear()
-        choices=(('Internal + Periodic','periodic'),('Fully Developed + Periodic','fully_developed'),('Internal · совпадающие поверхности','internal'),('Periodic · только перенос (проверка)','periodic_translation')) if pair else (('Wall','wall'),('Mass Flow Inlet','mass_flow_inlet'),('Pressure Outlet','pressure_outlet'),('Symmetry','symmetry'))
+        choices=(('Internal','internal'),('Internal + Periodic','periodic'),('Fully Developed + Periodic','fully_developed')) if pair else (('Wall','wall'),('Mass Flow Inlet','mass_flow_inlet'),('Pressure Outlet','pressure_outlet'),('Symmetry','symmetry'))
         for text,key in choices:d.surface_condition.addItem(text,key)
         index=d.surface_condition.findData(previous)
         if index>=0:d.surface_condition.setCurrentIndex(index)
