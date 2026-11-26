@@ -36,7 +36,6 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
             if 'field_functions' in options:options['field_functions']=[key for key in options['field_functions'] if key!='quality']
         if options.get('use_iapws'):
             options['enable_thermal']=True
-            if any(workflow[key]=='iapws' for key in ('viscosity_method','conductivity_method')):raise ValueError('Назначение переменных методов вязкости/теплопроводности IAPWS ещё не поддержано; выберите константы из y+ и настройте методы вручную в STAR')
     from starccm_surface_catalog import validate_surface_settings
     catalog=validate_surface_settings(mesh_result,bundle_model,options) if workflow else None
     p = mesh_result.params
@@ -599,6 +598,11 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('')
     c.append('        }')
     transport_flags='' if workflow is None else ','+str(workflow['viscosity_method']=='constant').lower()+','+str(workflow['conductivity_method']=='constant').lower()
+    if workflow and use_iapws:
+        c.append('        Material transportMaterial=setupPhysics.getModelManager().getModel(SingleComponentLiquidModel.class).getMaterial();')
+        for key,prop,method in (('viscosity_method','DynamicViscosityProperty','IapwsDynamicViscosityMethod'),('conductivity_method','ThermalConductivityProperty','IapwsThermalConductivityMethod')):
+            if workflow[key]=='iapws':
+                c.append(f'        transportMaterial.getMaterialProperties().getMaterialProperty({prop}.class).setMethod({method}.class);')
     c.append('        physicalValuesConfigured = configurePhysicalValues(sim,setupPhysics,subchannelRegions,' + str(use_iapws).lower() + ',' + str(enable_thermal or use_iapws).lower() + transport_flags + ');')
     c.append('        }')
     if custom_surfaces and workflow['heat_enabled']:
@@ -610,7 +614,6 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
             c.append(f'        int heated{i}=0; for(Boundary boundary:allRods) if(tagged(boundary,"meshBuilder.HeatGroup.{key}")) {{')
             c.append(f'            boundary.getConditions().get(WallThermalOption.class).setSelected(WallThermalOption.Type.HEAT_FLUX);HeatFluxProfile profile=boundary.getValues().get(HeatFluxProfile.class);profile.setMethod(FunctionScalarProfileMethod.class);profile.getMethod(FunctionScalarProfileMethod.class).setFieldFunction(heatQ{i});heated{i}++; }}')
             c.append(f'        if(heated{i}==0)throw new IllegalStateException("Missing heat group {key}");')
-    c.append('        initializeFirstSolution(sim,reuse,' + str(initialize_solution).lower() + ',physicalValuesConfigured);')
     if is_unsteady:
         c.append('        try {')
         c.append('            GlobalParameterManager timeManager=sim.get(GlobalParameterManager.class);')
@@ -641,6 +644,14 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
         c.append('        seed.setDimensions(Dimensions.Builder().length(1).time(-1).build());')
         c.append('        try { workflowEnum(workflowCall(seed,"getTypeOption"),"VECTOR"); } catch (Exception e) { throw new IllegalStateException("VelocitySeed vector type unavailable: "+e.getMessage(),e); }')
         c.append('        seed.setDefinition("[${Apert}*${seedX},${Apert}*${seedY},${U_b}]");')
+        if workflow['initial_velocity']=='seed':
+            c.append('        if (!reuse) {')
+            c.append('            if (!physicalValuesConfigured) throw new IllegalStateException("VelocitySeed requires configured initial fields");')
+            c.append('            VelocityProfile initialVelocity=setupPhysics.getInitialConditions().get(VelocityProfile.class);')
+            c.append('            initialVelocity.setMethod(FunctionVectorProfileMethod.class);')
+            c.append('            initialVelocity.getMethod(FunctionVectorProfileMethod.class).setFieldFunction(seed);')
+            c.append('        }')
+    c.append('        initializeFirstSolution(sim,reuse,' + str(initialize_solution).lower() + ',physicalValuesConfigured);')
     # 9. Создание Derived Parts (PlaneSection и LineSection) по точному рекордеру 21.02.007:
     c.append('        // 9. Создание сечений и зондов (Derived Parts) по рекордеру STAR-CCM+ 21.02.007:')
     c.append('        sim.println(">>> Создание производных деталей (Derived Parts)...");')

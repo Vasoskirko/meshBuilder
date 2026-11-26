@@ -87,7 +87,7 @@ def install_compact(d):
     for i,(key,symbol,unit) in enumerate(specs):
         row=i//2;col=(i%2)*3;pg.addWidget(QLabel(symbol),row,col);pg.addWidget(compact_field(d.fluid_fields[key]),row,col+1);pg.addWidget(QLabel(unit),row,col+2)
     d.iapws_transport=QWidget();it=QFormLayout(d.iapws_transport);it.setContentsMargins(0,0,0,0);fl.addWidget(d.iapws_transport)
-    it.addRow(label_help('Вязкость','При константе используется μ из калькулятора y+. Назначение переменного метода IAPWS требует проверки API 2602.'),d.viscosity_method)
+    it.addRow(label_help('Вязкость','При константе используется μ из калькулятора y+. Метод IAPWS зависит от локального состояния воды.'),d.viscosity_method)
     it.addRow(label_help('Теплопроводность','При константе используется λ из калькулятора y+.'),d.conductivity_method)
     d.viscosity_method.show();d.conductivity_method.show()
     d.sync_fluid_button=QPushButton('Обновить из y+');fl.addWidget(d.sync_fluid_button)
@@ -98,7 +98,7 @@ def install_compact(d):
     gravity=QHBoxLayout();d.chk_gravity.setText('Гравитация');gravity.addWidget(d.chk_gravity);gravity.addWidget(d.combo_gravity);gravity.addWidget(help_button('Ось и направление в лабораторной системе. Модуль ускорения 9,81 м/с².'));gravity.addStretch();rfl.addLayout(gravity);d.chk_gravity.show();d.combo_gravity.show()
     initial,il=box('Начальные условия');rl.addWidget(initial);form=QFormLayout();il.addLayout(form)
     form.addRow('Температура, K',compact_field(d.initial_temperature));form.addRow(label_help('Давление, Па','Избыточное относительно опорного. Абсолютное давление — их сумма.'),compact_field(d.initial_pressure));form.addRow('Скорость',d.initial_velocity);d.initial_velocity.show();d.initial_absolute.show();il.addWidget(d.initial_absolute)
-    il.addWidget(label_help('Начальные функции · автоматически','Создаются pi, Apert, thetaZ, seedX, seedY, VelocitySeed и относительная высота. VelocitySeed не назначается начальным условием до проверки выражения в STAR.'))
+    il.addWidget(label_help('Начальные функции · автоматически','Создаются pi, Apert, thetaZ, seedX, seedY, VelocitySeed и относительная высота. Назначение выбирается в поле «Скорость»: нулевая, осевая или VelocitySeed.'))
     d.seed_functions.setChecked(True);d.seed_functions.hide();d.field_checkboxes['z_fraction'].setChecked(True)
     if isinstance(d.field_checkboxes['z_fraction'].parentWidget(),QGroupBox):d.field_checkboxes['z_fraction'].parentWidget().hide()
     ll.addStretch();rl.addStretch()

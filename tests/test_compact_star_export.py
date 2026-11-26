@@ -24,6 +24,34 @@ class CompactExportTests(unittest.TestCase):
             fluid_props=dict(density=747.339,dyn_vis=9.27e-5,cp=5225.,**{'lambda':.575},t_ref_c=290.,p_ref_mpa=16.2))
         self.addCleanup(d.deleteLater);return d
     def macro(self,d):return generate_starccm_java_macro('mesh.xyz',self.mesh,self.model,d.read_fluid(),d.yplus_data,d.read_options())
+    def test_recorded_iapws_transport_choices_are_exported_independently(self):
+        d=self.dialog();d.property_choice.setCurrentIndex(1)
+        self.assertTrue(d.viscosity_method.model().item(1).isEnabled())
+        for mu,conductivity in ((0,0),(1,0),(0,1),(1,1)):
+            d.viscosity_method.setCurrentIndex(mu);d.conductivity_method.setCurrentIndex(conductivity)
+            code=self.macro(d)
+            self.assertEqual('setMethod(IapwsDynamicViscosityMethod.class)' in code,bool(mu))
+            self.assertEqual('setMethod(IapwsThermalConductivityMethod.class)' in code,bool(conductivity))
+            self.assertIn('true,true,'+str(not mu).lower()+','+str(not conductivity).lower()+');',code)
+            other=self.dialog();other.apply_options(d.read_options())
+            self.assertEqual(other.viscosity_method.currentIndex(),mu)
+            self.assertEqual(other.conductivity_method.currentIndex(),conductivity)
+
+    def test_recorded_velocity_seed_binding_precedes_initialization(self):
+        d=self.dialog();d.initial_velocity.setCurrentIndex(d.initial_velocity.findData('seed'))
+        code=self.macro(d)
+        assignment='initialVelocity.getMethod(FunctionVectorProfileMethod.class).setFieldFunction(seed);'
+        self.assertIn('if (!reuse) {',code)
+        self.assertLess(code.index('seed.setDefinition('),code.index(assignment))
+        self.assertLess(code.index(assignment),code.index('initializeFirstSolution(sim,reuse,'))
+        other=self.dialog();other.apply_options(d.read_options())
+        self.assertEqual(other.initial_velocity.currentData(),'seed')
+        d.initial_velocity.setCurrentIndex(d.initial_velocity.findData('zero'))
+        self.assertNotIn(assignment,self.macro(d))
+        options=d.read_options();options['workflow'].update(initial_velocity='seed',velocity_seed=False)
+        with self.assertRaisesRegex(ValueError,'VelocitySeed'):
+            generate_starccm_java_macro('mesh.xyz',self.mesh,self.model,d.read_fluid(),d.yplus_data,options)
+
     def test_compact_iapws_visibility_and_gravity_row(self):
         d=self.dialog();d.show();d.tabs.setCurrentIndex(1);self.app.processEvents()
         self.assertTrue(d.constant_properties.isVisible());self.assertFalse(d.iapws_transport.isVisible())

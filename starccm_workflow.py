@@ -37,7 +37,8 @@ def validate_workflow(data):
     if any(not isinstance(key,str) for key in result['disabled_internal_pairs']):raise ValueError('Неверный список внутренних интерфейсов')
     for pair in result['boundary_pairs']:
         if not isinstance(pair,dict) or set(pair)!={'first','second','kind'} or any(not isinstance(v,str) for v in pair.values()) or pair['kind'] not in ('periodic_translation','internal'):raise ValueError('Неизвестная настройка интерфейса')
-    if result['initial_velocity'] not in ('theory','zero'):raise ValueError('Неизвестная начальная скорость')
+    if result['initial_velocity'] not in ('theory','zero','seed'):raise ValueError('Неизвестная начальная скорость')
+    if result['initial_velocity']=='seed' and not result['velocity_seed']:raise ValueError('VelocitySeed требует создания начальных функций')
     if result['initial_temperature']<=0:raise ValueError('Начальная температура должна быть выше абсолютного нуля')
     for key in ('warmup_duration','block_duration'):
         if result[key]<=0:raise ValueError('Длительность должна быть положительной')
