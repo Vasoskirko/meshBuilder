@@ -45,3 +45,24 @@ def flat_groups(source):
                 nativeGroupObjects(roots,entry.getKey(),entry.getValue());
 '''+source[end:]
     return source.replace('"MeshQuality"','"Quality"').replace('"Coordinates"','"Geometry"').replace('"Transient"','"Time"')
+
+HEAT_SUPPORT = r'''
+    private void configureHeatInput(Simulation sim,String name,double value) {
+        GlobalParameterManager manager=sim.get(GlobalParameterManager.class);
+        ScalarGlobalParameter parameter=findOwned(sim,manager,name,ScalarGlobalParameter.class);
+        String inputTag="meshBuilder.HeatInput."+name+"."+Double.toHexString(value);
+        if(parameter==null) {
+            createParam(sim,manager,null,name,value,"W/m^2",Dimensions.Builder().mass(1).time(-3).build(),null);
+            parameter=findOwned(sim,manager,name,ScalarGlobalParameter.class);
+        }
+        if(parameter==null)throw new IllegalStateException("Missing heat parameter "+name);
+        // Identical macro reruns preserve in-STAR edits. A newly exported q
+        // explicitly changes the value, including a return to an earlier input.
+        if(!tagged(parameter,inputTag)) {
+            parameter.getQuantity().setValueAndUnits(value,sim.getUnitsManager().getObject("W/m^2"));
+            List<Tag> current=tags(parameter);
+            current.removeIf(t->t.getPresentationName().startsWith("meshBuilder.HeatInput."+name+"."));
+            sim.get(TagManager.class).setTags(parameter,current);mark(sim,parameter,inputTag);
+        }
+    }
+'''

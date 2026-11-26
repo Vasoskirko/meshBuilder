@@ -42,7 +42,7 @@ class TmcExportTests(unittest.TestCase):
         dialog=StarCcmExportDialog(mesh_result=self.result,bundle_model=self.model)
         try:
             dialog.rb_inter_fuse.setChecked(True);dialog.rb_turb_srh.setChecked(True)
-            dialog.tdc_enabled.setChecked(True);dialog.tdc_equivalence.setChecked(True)
+            dialog.tdc_enabled.setChecked(True);dialog.tdc_equivalence.setChecked(True);dialog.heat_enabled.setChecked(True)
             dialog.field_time_step.setText('invalid')
             with self.assertRaises(ValueError):dialog.read_options()
             dialog.field_time_step.setValue(1.2e-5)
@@ -95,7 +95,7 @@ class TmcExportTests(unittest.TestCase):
         parent=QWidget();parent.current_mesh_result=self.result;parent.can_export_mesh=lambda:True
         dialog=StarCcmExportDialog(parent,mesh_result=self.result,bundle_model=self.model)
         try:
-            dialog.rb_inter_fuse.setChecked(True);dialog.rb_turb_srh.setChecked(True);dialog.tdc_enabled.setChecked(True);dialog.tdc_equivalence.setChecked(True)
+            dialog.rb_inter_fuse.setChecked(True);dialog.rb_turb_srh.setChecked(True);dialog.tdc_enabled.setChecked(True);dialog.tdc_equivalence.setChecked(True);dialog.heat_enabled.setChecked(True)
             with tempfile.TemporaryDirectory() as tmp,patch('starccm_unified_export.QFileDialog.getExistingDirectory',return_value=tmp) as chooser,patch('starccm_unified_export.write_tmc_bundle',return_value=[]) as writer,patch('starccm_unified_export.QMessageBox.information'),patch.object(dialog,'accept') as accepted:
                 dialog.generate_and_save();writer.assert_called_once();accepted.assert_called_once()
                 parent.can_export_mesh=lambda:False

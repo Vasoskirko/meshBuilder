@@ -45,8 +45,10 @@ def validate_options(options, sub_count=None):
     if 'workflow' not in options:
         values['workflow']['quality_enabled']=any(options.get(key,False) for key in ('create_quality_scene','create_quality_histograms','create_bad_cells'))
         if values['export_mode']=='tmc_reference':
-            t=values['tmc_settings'];w=values['workflow'];w.update(tdc_enabled=True,initial_temperature=t['temperature_ref'],warmup_duration=t['hydro_duration'],block_duration=t['block_duration'],blocks_per_run=t['blocks_to_run'])
+            t=values['tmc_settings'];w=values['workflow'];w.update(heat_enabled=True,tdc_enabled=True,initial_temperature=t['temperature_ref'],warmup_duration=t['hydro_duration'],block_duration=t['block_duration'],blocks_per_run=t['blocks_to_run'])
             w['fluid']=dict(density=t['rho'],dyn_vis=t['mu'],cp=t['cp'],**{'lambda':t['conductivity']})
+    if isinstance(options.get('workflow'),dict) and options['workflow'].get('tdc_enabled') and 'heat_enabled' not in options['workflow']:
+        values['workflow']['heat_enabled']=True
     values['workflow']=validate_workflow(values['workflow'])
     dt=values['time_step']
     if isinstance(dt,bool) or not isinstance(dt,(int,float)) or not math.isfinite(dt) or dt<=0:
@@ -79,6 +81,7 @@ def validate_options(options, sub_count=None):
             raise ValueError('Несовместимые параметры Fuse')
     elif values['region_mode']!='by_subchannel' or values['inlet_outlet_mode']!='by_subchannel':
         raise ValueError('Несовместимые параметры Internal Interface')
+    if values['workflow']['run_mode']=='steady' and values['turbulence_model']=='hybrid_srh':raise ValueError('Hybrid SRH–SST требует нестационарного режима')
     if values['workflow']['tdc_enabled'] != (values['export_mode']=='tmc_reference'):
         raise ValueError('Режим экспорта и флажок TDC не согласованы')
     if values['export_mode']=='tmc_reference':

@@ -386,7 +386,7 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         mean_note.setWordWrap(True); means_layout.addWidget(mean_note)
         analysis_layout.addWidget(self.mean_group); analysis_layout.addStretch()
         self.rb_turb_srh.toggled.connect(self.mean_group.setEnabled)
-        self.mean_group.setEnabled(self.rb_turb_srh.isChecked())
+        self.mean_group.setEnabled(self.rb_turb_srh.isChecked() or (hasattr(self,'simulation_mode') and self.simulation_mode.currentData()=='unsteady'))
         self.tabs.addTab(tab_analysis, "6. Анализ")
         # Scroll long tabs rather than growing the dialog beyond the screen.
         for index in range(self.tabs.count()):
@@ -437,7 +437,7 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         self.chk_thermal.setToolTip("IAPWS требует энергии независимо от сохранённого положения флажка.")
         self.report_checkboxes['thermal'].setEnabled(thermal)
         for key in ('temperature','wall_heat_flux'): self.mean_checkboxes[key].setEnabled(thermal)
-        self.mean_group.setEnabled(self.rb_turb_srh.isChecked())
+        self.mean_group.setEnabled(self.rb_turb_srh.isChecked() or (hasattr(self,'simulation_mode') and self.simulation_mode.currentData()=='unsteady'))
         text = f"Подканалы анализа: {selected}/{self.sub_count}. "
         if not selected: text += "Индивидуальные сечения, зонды и расчётные отчёты не создаются. "
         text += "Повторный запуск сохраняет физику, граничные условия и решение."
@@ -534,12 +534,16 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
             "subchannel_reports": [k for k, cb in self.report_checkboxes.items() if cb.isChecked()],
             "time_mean_fields": [k for k, cb in self.mean_checkboxes.items() if cb.isChecked()],
             "mean_start_step": self.spin_mean_start.value(),
-            "time_step": self.field_time_step.value() if self.rb_turb_srh.isChecked() else self.field_time_step.model.raw,
+            "time_step": self.field_time_step.value() if workflow["run_mode"]=="unsteady" or self.rb_turb_srh.isChecked() else self.field_time_step.model.raw,
             "selected_subchannels": sel_subs
         }
 
     def apply_options(self, options):
         values = validate_options(options, self.sub_count)
+        workflow=values['workflow']
+        if workflow['boundary_pairs'] or workflow['disabled_internal_pairs'] or (workflow['heat_enabled'] and workflow['heat_values']):
+            from starccm_surface_catalog import validate_surface_settings
+            validate_surface_settings(self.mesh_result,self.bundle_model,values)
         # Validate everything before changing the GUI.
         self.rb_inter_fuse.setChecked(values['inter_fuse'])
         self.rb_inter_intf.setChecked(not values['inter_fuse'])

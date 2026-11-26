@@ -14,10 +14,18 @@ def tdc_options(d,workflow):
     if not workflow['tdc_equivalence']:raise ValueError('Подтвердите допущение трёх эквивалентных зазоров эталона TDC')
     if not d.chk_thermal.isChecked():raise ValueError('Для TDC включите энергию')
     if not d.rb_wall_60.isChecked():raise ValueError('Для эталона TDC сохраните исходные rod-секторы')
+    if not workflow['heat_enabled']:raise ValueError('Включите тепловой поток на ТВЭЛ во вкладке «Физика»')
+    from starccm_surface_catalog import surface_catalog
+    catalog=surface_catalog(d.mesh_result,d.bundle_model,'sectors_60')
+    sub_heat={}
+    for source in (1,2):
+        values=[workflow['heat_values'].get(row['id']) for row in catalog['rods'] if row['kind']=='fuel' and row['sources']==[source]]
+        if not values or any(v is None or abs(v-values[0])>max(1.,abs(values[0]))*1e-12 for v in values):raise ValueError('Для TDC задайте одинаковый q всем секторам каждого подканала')
+        sub_heat[source]=values[0]
     fluid=d.read_fluid();settings=deepcopy(TMC_DEFAULTS)
     for key,field in d.tmc_fields.items():
         settings[key]=field.isChecked() if type(TMC_DEFAULTS[key]) is bool else field.value()
-    settings.update(rho=fluid['density'],mu=fluid['dyn_vis'],cp=fluid['cp'],conductivity=fluid['lambda'],
+    settings.update(heat_flux_1=sub_heat[1],heat_flux_2=sub_heat[2],rho=fluid['density'],mu=fluid['dyn_vis'],cp=fluid['cp'],conductivity=fluid['lambda'],
         temperature_ref=workflow['initial_temperature'],time_step=d.field_time_step.value(),
         hydro_duration=workflow['warmup_duration'],thermal_duration=workflow['warmup_duration'],
         block_duration=workflow['block_duration'],blocks_to_run=workflow['blocks_per_run'])

@@ -76,7 +76,7 @@ class UnifiedWindowTests(unittest.TestCase):
         self.assertIn('sin(7*${thetaZ}+1.9)',code);self.assertEqual(d.gap_table.rowCount(),1)
         self.assertEqual(d.gap_table.item(0,0).text(),'Gap_Sub1_Sub2')
     def test_tdc_bundle_uses_shared_physics_time_and_new_names(self):
-        d=self.dialog();d.rb_inter_fuse.setChecked(True);d.rb_turb_srh.setChecked(True);d.tdc_enabled.setChecked(True);d.tdc_equivalence.setChecked(True)
+        d=self.dialog();d.rb_inter_fuse.setChecked(True);d.rb_turb_srh.setChecked(True);d.tdc_enabled.setChecked(True);d.tdc_equivalence.setChecked(True);d.heat_enabled.setChecked(True)
         d.field_time_step.setText('2,5e-5');d.warmup_duration.setValue(.6);d.block_duration.setValue(.3)
         values=d.read_options();self.assertEqual(values['tmc_settings']['rho'],747.339)
         with tempfile.TemporaryDirectory() as tmp,patch('mesh_subchannel.export_subchannel_plot3d',side_effect=lambda r,p,**kw:Path(p).write_text('XYZ')):
@@ -91,7 +91,7 @@ class UnifiedWindowTests(unittest.TestCase):
         command,java=test_tmc_hybrid.compiler()
         if command is None:self.skipTest('Java compiler unavailable; not a Siemens SDK compile')
         d=self.dialog();d.rb_inter_fuse.setChecked(True);d.rb_turb_srh.setChecked(True)
-        d.tdc_enabled.setChecked(True);d.tdc_equivalence.setChecked(True)
+        d.tdc_enabled.setChecked(True);d.tdc_equivalence.setChecked(True);d.heat_enabled.setChecked(True)
         values=d.read_options()
         with tempfile.TemporaryDirectory() as tmp,patch('mesh_subchannel.export_subchannel_plot3d',side_effect=lambda r,p,**kw:Path(p).write_text('XYZ')):
             root=Path(tmp);paths=write_tmc_bundle(root,'mesh.xyz',self.mesh,self.model,values['tmc_settings'],lambda *a:None,unified_options=values)

@@ -37,6 +37,8 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
         if options.get('use_iapws'):
             options['enable_thermal']=True
             if any(workflow[key]=='iapws' for key in ('viscosity_method','conductivity_method')):raise ValueError('Назначение переменных методов вязкости/теплопроводности IAPWS ещё не поддержано; выберите константы из y+ и настройте методы вручную в STAR')
+    from starccm_surface_catalog import validate_surface_settings
+    catalog=validate_surface_settings(mesh_result,bundle_model,options) if workflow else None
     p = mesh_result.params
     yplus_data = export_yplus_data(yplus_data, default_h1=p.h1)
     blocks = mesh_result.blocks
@@ -123,14 +125,17 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     create_field_functions = options.get("create_field_functions", True)
     field_choices = options.get("field_functions", list(FIELD_CHOICES)) if create_field_functions else []
     analysis_choices = options.get("subchannel_reports", [])
-    mean_choices = options.get("time_mean_fields", []) if turbulence_model == "hybrid_srh" else []
+    is_unsteady=turbulence_model=="hybrid_srh" or (workflow is not None and workflow["run_mode"]=="unsteady")
+    if workflow and workflow["run_mode"]=="steady" and turbulence_model=="hybrid_srh":raise ValueError("Hybrid SRH–SST требует нестационарного режима")
+    mean_choices = options.get("time_mean_fields", []) if is_unsteady else []
     for selected, choices in ((field_choices, FIELD_CHOICES), (analysis_choices, REPORT_CHOICES), (mean_choices, MEAN_CHOICES)):
         if not isinstance(selected, list) or any(type(v) is not str or v not in choices for v in selected) or len(set(selected)) != len(selected):
             raise ValueError("Неизвестный или повторяющийся выбор полей/отчётов")
     time_step=options.get('time_step',1e-4)
     if isinstance(time_step,bool) or not isinstance(time_step,(int,float)) or not math.isfinite(time_step) or time_step<=0:
         raise ValueError('Шаг времени Δt должен быть положительным конечным числом')
-    preserve_sectors=inter_fuse and rod_mode=='sectors_60'
+    custom_surfaces=bool(workflow and catalog and catalog['domains'] and not workflow['tdc_enabled'])
+    preserve_sectors=(inter_fuse and rod_mode=='sectors_60') or custom_surfaces
     mean_start = options.get("mean_start_step", 1)
     if type(mean_start) is not int or not 1 <= mean_start <= 1000000000:
         raise ValueError("Неверный начальный шаг усреднения")
@@ -155,8 +160,9 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
         raise ValueError("Неизвестный номер подканала для сечений")
 
     digest = hashlib.sha256()
-    digest.update(json.dumps(dict(schema=1, inter_fuse=inter_fuse, rod_mode=rod_mode,
-        io=inlet_outlet_mode, nz=p.nz, height=lz_m),sort_keys=True).encode())
+    topology_settings=dict(schema=2 if custom_surfaces else 1,inter_fuse=inter_fuse,rod_mode=rod_mode,io=inlet_outlet_mode,nz=p.nz,height=lz_m)
+    if custom_surfaces:topology_settings.update(disabled_internal_pairs=workflow['disabled_internal_pairs'],pairs=workflow['boundary_pairs'],rod_kinds={str(rid):bundle_model.rods[rid].rod_type for row in catalog['rods'] for rid in row['rod_ids']})
+    digest.update(json.dumps(topology_settings,sort_keys=True).encode())
     for block in blocks:
         for coordinate in block:
             values=np.asarray(coordinate,dtype='<f8')
@@ -331,7 +337,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
         c.append('            phys.enable(SrhModel.class);')
         c.append('            sim.println("  • Турбулентность: Scale-Resolving Hybrid (SRH) + SST k-omega (Unsteady)");')
     else:
-        c.append('            phys.enable(SteadyModel.class);')
+        c.append('            phys.enable(ImplicitUnsteadyModel.class);' if is_unsteady else '            phys.enable(SteadyModel.class);')
         c.append('            phys.enable(ReynoldsStressTurbulence.class);')
         c.append('            phys.enable(EbRsTurbModel.class);')
         c.append('            phys.enable(EbRsAllYplusWallTreatment.class);')
@@ -436,7 +442,26 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('                rodBnds.add(bd.bnd);')
     c.append('                sim.println(String.format("  %-13s | %12.2f | (%8.3f, %8.3f, %8.3f) | СТЕРЖЕНЬ (rod)", bd.bnd.getPresentationName(), bd.area, bd.cx*1e3, bd.cy*1e3, bd.cz*1e3));')
     c.append('            }')
-    if rod_mode == "monolithic":
+    if custom_surfaces:
+        kinds={rid:('rod' if rod.rod_type=='fuel' else 'guide' if rod.rod_type=='guide' else 'instrument') for rid,rod in bundle_model.rods.items()}
+        c.append('            Map<Integer,String> rodKinds=new HashMap<>();')
+        for rid,kind in kinds.items():c.append(f'            rodKinds.put({rid},"{kind}");')
+        c.append('            Map<String,List<Boundary>> surfaceGroups=new TreeMap<>();')
+        c.append('            for (Boundary b : rodBnds) {')
+        c.append('                java.util.regex.Matcher source=java.util.regex.Pattern.compile("rod_s([0-9]+)_.*").matcher(b.getPresentationName());')
+        c.append('                if (!source.matches()) throw new IllegalStateException("Source identity lost before wall grouping");')
+        c.append('                int n=Integer.parseInt(source.group(1)), r=rodIds.get(b);')
+        key_expr='"s"+n+"_R"+r' if rod_mode=='sectors_60' else ('"R"+r' if rod_mode=='by_rod' else '"s"+n')
+        c.append('                String key=rodKinds.get(r)+"_"+('+key_expr+');')
+        c.append('                surfaceGroups.computeIfAbsent(key,k->new ArrayList<>()).add(b);')
+        c.append('            }')
+        c.append('            for (Map.Entry<String,List<Boundary>> entry : surfaceGroups.entrySet()) {')
+        c.append('                List<Boundary> members=entry.getValue(); if (members.size()>1) meshMgr.combineBoundaries(members);')
+        c.append('                Boundary boundary=members.get(0); boundary.setPresentationName(entry.getKey());')
+        c.append('                if (entry.getKey().startsWith("rod_")) mark(sim,boundary,"meshBuilder.HeatGroup."+entry.getKey());')
+        c.append('                allRods.add(boundary);')
+        c.append('            }')
+    elif rod_mode == "monolithic":
         c.append('            if (!rodBnds.isEmpty()) { meshMgr.combineBoundaries(rodBnds); Boundary mRod = rodBnds.get(0); mRod.setPresentationName(String.format("rod_%d", subNum)); allRods.add(mRod); }')
     elif rod_mode == "by_rod":
         c.append('            Map<Integer, List<Boundary>> byRod = new TreeMap<>();')
@@ -461,6 +486,12 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('                if (i == j) continue;')
     c.append('                GapCandidate cj = gapCandidates.get(j);')
     c.append('                if (cj.paired || ci.reg.equals(cj.reg)) continue;')
+    if custom_surfaces:
+        seen=set()
+        for row in catalog['sides']:
+            if row['pair_id'] not in workflow['disabled_internal_pairs'] or row['pair_id'] in seen:continue
+            seen.add(row['pair_id']);a,b=row['source'],row['neighbor']
+            c.append(f'                if ((ci.subNum=={a} && cj.subNum=={b}) || (ci.subNum=={b} && cj.subNum=={a})) continue;')
     c.append('                double dist = Math.hypot(ci.cx - cj.cx, ci.cy - cj.cy);')
     c.append('                if (dist < 1e-4 && dist < minDist) { minDist = dist; bestMatch = cj; }')
     c.append('            }')
@@ -478,15 +509,39 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('            }')
     c.append('        }')
     c.append('        for (GapCandidate cg : gapCandidates) {')
-    c.append('            if (!cg.paired) cg.bnd.setPresentationName("sym/per");')
+    if custom_surfaces:
+        c.append('            if (!cg.paired) {')
+        c.append('                double area=measureArea(areaRep,unityFF,cg.bnd); String side=null;')
+        for row in catalog['sides']:
+            if row['shared'] and inter_fuse:continue
+            area=row['area']*1e6;cx,cy=row['center']
+            source_check='' if inter_fuse else f'cg.subNum=={row["source"]} && '
+            c.append(f'                if ({source_check}Math.abs(area-{area:.16e})<=Math.max(area,{area:.16e})*1e-5 && Math.hypot(cg.cx-({cx:.16e}),cg.cy-({cy:.16e}))<1e-8) {{ if(side!=null)throw new IllegalStateException("Ambiguous side"); side="{row["id"]}"; }}')
+        c.append('                if(side==null)throw new IllegalStateException("Unmatched external surface"); cg.bnd.setPresentationName(side);')
+        c.append('            }')
+    else:
+        c.append('            if (!cg.paired) cg.bnd.setPresentationName("sym/per");')
     c.append('        }')
-    c.append('        sim.println(String.format("  • Всего успешно сопряжено интерфейсов: %d. Внешние зазоры назначены как sym/per.", pairCount));')
+    if custom_surfaces:
+        for i,pair in enumerate(workflow['boundary_pairs'],1):
+            a=json.dumps(pair['first']);b=json.dumps(pair['second'])
+            c.append(f'        Boundary pairA{i}=null,pairB{i}=null;')
+            c.append(f'        for(GapCandidate candidate:gapCandidates) {{ if(candidate.bnd.getPresentationName().equals({a}))pairA{i}=candidate.bnd; if(candidate.bnd.getPresentationName().equals({b}))pairB{i}=candidate.bnd; }}')
+            c.append(f'        if(pairA{i}==null||pairB{i}==null)throw new IllegalStateException("Interface surface missing");')
+            c.append(f'        BoundaryInterface selectedPair{i}=sim.getInterfaceManager().createBoundaryInterface(pairA{i},pairB{i},"SelectedInterface_{i}"); own(sim,selectedPair{i});')
+            if pair['kind']=='periodic_translation':c.append(f'        selectedPair{i}.getTopology().setSelected(InterfaceConfigurationOption.Type.PERIODIC);')
+            c.append(f'        for(GapCandidate candidate:gapCandidates) if(candidate.bnd==pairA{i}||candidate.bnd==pairB{i})candidate.paired=true;')
+            c.append(f'        pairCount++; pairedNames.add("SelectedInterface_{i}");')
+    if custom_surfaces:
+        c.append('        sim.println(String.format("Interfaces created: %d. Unpaired Side_* boundaries remain walls. Verify periodic orientation before solving.", pairCount));')
+    else:
+        c.append('        sim.println(String.format("  • Всего успешно сопряжено интерфейсов: %d. Внешние зазоры назначены как sym/per.", pairCount));')
     c.append('')
     c.append('        try { sim.getReportManager().remove(areaRep);  } catch (Exception ignored) {}')
     c.append('')
     c.append('        List<Boundary> externalGaps = new ArrayList<>();')
     c.append('        for (GapCandidate gap : gapCandidates) if (!gap.paired) externalGaps.add(gap.bnd);')
-    if preserve_sectors:
+    if preserve_sectors and inter_fuse:
         c.append('        // Merge only end caps; retain the separate source rod sectors.')
         c.append('        if (allInlets.size()>1) { Boundary inlet=allInlets.get(0); meshMgr.combineBoundaries(new ArrayList<>(allInlets)); allInlets.clear(); allInlets.add(inlet); inlet.setPresentationName("Inlet"); }')
         c.append('        if (allOutlets.size()>1) { Boundary outlet=allOutlets.get(0); meshMgr.combineBoundaries(new ArrayList<>(allOutlets)); allOutlets.clear(); allOutlets.add(outlet); outlet.setPresentationName("Outlet"); }')
@@ -546,8 +601,17 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     transport_flags='' if workflow is None else ','+str(workflow['viscosity_method']=='constant').lower()+','+str(workflow['conductivity_method']=='constant').lower()
     c.append('        physicalValuesConfigured = configurePhysicalValues(sim,setupPhysics,subchannelRegions,' + str(use_iapws).lower() + ',' + str(enable_thermal or use_iapws).lower() + transport_flags + ');')
     c.append('        }')
+    if custom_surfaces and workflow['heat_enabled']:
+        c.append('        if (!physicalValuesConfigured && !reuse) throw new IllegalStateException("Heat setup requires configured physics");')
+        for i,row in enumerate((r for r in catalog['rods'] if r['kind']=='fuel'),1):
+            key=row['id'];value=workflow['heat_values'][key]
+            c.append(f'        configureHeatInput(sim,"q{i}",{value:.16e});')
+            c.append(f'        UserFieldFunction heatQ{i}=getOrCreateFF(sim,"HeatFlux_q{i}","${{q{i}}}");heatQ{i}.setDimensions(Dimensions.Builder().mass(1).time(-3).build());')
+            c.append(f'        int heated{i}=0; for(Boundary boundary:allRods) if(tagged(boundary,"meshBuilder.HeatGroup.{key}")) {{')
+            c.append(f'            boundary.getConditions().get(WallThermalOption.class).setSelected(WallThermalOption.Type.HEAT_FLUX);HeatFluxProfile profile=boundary.getValues().get(HeatFluxProfile.class);profile.setMethod(FunctionScalarProfileMethod.class);profile.getMethod(FunctionScalarProfileMethod.class).setFieldFunction(heatQ{i});heated{i}++; }}')
+            c.append(f'        if(heated{i}==0)throw new IllegalStateException("Missing heat group {key}");')
     c.append('        initializeFirstSolution(sim,reuse,' + str(initialize_solution).lower() + ',physicalValuesConfigured);')
-    if turbulence_model=='hybrid_srh':
+    if is_unsteady:
         c.append('        try {')
         c.append('            GlobalParameterManager timeManager=sim.get(GlobalParameterManager.class);')
         c.append('            ScalarGlobalParameter timeParameter=findOwned(sim,timeManager,"TimeStep",ScalarGlobalParameter.class);')
@@ -559,14 +623,16 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
         c.append('            }')
         c.append('        } catch (Exception e) { warn(sim,"  [!] TimeStep binding: "+e.getMessage()); }')
 
-    if workflow and turbulence_model=='hybrid_srh':
+    if workflow and is_unsteady:
         c.append('        if (!reuse) try { configureUnsteadyWorkflow(sim,'+str(workflow['inner_iterations'])+','+str(workflow['warmup_duration'])+'); } catch (Exception e) { throw new IllegalStateException("Unsteady settings incomplete; verify STAR 2602 solver options before running: "+e.getMessage(),e); }')
     if create_field_functions:
         c.append('        supportFunctions(sim,' + f'{lz_m:.16e}' + ', Arrays.asList(' + ','.join(json.dumps(v) for v in field_choices) + '));')
     if workflow and workflow['velocity_seed']:
+        if not create_params:c.append('        createParam(sim,sim.get(GlobalParameterManager.class),null,"U_b",'+str(float(yplus_data.get('velocity',5.62)))+',"m/s",Dimensions.Builder().length(1).time(-1).build(),null);')
         c.append('        createParam(sim,sim.get(GlobalParameterManager.class),null,"pi",Math.PI,"",null,null);')
         c.append('        createParam(sim,sim.get(GlobalParameterManager.class),null,"Apert",0.,"m/s",Dimensions.Builder().length(1).time(-1).build(),"0.01*${U_b}");')
         c.append('        exportHeight(sim,'+str(lz_m)+');')
+        c.append('        getOrCreateFF(sim,"MB_ZFraction","$${Position}[2]/${ExportHeight}").setDimensions(Dimensions.Builder().build());')
         c.append('        UserFieldFunction theta=getOrCreateFF(sim,"thetaZ","2*${pi}*$${Position}[2]/${ExportHeight}");')
         c.append('        theta.setDimensions(Dimensions.Builder().build());')
         c.append('        getOrCreateFF(sim,"seedX","sin(${thetaZ})+0.5*sin(3*${thetaZ}+0.7)+0.25*sin(7*${thetaZ}+1.9)");')
@@ -945,9 +1011,10 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('            }')
     c.append('        } catch (Exception e) { warn(sim,"  [!] Parameter " + name + ": " + e.getMessage()); }')
     c.append('    }')
-    from starccm_unified_support import UNIFIED_SUPPORT, flat_groups
+    from starccm_unified_support import UNIFIED_SUPPORT, HEAT_SUPPORT, flat_groups
     c.extend((flat_groups(GROUP_SUPPORT) if workflow else GROUP_SUPPORT).strip('\n').splitlines())
     if workflow:c.extend(UNIFIED_SUPPORT.strip('\n').splitlines())
+    if custom_surfaces and workflow['heat_enabled']:c.extend(HEAT_SUPPORT.strip('\n').splitlines())
     c.extend(AUDIT_SUPPORT.strip('\n').splitlines())
     c.extend(PHYSICS_SUPPORT.strip('\n').splitlines())
     c.extend(ANALYSIS_SUPPORT.strip('\n').splitlines())

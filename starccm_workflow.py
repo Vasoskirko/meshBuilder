@@ -2,11 +2,11 @@
 from copy import deepcopy
 import math
 
-WORKFLOW_DEFAULTS = dict(quality_thresholds=dict(CellQuality=.01,FaceValidity=.95,VolumeChange=.01,SkewnessAngle=85.),fluid={},version=1, quality_enabled=False, tdc_enabled=False,tdc_equivalence=False,
+WORKFLOW_DEFAULTS = dict(run_mode='auto',heat_enabled=False,heat_values={},boundary_pairs=[],disabled_internal_pairs=[],quality_thresholds=dict(CellQuality=.01,FaceValidity=.95,VolumeChange=.01,SkewnessAngle=85.),fluid={},version=1, quality_enabled=False, tdc_enabled=False,tdc_equivalence=False,
     viscosity_method='constant', conductivity_method='constant', initial_velocity='theory',
     initial_temperature=573.15, initial_pressure=0., initial_ux=0., initial_uy=0.,
     inner_iterations=5, warmup_duration=.45, block_duration=.45, blocks_per_run=1,
-    velocity_seed=False)
+    velocity_seed=True)
 
 
 def validate_workflow(data):
@@ -31,6 +31,12 @@ def validate_workflow(data):
     if result['version']!=1:raise ValueError('Неизвестная версия настроек окна')
     for key in ('viscosity_method','conductivity_method'):
         if result[key] not in ('constant','iapws'):raise ValueError(f'{key}: неизвестный метод')
+    if result['run_mode'] not in ('auto','steady','unsteady'):raise ValueError('Неизвестный режим расчёта')
+    for key,value in result['heat_values'].items():
+        if not isinstance(key,str) or not key or type(value) not in (int,float) or not math.isfinite(value) or not 0<=value<=1e12:raise ValueError('Некорректный тепловой поток группы')
+    if any(not isinstance(key,str) for key in result['disabled_internal_pairs']):raise ValueError('Неверный список внутренних интерфейсов')
+    for pair in result['boundary_pairs']:
+        if not isinstance(pair,dict) or set(pair)!={'first','second','kind'} or any(not isinstance(v,str) for v in pair.values()) or pair['kind'] not in ('periodic_translation','internal'):raise ValueError('Неизвестная настройка интерфейса')
     if result['initial_velocity'] not in ('theory','zero'):raise ValueError('Неизвестная начальная скорость')
     if result['initial_temperature']<=0:raise ValueError('Начальная температура должна быть выше абсолютного нуля')
     for key in ('warmup_duration','block_duration'):

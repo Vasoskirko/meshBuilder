@@ -177,6 +177,8 @@ def install(dialog,layout,header):
     for combo in (d.initial_velocity,d.viscosity_method,d.conductivity_method):combo.currentIndexChanged.connect(lambda *_:refresh(d))
     d.tabs.currentChanged.connect(lambda *_:refresh(d));d.export_mode.currentIndexChanged.connect(lambda i:d.tdc_enabled.setChecked(i==1))
     refresh(d)
+    from starccm_compact_ui import install_compact
+    install_compact(d)
 
 
 def refresh(d):
@@ -184,6 +186,7 @@ def refresh(d):
     d._refreshing_unified=True
     try:
         fuse=d.rb_inter_fuse.isChecked();hybrid=d.rb_turb_srh.isChecked();iapws=d.rb_eos_iapws.isChecked()
+        unsteady=hybrid or (hasattr(d,'simulation_mode') and d.simulation_mode.currentData()=='unsteady')
         if not fuse and d.rb_wall_by_rod.isChecked():d.rb_wall_60.setChecked(True)
         d.rb_wall_by_rod.setEnabled(fuse);d.rb_wall_rod.setEnabled(True)
         d.boundary_hint.setText('Fuse: общий Inlet/Outlet. Threshold-области подканалов обязательны.' if fuse else 'Отдельные регионы: собственные вход/выход каждого подканала.')
@@ -195,9 +198,9 @@ def refresh(d):
         d.fluid_fields['dyn_vis'].setEnabled(not iapws or d.viscosity_method.currentData()=='constant')
         d.fluid_fields['lambda'].setEnabled(not iapws or d.conductivity_method.currentData()=='constant')
         d.initial_temperature.setEnabled(d.chk_thermal.isChecked())
-        for w in (d.inner_iterations,d.warmup_duration,d.block_duration,d.blocks_per_run,d.field_time_step):w.setEnabled(hybrid)
-        d.mean_group.setEnabled(hybrid and not d.tdc_enabled.isChecked())
-        d.solver_hint.setText('Implicit Unsteady · Second Order · SIMPLEC; постоянный Δt через ${timeStep}. Maximum Steps выключен; остановка по физическому времени.' if hybrid else 'Стационарный RST. Временные этапы и средние поля недоступны.')
+        for w in (d.inner_iterations,d.warmup_duration,d.block_duration,d.blocks_per_run,d.field_time_step):w.setEnabled(unsteady)
+        d.mean_group.setEnabled(unsteady and not d.tdc_enabled.isChecked())
+        d.solver_hint.setText('Implicit Unsteady · Second Order · SIMPLEC; постоянный Δt через ${timeStep}. Maximum Steps выключен; остановка по физическому времени.' if unsteady else 'Стационарный RST. Временные этапы и средние поля недоступны.')
         tdc=d.tdc_enabled.isChecked();d.export_mode.setCurrentIndex(1 if tdc else 0)
         try:reference_geometry(d.mesh_result,d.bundle_model);compat='Геометрия совместима с эталоном.'
         except (ValueError,AttributeError,TypeError) as exc:compat=str(exc)
@@ -214,6 +217,7 @@ def refresh(d):
             'TDC: '+('включён; '+compat if tdc else 'выключен'),
             'Обычный экспорт: setup_starccm_subchannels.java + XYZ. TDC: дополнительно TDC_Hybrid.java, JSON, инструкция и анализатор CSV.',
             'Проверьте свойства, условия и сообщения [!] перед инициализацией. Неподдержанные настройки показаны неактивными.')))
+        if hasattr(d,'_compact_refresh'):d._compact_refresh()
     finally:d._refreshing_unified=False
 
 
@@ -222,8 +226,9 @@ def read_workflow(d):
         viscosity_method=d.viscosity_method.currentData(),conductivity_method=d.conductivity_method.currentData(),
         initial_velocity=d.initial_velocity.currentData(),initial_temperature=d.initial_temperature.value() if d.chk_thermal.isChecked() else d.initial_temperature.model.raw,
         initial_pressure=d.initial_pressure.value(),inner_iterations=d.inner_iterations.value(),
-        warmup_duration=d.warmup_duration.value() if d.rb_turb_srh.isChecked() else d.warmup_duration.model.raw,block_duration=d.block_duration.value() if d.rb_turb_srh.isChecked() else d.block_duration.model.raw,
+        warmup_duration=d.warmup_duration.value() if d.rb_turb_srh.isChecked() or (hasattr(d,'simulation_mode') and d.simulation_mode.currentData()=='unsteady') else d.warmup_duration.model.raw,block_duration=d.block_duration.value() if d.rb_turb_srh.isChecked() or (hasattr(d,'simulation_mode') and d.simulation_mode.currentData()=='unsteady') else d.block_duration.model.raw,
         blocks_per_run=d.blocks_per_run.value(),velocity_seed=d.seed_functions.isChecked())
+    if hasattr(d,'_compact_workflow'):result.update(d._compact_workflow())
     if result['tdc_enabled'] and d.chk_initialize.isChecked():
         raise ValueError('Для TDC инициализируйте вручную после Action=0, до разгона. Импортный макрос ещё не назначает периодичность.')
     return validate_workflow(result)
@@ -238,3 +243,4 @@ def apply_workflow(d,values):
         w=getattr(d,key);w.setCurrentIndex(w.findData(values[key]))
     for key in ('initial_temperature','initial_pressure','inner_iterations','warmup_duration','block_duration','blocks_per_run'):getattr(d,key).setValue(values[key])
     refresh(d)
+    if hasattr(d,'_compact_apply'):d._compact_apply(values)
