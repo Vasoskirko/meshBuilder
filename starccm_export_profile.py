@@ -74,6 +74,8 @@ def validate_options(options, sub_count=None):
     selected=values['selected_subchannels']
     if any(type(i) is not int or i<1 or (sub_count is not None and i>sub_count) for i in selected) or len(set(selected))!=len(selected):
         raise ValueError('Профиль содержит недоступные или повторяющиеся номера подканалов')
+    report_ids=values['workflow']['report_subchannels']
+    if sub_count is not None and report_ids!=[-1] and any(n>sub_count for n in report_ids):raise ValueError('Недоступный подканал отчётов')
     if not values['inner_fuse'] or not values['rename_boundaries'] or not values['create_physics']:
         raise ValueError('Профиль не поддерживает отключение базовой сборки/физики/именования')
     if values['inter_fuse']:

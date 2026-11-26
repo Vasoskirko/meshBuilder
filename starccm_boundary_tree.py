@@ -47,8 +47,10 @@ def install_tree(d,layout):
             if existing:
                 for combo,key in zip((d.surface_a,d.surface_b),(existing['first'],existing['second'])):combo.setCurrentIndex(combo.findData(key))
                 d.surface_condition.setCurrentIndex(d.surface_condition.findData(existing['kind']))
-                if 'mass_flow' in existing:d.boundary_value.setValue(existing['mass_flow'])
-        d.surface_preview.highlight(keys);d.preview_selection.setText(' ↔ '.join(keys))
+                if 'mass_flow' in existing:
+                    d.boundary_flow_auto.setChecked(existing.get('mass_flow_auto',False));d.boundary_value.setValue(existing['mass_flow'])
+                    if existing.get('mass_flow_auto'):d.update_boundary_flow()
+        d.surface_preview.highlight(keys);d.preview_view.setCurrentIndex(d.preview_view.findData(d.surface_preview.view_mode));d.preview_selection.setText(' ↔ '.join(keys))
         if len(keys)==1 and keys[0] in d._heat_fields:d.heat_table.selectRow(list(d._heat_fields).index(keys[0]))
     tree.itemSelectionChanged.connect(selection)
     def pick(key):

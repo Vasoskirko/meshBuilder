@@ -20,7 +20,7 @@ class BoundaryEditorTests(unittest.TestCase):
         d.boundary_selection_mode.setCurrentIndex(1 if second else 0)
         d.surface_a.setCurrentIndex(d.surface_a.findData(first))
         if second:d.surface_b.setCurrentIndex(d.surface_b.findData(second))
-        d.surface_condition.setCurrentIndex(d.surface_condition.findData(kind));d.boundary_value.setValue(value);d.add_surface_pair()
+        d.surface_condition.setCurrentIndex(d.surface_condition.findData(kind));d.boundary_flow_auto.setChecked(False);d.boundary_value.setValue(value);d.add_surface_pair()
     def test_missing_calculator_data_uses_existing_density(self):
         from starccm_export_dialog import StarCcmExportDialog
         for props in ({},{'t_ref_c':290.}):
@@ -114,6 +114,7 @@ class BoundaryEditorTests(unittest.TestCase):
     def test_preview_endcap_click_has_no_qt_selection_rectangle(self):
         from PySide6.QtWidgets import QGraphicsItem
         d=self.dialog();d.show();self.app.processEvents()
+        d.preview_view.setCurrentIndex(d.preview_view.findData('Inlet'));self.app.processEvents()
         item=d.surface_preview.items_by_id['Inlet_s1'][0]
         self.assertFalse(item.flags()&QGraphicsItem.ItemIsSelectable)
         bounds=item.path().boundingRect()
@@ -121,6 +122,7 @@ class BoundaryEditorTests(unittest.TestCase):
         point=next(bounds.topLeft()+QPointF(bounds.width()*i/20,bounds.height()*j/20) for i in range(1,20) for j in range(1,20) if item.path().contains(bounds.topLeft()+QPointF(bounds.width()*i/20,bounds.height()*j/20)))
         QTest.mouseClick(d.surface_preview.viewport(),Qt.LeftButton,Qt.NoModifier,d.surface_preview.mapFromScene(point));self.app.processEvents()
         self.assertEqual(d.surface_a.currentData(),'Inlet_s1');self.assertFalse(d.surface_preview.scene().selectedItems())
+        d.preview_view.setCurrentIndex(d.preview_view.findData('Outlet'));self.app.processEvents()
         item=d.surface_preview.items_by_id['Outlet_s1'][0];shift=item.path().boundingRect().topLeft()-bounds.topLeft()
         QTest.mouseClick(d.surface_preview.viewport(),Qt.LeftButton,Qt.ControlModifier,d.surface_preview.mapFromScene(point+shift));self.app.processEvents()
         self.assertEqual(d.boundary_selection_mode.currentData(),'pair');self.assertEqual(len(d.surface_tree.selectedItems()),2)

@@ -27,7 +27,7 @@ class UnifiedWindowTests(unittest.TestCase):
         self.addCleanup(d.deleteLater);return d
     def macro(self,d):return generate_starccm_java_macro('mesh.xyz',self.mesh,self.model,d.read_fluid(),d.yplus_data,d.read_options())
     def test_tabs_and_quality_off_do_not_create_quality_objects(self):
-        d=self.dialog();self.assertEqual(d.tabs.count(),7);self.assertFalse(d.quality_enabled.isChecked())
+        d=self.dialog();self.assertEqual(d.tabs.count(),8);self.assertFalse(d.quality_enabled.isChecked())
         self.assertFalse(d.chk_initialize.isEnabled());self.assertFalse(d.chk_initialize.isChecked())
         code=self.macro(d);execute=code.split('private void createParam')[0]
         self.assertNotIn('createQualityHistogram(sim, subchannelRegions',execute)

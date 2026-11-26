@@ -2,7 +2,7 @@
 from copy import deepcopy
 import math
 
-WORKFLOW_DEFAULTS = dict(reference_density=0.,minimum_wall_distance=1e-7,boundary_conditions=[],run_mode='auto',heat_enabled=False,heat_values={},boundary_pairs=[],disabled_internal_pairs=[],quality_thresholds=dict(CellQuality=.01,FaceValidity=.95,VolumeChange=.01,SkewnessAngle=85.),fluid={},version=1, quality_enabled=False, tdc_enabled=False,tdc_equivalence=False,
+WORKFLOW_DEFAULTS = dict(plane_scheme='legacy',report_subchannels=[-1],reference_density=0.,minimum_wall_distance=1e-7,boundary_conditions=[],run_mode='auto',heat_enabled=False,heat_values={},boundary_pairs=[],disabled_internal_pairs=[],quality_thresholds=dict(CellQuality=.01,FaceValidity=.95,VolumeChange=.01,SkewnessAngle=85.),fluid={},version=1, quality_enabled=False, tdc_enabled=False,tdc_equivalence=False,
     viscosity_method='constant', conductivity_method='constant', initial_velocity='theory',
     initial_temperature=573.15, initial_pressure=0., initial_ux=0., initial_uy=0.,
     inner_iterations=5, warmup_duration=.45, block_duration=.45, blocks_per_run=1,
@@ -31,14 +31,17 @@ def validate_workflow(data):
     if result['version']!=1:raise ValueError('Неизвестная версия настроек окна')
     for key in ('viscosity_method','conductivity_method'):
         if result[key] not in ('constant','iapws'):raise ValueError(f'{key}: неизвестный метод')
+    if result['plane_scheme'] not in ('legacy','none','ends','three','uniform'):raise ValueError('Неизвестная схема плоскостей')
     if result['run_mode'] not in ('auto','steady','unsteady'):raise ValueError('Неизвестный режим расчёта')
     for key,value in result['heat_values'].items():
         if not isinstance(key,str) or not key or type(value) not in (int,float) or not math.isfinite(value) or not 0<=value<=1e12:raise ValueError('Некорректный тепловой поток группы')
     if any(not isinstance(key,str) for key in result['disabled_internal_pairs']):raise ValueError('Неверный список внутренних интерфейсов')
     for pair in result['boundary_pairs']:
-        if not isinstance(pair,dict) or set(pair) not in ({'first','second','kind'},{'first','second','kind','mass_flow'}) or any(not isinstance(pair.get(k),str) for k in ('first','second','kind')) or pair['kind'] not in ('periodic_translation','periodic','fully_developed','internal'):raise ValueError('Неизвестная настройка интерфейса')
+        if not isinstance(pair,dict) or set(pair) not in ({'first','second','kind'},{'first','second','kind','mass_flow'},{'first','second','kind','mass_flow','mass_flow_auto'}) or any(not isinstance(pair.get(k),str) for k in ('first','second','kind')) or pair['kind'] not in ('periodic_translation','periodic','fully_developed','internal'):raise ValueError('Неизвестная настройка интерфейса')
+    if result['report_subchannels']!=[-1] and (any(type(n) is not int or n<1 for n in result['report_subchannels']) or len(set(result['report_subchannels']))!=len(result['report_subchannels'])):raise ValueError('Неверный список подканалов отчётов')
     if result['reference_density']<0 or result['minimum_wall_distance']<=0:raise ValueError('Некорректные опорные значения')
     for pair in result['boundary_pairs']:
+        if 'mass_flow_auto' in pair and (type(pair['mass_flow_auto']) is not bool or pair['kind']!='fully_developed'):raise ValueError('Неверный источник расхода пары')
         if pair['kind']=='fully_developed':
             v=pair.get('mass_flow')
             if type(v) not in (int,float) or not math.isfinite(v) or v<=0:raise ValueError('Задайте положительный массовый расход пары')

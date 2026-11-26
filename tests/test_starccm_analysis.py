@@ -22,18 +22,18 @@ class AnalysisExportTests(unittest.TestCase):
     def macro(self, **options):
         from starccm_macro_generator import generate_starccm_java_macro
         return generate_starccm_java_macro('mesh.xyz',self.result,self.model,{}, {},options)
-    def test_controls_are_on_the_requested_seven_tabs(self):
-        d=self.dialog();self.assertEqual(d.tabs.count(),7)
+    def test_controls_are_on_the_requested_eight_tabs(self):
+        d=self.dialog();self.assertEqual(d.tabs.count(),8)
         self.assertEqual(d.tabs.currentIndex(),0)
         def contained(index, control):
             self.assertIsInstance(d.tabs.widget(index), QScrollArea)
             self.assertTrue(d.tabs.widget(index).isAncestorOf(control))
         contained(0,d.chk_group_objects)
-        contained(2,d.field_checkboxes['z_fraction'])
-        contained(6,d.chk_summary)
-        for control in (d.chk_scene,d.chk_histograms,d.chk_bad_cells,d.local_quality_text):contained(4,control)
-        for control in d.report_checkboxes.values():contained(2,control)
-        contained(3,d.mean_group)
+        self.assertFalse(d.field_checkboxes['z_fraction'].isVisible())
+        contained(7,d.chk_summary)
+        for control in (d.chk_scene,d.chk_histograms,d.chk_bad_cells,d.local_quality_text):contained(5,control)
+        for control in d.report_checkboxes.values():contained(3,control)
+        contained(4,d.mean_group)
         self.assertFalse(d.mean_group.isEnabled())
         d.rb_turb_srh.setChecked(True);self.assertTrue(d.mean_group.isEnabled())
         d.rb_turb_rst.setChecked(True);self.assertFalse(d.mean_group.isEnabled())

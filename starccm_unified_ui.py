@@ -1,4 +1,4 @@
-"""Seven-tab native Qt export window. Existing exporters remain the execution layer.
+"""Native Qt export window. Existing exporters remain the execution layer.
 
 Unsupported STAR operations are disabled explicitly instead of exporting ignored
 settings. Widgets retain their stable names for project/profile compatibility.
@@ -42,8 +42,10 @@ def install(dialog,layout,header):
     d.tmc_tabs=QWidget(d);d.tmc_tabs.hide()  # Compatibility with existing callers.
     d.generate_button.setText('Проверить и сохранить комплект…')
     d.generate_button.clicked.disconnect()
+    d.summary_tab=d.tabs.widget(6)
     def review_then_export():
-        if d.tabs.currentIndex()!=6:d.tabs.setCurrentIndex(6);return
+        target=d.tabs.indexOf(d.summary_tab)
+        if d.tabs.currentIndex()!=target:d.tabs.setCurrentIndex(target);return
         d.generate_and_save()
     d.generate_button.clicked.connect(review_then_export)
     mesh=pages[0]
@@ -179,6 +181,9 @@ def install(dialog,layout,header):
     refresh(d)
     from starccm_compact_ui import install_compact
     install_compact(d)
+    from starccm_parts_reports_ui import install as install_parts_reports
+    install_parts_reports(d)
+    header.setText('<b>Подготовка расчёта · STAR-CCM+ 2602</b><br>Сетка → физика → производные части → отчёты → статистика → качество → TDC → итог.')
 
 
 def refresh(d):
@@ -229,6 +234,7 @@ def read_workflow(d):
         warmup_duration=d.warmup_duration.value() if d.rb_turb_srh.isChecked() or (hasattr(d,'simulation_mode') and d.simulation_mode.currentData()=='unsteady') else d.warmup_duration.model.raw,block_duration=d.block_duration.value() if d.rb_turb_srh.isChecked() or (hasattr(d,'simulation_mode') and d.simulation_mode.currentData()=='unsteady') else d.block_duration.model.raw,
         blocks_per_run=d.blocks_per_run.value(),velocity_seed=d.seed_functions.isChecked())
     if hasattr(d,'_compact_workflow'):result.update(d._compact_workflow())
+    if hasattr(d,'_parts_workflow'):result.update(d._parts_workflow())
     if result['tdc_enabled'] and d.chk_initialize.isChecked():
         raise ValueError('Для TDC инициализируйте вручную после Action=0, до разгона. Импортный макрос ещё не назначает периодичность.')
     return validate_workflow(result)
@@ -244,3 +250,4 @@ def apply_workflow(d,values):
     for key in ('initial_temperature','initial_pressure','inner_iterations','warmup_duration','block_duration','blocks_per_run'):getattr(d,key).setValue(values[key])
     refresh(d)
     if hasattr(d,'_compact_apply'):d._compact_apply(values)
+    if hasattr(d,'_apply_parts_workflow'):d._apply_parts_workflow(values)

@@ -35,7 +35,7 @@ class PhysicalSetupTests(unittest.TestCase):
         self.assertFalse(d.chk_initialize.isChecked())
         options=d.read_options();options['initialize_solution']=False;d.apply_options(options)
         self.assertFalse(d.read_options()['initialize_solution'])
-        self.assertTrue(d.tabs.widget(6).isAncestorOf(d.chk_initialize))
+        self.assertTrue(d.summary_tab.isAncestorOf(d.chk_initialize))
     def test_java_physical_bindings_iapws_and_no_reinitialization(self):
         java=shutil.which('java')
         if not java or 'jdk.compiler' not in subprocess.run([java,'--list-modules'],capture_output=True,text=True).stdout:

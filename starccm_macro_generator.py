@@ -158,6 +158,12 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     if any(type(i) is not int or not 1 <= i <= subchannels_count for i in selected_subchannels):
         raise ValueError("Неизвестный номер подканала для сечений")
 
+    report_selected=selected_subchannels if not workflow or workflow['report_subchannels']==[-1] else workflow['report_subchannels']
+    if any(n>subchannels_count for n in report_selected):raise ValueError('Неизвестный подканал для отчётов')
+    if workflow:
+        from starccm_flow_defaults import calculator_mass_flow
+        for pair in workflow['boundary_pairs']:
+            if pair.get('mass_flow_auto'):pair['mass_flow']=calculator_mass_flow(catalog,fluid_props,yplus_data,pair['first'])
     digest = hashlib.sha256()
     topology_settings=dict(schema=2 if custom_surfaces else 1,inter_fuse=inter_fuse,rod_mode=rod_mode,io=inlet_outlet_mode,nz=p.nz,height=lz_m)
     if custom_surfaces:topology_settings.update(disabled_internal_pairs=workflow['disabled_internal_pairs'],pairs=workflow['boundary_pairs'],conditions=workflow['boundary_conditions'],rod_kinds={str(rid):bundle_model.rods[rid].rod_type for row in catalog['rods'] for rid in row['rod_ids']})
@@ -736,8 +742,8 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
         label = plane_label("Section_Global", pos, lz_m)
         c.append(f'            createPlaneSection(sim, labCoord, uLen, subchannelRegions, "{label}", lz * {pos:.16e}); planesCreated++;')
     for number in range(1, subchannels_count + 1):
-        positions = plane_positions(n_sub_planes, True) if sub_planes and number in selected_subchannels else []
-        if create_reports or analysis_choices:
+        positions = plane_positions(n_sub_planes, not workflow or workflow['plane_scheme']=='legacy') if sub_planes and number in selected_subchannels else []
+        if (create_reports or analysis_choices) and (not workflow or number in report_selected):
             positions = sorted(set(positions + [0., 1.]))
         for pos in positions:
             # A single source has the same domain as the global plane: reuse it.
@@ -745,10 +751,10 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
             name = plane_label("Section_Global" if reuse else f"Subchannel_{number}_Section", pos, lz_m)
             if not reuse:
                 c.append(f'            createPlaneSection(sim, labCoord, uLen, sourceParts.get({number-1}), "{name}", lz * {pos:.16e}); planesCreated++;')
-            if create_reports and pos in (0., 1.) and not (number in selected_subchannels and any(k in analysis_choices for k in ('hydraulics','wall'))):
+            if create_reports and (not workflow or number in report_selected) and pos in (0., 1.) and not (number in report_selected and any(k in analysis_choices for k in ('hydraulics','wall'))):
                 side = 'In' if pos == 0 else 'Out'
                 c.append(f'            createMassFlowReport(sim, "MassFlow_{side}_Sub{number}", Collections.singletonList((PlaneSection) sim.getPartManager().getObject("{name}")), reportCounts);')
-        if analysis_choices and number in selected_subchannels:
+        if analysis_choices and number in report_selected:
             in_name = plane_label("Section_Global" if subchannels_count == 1 and 0. in plane_positions(n_planes,key_planes) else f"Subchannel_{number}_Section", 0., lz_m)
             out_name = plane_label("Section_Global" if subchannels_count == 1 and 1. in plane_positions(n_planes,key_planes) else f"Subchannel_{number}_Section", 1., lz_m)
             # Wall Threshold uses the original triangle, including shared rods after Fuse.

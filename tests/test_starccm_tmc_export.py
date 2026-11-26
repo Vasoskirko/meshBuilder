@@ -50,7 +50,7 @@ class TmcExportTests(unittest.TestCase):
             self.assertEqual(options['time_step'],1.2e-5)
             self.assertFalse(options['initialize_solution'])
             dialog.apply_options(options);self.assertEqual(dialog.read_options(),options)
-            self.assertEqual(dialog.tabs.count(),7)
+            self.assertEqual(dialog.tabs.count(),8)
         finally:dialog.deleteLater();self.app.processEvents()
     @staticmethod
     def xyz(result,path,**kwargs):Path(path).write_text('XYZ sentinel')
