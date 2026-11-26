@@ -22,17 +22,18 @@ class AnalysisExportTests(unittest.TestCase):
     def macro(self, **options):
         from starccm_macro_generator import generate_starccm_java_macro
         return generate_starccm_java_macro('mesh.xyz',self.result,self.model,{}, {},options)
-    def test_controls_are_on_the_requested_six_tabs(self):
-        d=self.dialog();self.assertEqual(d.tabs.count(),6)
+    def test_controls_are_on_the_requested_seven_tabs(self):
+        d=self.dialog();self.assertEqual(d.tabs.count(),7)
         self.assertEqual(d.tabs.currentIndex(),0)
         def contained(index, control):
             self.assertIsInstance(d.tabs.widget(index), QScrollArea)
             self.assertTrue(d.tabs.widget(index).isAncestorOf(control))
         contained(0,d.chk_group_objects)
-        contained(2,d.chk_field_functions)
-        contained(2,d.chk_summary)
+        contained(2,d.field_checkboxes['z_fraction'])
+        contained(6,d.chk_summary)
         for control in (d.chk_scene,d.chk_histograms,d.chk_bad_cells,d.local_quality_text):contained(4,control)
-        for control in (*d.report_checkboxes.values(),d.mean_group):contained(5,control)
+        for control in d.report_checkboxes.values():contained(2,control)
+        contained(3,d.mean_group)
         self.assertFalse(d.mean_group.isEnabled())
         d.rb_turb_srh.setChecked(True);self.assertTrue(d.mean_group.isEnabled())
         d.rb_turb_rst.setChecked(True);self.assertFalse(d.mean_group.isEnabled())
@@ -125,7 +126,7 @@ class AnalysisExportTests(unittest.TestCase):
         d=self.dialog()
         for checkbox in d.sub_checkboxes:
             self.assertTrue(d.grp_sources.isAncestorOf(checkbox))
-            self.assertFalse(d.tabs.isAncestorOf(checkbox))
+            self.assertTrue(d.tabs.widget(2).isAncestorOf(checkbox))
         d.chk_g_n_planes.setChecked(False);self.assertFalse(d.spin_n_planes.isEnabled())
         d.chk_g_n_planes.setChecked(True);self.assertTrue(d.spin_n_planes.isEnabled())
         d.chk_sub_planes.setChecked(False);self.assertFalse(d.spin_sub_n_planes.isEnabled())

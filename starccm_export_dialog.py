@@ -422,8 +422,8 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         b_box.addWidget(btn_cancel)
         main_lay.addLayout(b_box)
         self.generate_button = btn_gen
-        from starccm_tmc_ui import add_tmc_ui
-        add_tmc_ui(self, main_lay, lbl_header)
+        from starccm_unified_ui import install
+        install(self, main_lay, lbl_header)
 
     def update_dependencies(self):
         self.spin_n_planes.setEnabled(self.chk_g_n_planes.isChecked())
@@ -459,11 +459,11 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
             self.rb_io_split.setChecked(True)
             self.rb_io_split.setEnabled(True)
             self.rb_io_single.setEnabled(False)
-            if self.rb_wall_rod.isChecked():self.rb_wall_by_rod.setChecked(True)
-            self.rb_wall_by_rod.setEnabled(True)
+            if self.rb_wall_by_rod.isChecked():self.rb_wall_60.setChecked(True)
+            self.rb_wall_by_rod.setEnabled(False)
             self.rb_wall_60.setEnabled(True)
             self.rb_wall_60.setToolTip("")
-            self.rb_wall_rod.setEnabled(False)
+            self.rb_wall_rod.setEnabled(True)
         else:
             self.rb_io_single.setChecked(True)
             self.rb_io_single.setEnabled(True)
@@ -484,9 +484,10 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
             self.lbl_sub_dz_hint.setText(f"• Шаг между сечениями ячейки при M = {m}: Δz_sub = {dz_sub_mm:.2f} мм")
 
     def read_options(self):
-        from starccm_tmc_ui import tmc_options
-        if self.export_mode.currentData() == "tmc_reference":
-            return tmc_options(self)
+        from starccm_unified_ui import read_workflow
+        workflow = read_workflow(self)
+        if workflow["tdc_enabled"]:
+            return self.read_tdc_options(workflow)
         w_mode = "by_rod"
         if self.rb_wall_60.isChecked():
             w_mode = "sectors_60"
@@ -496,6 +497,7 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         sel_subs = [idx + 1 for idx, cb in enumerate(self.sub_checkboxes) if cb.isChecked()]
 
         return {
+            "workflow": workflow,
             "export_mode": "general",
             "tmc_settings": dict(self._tmc_last_valid),
             "import_mesh": self.chk_import.isChecked(),
@@ -515,8 +517,8 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
             "create_physics": True,
             "initialize_solution": self.chk_initialize.isChecked(),
             "create_mass_reports": self.chk_reports.isChecked(),
-            "create_quality_scene": self.chk_scene.isChecked(),
-            "create_quality_histograms": self.chk_histograms.isChecked(),
+            "create_quality_scene": workflow["quality_enabled"] and self.chk_scene.isChecked(),
+            "create_quality_histograms": workflow["quality_enabled"] and self.chk_histograms.isChecked(),
             "quality_bins": self.spin_quality_bins.value(),
             "gap_sections": self.chk_gap_sections.isChecked() and self.chk_gap_sections.isEnabled(),
             "n_planes": self.spin_n_planes.value() if self.chk_g_n_planes.isChecked() else 0,
@@ -524,7 +526,7 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
             "key_planes": self.chk_g_key_planes.isChecked(),
             "sub_planes": self.chk_sub_planes.isChecked(),
             "axis_probes": self.chk_axis_probes.isChecked(),
-            "create_bad_cells": self.chk_bad_cells.isChecked(),
+            "create_bad_cells": workflow["quality_enabled"] and self.chk_bad_cells.isChecked(),
             "group_objects": self.chk_group_objects.isChecked(),
             "create_summary": self.chk_summary.isChecked(),
             "create_field_functions": self.chk_field_functions.isChecked(),
@@ -532,7 +534,7 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
             "subchannel_reports": [k for k, cb in self.report_checkboxes.items() if cb.isChecked()],
             "time_mean_fields": [k for k, cb in self.mean_checkboxes.items() if cb.isChecked()],
             "mean_start_step": self.spin_mean_start.value(),
-            "time_step": self.field_time_step.value(),
+            "time_step": self.field_time_step.value() if self.rb_turb_srh.isChecked() else self.field_time_step.model.raw,
             "selected_subchannels": sel_subs
         }
 
@@ -571,8 +573,21 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         from starccm_tmc_ui import apply_tmc_settings
         apply_tmc_settings(self, values["tmc_settings"])
         self.export_mode.setCurrentIndex(self.export_mode.findData(values["export_mode"]))
+        from starccm_unified_ui import apply_workflow
+        apply_workflow(self,values["workflow"])
         self.update_dz_hint()
         self.update_dependencies()
+
+    def read_fluid(self):
+        values=dict(self.fluid_props)
+        for key,field in self.fluid_fields.items():values[key]=field.value() if field.isEnabled() else field.model.raw
+        rho,mu=values['density'],values['dyn_vis']
+        values['kin_vis']=mu/rho;values['prandtl']=mu*values['cp']/values['lambda']
+        return values
+
+    def read_tdc_options(self, workflow):
+        from starccm_unified_export import tdc_options
+        return tdc_options(self,workflow)
 
     def save_export_profile(self):
         path, _ = QFileDialog.getSaveFileName(self, "Сохранить профиль экспорта", "star_export.json", "JSON (*.json)")
@@ -589,8 +604,8 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
     def generate_and_save(self):
         if getattr(self,'_export_job',None) is not None:return
         if self.export_mode.currentData() == 'tmc_reference':
-            from starccm_tmc_ui import export_tmc
-            export_tmc(self)
+            from starccm_unified_export import export_tdc
+            export_tdc(self)
             return
         if not getattr(self.mesh_result,'complete',True):
             QMessageBox.warning(self,'Экспорт недоступен','Сначала заполните ядро сетки.');return
@@ -620,7 +635,13 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
             return
 
         # Read all widgets in GUI thread before starting file work.
-        try:opts=self.read_options()
+        try:
+            opts=self.read_options()
+            from starccm_tmc_export import bundle_names
+            bundle_names(p_xyz.name)
+            import re
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*",p_macro.stem):raise ValueError("Имя Java-файла должно быть допустимым именем класса")
+            fluid=self.read_fluid()
         except Exception as exc:
             QMessageBox.critical(self,'Проверьте параметры',str(exc));return
         parent=self.parent()
@@ -630,13 +651,14 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         import os,tempfile
         from mesh_export_jobs import run_export,ExportCancelled
         result=self.mesh_result;model=deepcopy(self.bundle_model)
-        fluid=deepcopy(self.fluid_props);yp=deepcopy(self.yplus_data)
+        yp=deepcopy(self.yplus_data)
         def log(text):
             if parent is not None and hasattr(parent,'append_mesh_message'):parent.append_mesh_message(text)
         def compute(progress):
             progress(2,'Генерация Java-макроса')
             java_code=smg.generate_starccm_java_macro(xyz_filename=p_xyz.name,
                 mesh_result=result,bundle_model=model,fluid_props=fluid,yplus_data=yp,options=opts)
+            java_code=java_code.replace("public class setup_starccm_subchannels ","public class "+p_macro.stem+" ")
             # Stage in destination directories; cancellation never publishes a
             # partial file. The two final replacements are separate OS actions.
             temporary=[]
@@ -650,10 +672,8 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
                 progress(91,'Сохранение Java-макроса')
                 Path(temporary[1]).write_text(java_code,encoding='utf-8')
                 progress(97,'Публикация готовых файлов')
-                os.replace(temporary[0],p_xyz)
-                try:os.replace(temporary[1],p_macro)
-                except OSError as exc:
-                    raise OSError(f'Сетка сохранена: {p_xyz}. Макрос не заменён: {p_macro}. {exc}') from exc
+                from starccm_tmc_export import _publish
+                _publish({p_xyz:Path(temporary[0]),p_macro:Path(temporary[1])})
             finally:
                 for name in temporary:
                     if os.path.exists(name):os.unlink(name)

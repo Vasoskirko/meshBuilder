@@ -1,5 +1,6 @@
 """Portable, validated STAR export settings; no mesh or solver state is stored."""
 import json
+from starccm_workflow import WORKFLOW_DEFAULTS, validate_workflow
 from copy import deepcopy
 from starccm_tmc_export import TMC_DEFAULTS,validate_tmc_settings,canonical_tmc_options
 import math
@@ -20,10 +21,10 @@ REPORT_CHOICES = {
     'wall': 'Напряжение трения на стенке, Cf и Darcy по трению',
     'thermal': 'Среднемассовая температура, температура стенки и тепловая мощность',
 }
-MEAN_CHOICES = {'velocity': 'Вектор скорости', 'pressure': 'Давление',
+MEAN_CHOICES = {'enthalpy':'Полная энтальпия', 'velocity': 'Вектор скорости', 'pressure': 'Давление',
     'temperature': 'Температура', 'density': 'Плотность', 'viscosity': 'Динамическая вязкость',
     'wall_shear': 'Вектор напряжения трения на стержнях', 'wall_heat_flux': 'Плотность теплового потока на стержнях'}
-DEFAULTS = dict(export_mode='general',tmc_settings=deepcopy(TMC_DEFAULTS),import_mesh=True, inner_fuse=True, inter_fuse=False,
+DEFAULTS = dict(workflow=deepcopy(WORKFLOW_DEFAULTS),export_mode='general',tmc_settings=deepcopy(TMC_DEFAULTS),import_mesh=True, inner_fuse=True, inter_fuse=False,
     region_mode='by_subchannel', inlet_outlet_mode='by_subchannel', rename_boundaries=True,
     rod_wall_mode='by_rod', turbulence_model='rst', use_iapws=False,
     enable_thermal=True, enable_gravity=False, gravity_axis="-Z", evaluate_solution_reports=False, create_parameters=True, create_physics=True,
@@ -41,6 +42,12 @@ def validate_options(options, sub_count=None):
         raise ValueError('Неизвестные параметры профиля экспорта')
     values=deepcopy(DEFAULTS);values.update(deepcopy(options))
     values['tmc_settings']=validate_tmc_settings(values['tmc_settings'])
+    if 'workflow' not in options:
+        values['workflow']['quality_enabled']=any(options.get(key,False) for key in ('create_quality_scene','create_quality_histograms','create_bad_cells'))
+        if values['export_mode']=='tmc_reference':
+            t=values['tmc_settings'];w=values['workflow'];w.update(tdc_enabled=True,initial_temperature=t['temperature_ref'],warmup_duration=t['hydro_duration'],block_duration=t['block_duration'],blocks_per_run=t['blocks_to_run'])
+            w['fluid']=dict(density=t['rho'],dyn_vis=t['mu'],cp=t['cp'],**{'lambda':t['conductivity']})
+    values['workflow']=validate_workflow(values['workflow'])
     dt=values['time_step']
     if isinstance(dt,bool) or not isinstance(dt,(int,float)) or not math.isfinite(dt) or dt<=0:
         raise ValueError('Шаг времени Δt должен быть конечным положительным числом секунд')
@@ -70,11 +77,14 @@ def validate_options(options, sub_count=None):
     if values['inter_fuse']:
         if values['inlet_outlet_mode']!='single' or values['region_mode']!='monolithic':
             raise ValueError('Несовместимые параметры Fuse')
-    elif values['region_mode']!='by_subchannel' or values['inlet_outlet_mode']!='by_subchannel' or values['rod_wall_mode']=='monolithic':
+    elif values['region_mode']!='by_subchannel' or values['inlet_outlet_mode']!='by_subchannel':
         raise ValueError('Несовместимые параметры Internal Interface')
+    if values['workflow']['tdc_enabled'] != (values['export_mode']=='tmc_reference'):
+        raise ValueError('Режим экспорта и флажок TDC не согласованы')
     if values['export_mode']=='tmc_reference':
         if sub_count is not None and sub_count!=2:raise ValueError('Эталон TMC поддерживает два подканала')
         for key,value in canonical_tmc_options(values['tmc_settings']).items():
+            if values['workflow']['tdc_enabled'] and key in ('create_quality_scene','create_quality_histograms','create_bad_cells'):continue
             if values[key]!=value:raise ValueError(f'TMC требует согласованную настройку {key}')
     return values
 

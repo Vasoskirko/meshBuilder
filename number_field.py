@@ -28,7 +28,7 @@ class NumberField(QLineEdit if HAS_QT else object):
         self.setText(self.model.display())
         self.textEdited.connect(self._edited)
         self.editingFinished.connect(self._finish)
-        self.setToolTip("Разделитель целой и дробной части — точка (например 1.2; 5.7e-6).")
+        self.setToolTip("Десятичный разделитель — точка или запятая (1.2 = 1,2; 5.7e-6).")
 
     def _edited(self, *_):
         if HAS_QT:

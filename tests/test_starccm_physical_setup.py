@@ -32,10 +32,10 @@ class PhysicalSetupTests(unittest.TestCase):
         from starccm_export_dialog import StarCcmExportDialog
         d=StarCcmExportDialog(mesh_result=fused.FusedExportTests.result)
         self.addCleanup(d.deleteLater)
-        self.assertTrue(d.chk_initialize.isChecked())
+        self.assertFalse(d.chk_initialize.isChecked())
         options=d.read_options();options['initialize_solution']=False;d.apply_options(options)
         self.assertFalse(d.read_options()['initialize_solution'])
-        self.assertTrue(d.tabs.widget(1).isAncestorOf(d.chk_initialize))
+        self.assertTrue(d.tabs.widget(6).isAncestorOf(d.chk_initialize))
     def test_java_physical_bindings_iapws_and_no_reinitialization(self):
         java=shutil.which('java')
         if not java or 'jdk.compiler' not in subprocess.run([java,'--list-modules'],capture_output=True,text=True).stdout:

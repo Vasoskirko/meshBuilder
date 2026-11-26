@@ -127,15 +127,23 @@ def _publish(staged):
             if backup not in preserved:backup.unlink(missing_ok=True)
 
 
-def write_tmc_bundle(directory,xyz,result,model,settings,progress):
+def write_tmc_bundle(directory,xyz,result,model,settings,progress,unified_options=None):
     from starccm_macro_generator import generate_starccm_java_macro
     from mesh_subchannel import export_subchannel_plot3d
     settings=validate_tmc_settings(settings);geometry=reference_geometry(result,model)
+    if unified_options is not None:
+        from starccm_export_profile import validate_options
+        unified_options=validate_options(unified_options,result.subchannels_count)
+        if not unified_options['workflow']['tdc_enabled'] or not unified_options['workflow']['tdc_equivalence']:
+            raise ValueError('Комплект TDC требует включённую методику и подтверждение эквивалентности зазоров')
+        if unified_options['tmc_settings']!=settings:raise ValueError('Настройки контроллера TDC не согласованы с общим окном')
     directory=Path(directory);names=bundle_names(xyz)
+    if unified_options is not None:names=tuple(name.replace("TMC", "TDC") for name in names)
     if not directory.is_dir():raise ValueError('Папка экспорта не существует')
     targets=[directory/name for name in names]
     if any(p.is_symlink() or (p.exists() and not p.is_file()) for p in targets):raise ValueError('Целевой путь не является обычным файлом')
     options=canonical_tmc_options(settings)
+    if unified_options is not None:options.update(deepcopy(unified_options))
     velocity=settings['mass_flow']/(settings['rho']*geometry['area'])
     fluid=dict(density=settings['rho'],dyn_vis=settings['mu'],cp=settings['cp'],**{'lambda':settings['conductivity']},
         kin_vis=settings['mu']/settings['rho'],prandtl=settings['mu']*settings['cp']/settings['conductivity'],
@@ -144,6 +152,24 @@ def write_tmc_bundle(directory,xyz,result,model,settings,progress):
     progress(2,'Генерация комплекта HYBRID/TMC')
     base=generate_starccm_java_macro(xyz,result,model,fluid,yp,options)
     control=render_tmc_macro(settings)
+    if unified_options is not None:
+        control=control.replace("TMC", "TDC").replace("case 1: phase(true,", "case 1: phase(false,")
+        control=control.replace("Action: 1 hydro, 2 thermal", "Action: 1 joint warmup, 2 joint warmup")
+        control=control.replace('new String[]{"Velocity","Pressure","Temperature","WallShearStress","TotalEnthalpy"}', 'new String[]{"Velocity","Pressure","Temperature","BoundaryHeatFlux","WallShearStress","TotalEnthalpy"}')
+        control=control.replace('if(key.equals("WallShearStress"))', 'if(key.equals("WallShearStress")||key.equals("BoundaryHeatFlux"))')
+        control=control.replace('(frozen?"Hydrodynamic":"Thermal")', '(frozen?"Hydrodynamic":"Joint flow/thermal")')
+        control=control.replace('private void runUntil(double target,WeightedWindow window,BufferedWriter out) throws Exception {',
+            'private void runUntil(double target,WeightedWindow window,BufferedWriter out) throws Exception {\n'
+            '        Object criteria=call(sim,"getSolverStoppingCriterionManager");\n'
+            '        Object stop=call(criteria,"getSolverStoppingCriterion","Maximum Physical Time");\n'
+            '        call(call(stop,"getMaximumTime"),"setValue",target); call(stop,"setIsUsed",true);\n'
+            '        call(call(criteria,"getSolverStoppingCriterion","Maximum Steps"),"setIsUsed",false);')
+        # The user controls one shared timeStep, not two unrelated parameters.
+        control=control.replace('sim.getSolverManager().getSolver(ImplicitUnsteadySolver.class).getTimeStep().setDefinition(ref("TimeStep"));',
+            'Object shared=find(sim.get(GlobalParameterManager.class),"timeStep");\n'
+            '        if(shared==null) throw new IllegalStateException("Missing shared timeStep; run setup macro first");\n'
+            '        ((ScalarGlobalParameter)find(sim.get(GlobalParameterManager.class),P+"TimeStep")).getQuantity().setDefinition("${timeStep}");\n'
+            '        sim.getSolverManager().getSolver(ImplicitUnsteadySolver.class).getTimeStep().setDefinition("${timeStep}");')
     manifest=json.dumps(dict(format='meshBuilder-tmc-export',version=1,settings=settings,files=list(names),
         geometry='reference S18/S22; P=11.64mm, D=9.1mm, L=300mm',initialize_solution=False),ensure_ascii=False,indent=2)+'\n'
     guide='''HYBRID/TMC — первый запуск на КОПИИ симуляции STAR-CCM+ 2602.
@@ -160,8 +186,13 @@ Siemens SDK/симуляция не проверялись в среде раз�
 Подробная инструкция: https://github.com/Vasoskirko/meshBuilder/blob/feat/tmc-hybrid-setup/tmc/README.md
 CSV можно перепроверить: python TMC_analyse_series.py "папка/TMC_series_ID" --output result.json
 '''
-    texts={targets[1]:base,targets[2]:control,targets[3]:manifest,targets[4]:guide,
-           targets[5]:(ROOT/'tmc'/'analyse_series.py').read_text(encoding='utf-8')}
+    if unified_options is not None:
+        guide=guide.replace('TMC','TDC').replace('Frozen Energy','энергия включена')
+        guide=guide.replace('1 — гидродинамический разгон', '1 — совместный гидродинамический и тепловой разгон').replace('2 — тепловой разгон','2 — продолжение совместного разгона')
+        manifest=manifest.replace('TMC','TDC')
+    analyser=(ROOT/'tmc'/'analyse_series.py').read_text(encoding='utf-8')
+    if unified_options is not None:analyser=analyser.replace('TMC','TDC')
+    texts={targets[1]:base,targets[2]:control,targets[3]:manifest,targets[4]:guide,targets[5]:analyser}
     staged={}
     try:
         for target in targets:

@@ -7,6 +7,10 @@ PHYSICS_SUPPORT = r'''
     }
     private boolean configurePhysicalValues(Simulation sim, PhysicsContinuum physics, List<Region> regions,
             boolean iapws, boolean thermal) {
+        return configurePhysicalValues(sim,physics,regions,iapws,thermal,false,false);
+    }
+    private boolean configurePhysicalValues(Simulation sim, PhysicsContinuum physics, List<Region> regions,
+            boolean iapws, boolean thermal, boolean constantMu, boolean constantLambda) {
         try {
             if (physics==null) throw new IllegalStateException("Physical model setup failed");
             // Refuse to bind a property/profile to an unrelated user parameter.
@@ -39,10 +43,12 @@ PHYSICS_SUPPORT = r'''
             velocity.getMethod(ConstantVectorProfileMethod.class).getQuantity().setDefinition("[0, 0, ${U_init}]");
             if (iapws) {
                 Material material=physics.getModelManager().getModel(SingleComponentLiquidModel.class).getMaterial();
+                if (constantMu) constantProperty(material,DynamicViscosityProperty.class,"${dynvis}");
+                if (constantLambda) constantProperty(material,ThermalConductivityProperty.class,"${lambda}");
                 MaterialPropertyMethod viscosity=material.getMaterialProperties().getMaterialProperty(DynamicViscosityProperty.class).getMethod();
                 MaterialPropertyMethod conductivity=material.getMaterialProperties().getMaterialProperty(ThermalConductivityProperty.class).getMethod();
                 sim.println("  • IAPWS transport methods: viscosity="+viscosity.getClass().getSimpleName()+", conductivity="+conductivity.getClass().getSimpleName());
-                if (viscosity instanceof ConstantMaterialPropertyMethod || conductivity instanceof ConstantMaterialPropertyMethod)
+                if ((!constantMu && viscosity instanceof ConstantMaterialPropertyMethod) || (!constantLambda && conductivity instanceof ConstantMaterialPropertyMethod))
                     throw new IllegalStateException("IAPWS EOS does not configure transport properties: select variable water viscosity/conductivity methods in Material Properties, then initialize manually. Constant defaults are not accepted.");
             }
             sim.println("  • Material, absolute reference pressure and initial gauge pressure/temperature/axial velocity configured.");

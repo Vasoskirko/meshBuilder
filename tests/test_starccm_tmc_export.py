@@ -25,7 +25,7 @@ class TmcExportTests(unittest.TestCase):
         with self.assertRaises(ValueError):reference_geometry(self.result,model)
     def test_settings_profiles_and_template(self):
         settings=dict(TMC_DEFAULTS,time_step=1.2e-5,blocks_to_run=3)
-        options=dict(DEFAULTS,**{})
+        options=dict(DEFAULTS,workflow=dict(DEFAULTS['workflow'],tdc_enabled=True,tdc_equivalence=True))
         options.update(canonical_tmc_options(settings));options.update(export_mode='tmc_reference',tmc_settings=settings)
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'profile.json';save_profile(options,path)
@@ -38,20 +38,19 @@ class TmcExportTests(unittest.TestCase):
         self.assertIn('param("BlocksToRun",3,',source)
         self.assertIn('public class TMC_Hybrid',source)
         self.assertEqual(validate_options({})['export_mode'],'general')
-    def test_ui_mode_roundtrip_and_dormant_fields(self):
+    def test_unified_tdc_shared_settings_roundtrip(self):
         dialog=StarCcmExportDialog(mesh_result=self.result,bundle_model=self.model)
         try:
-            general=dialog.read_options()
-            dialog.export_mode.setCurrentIndex(1)
-            dialog.field_time_step.setText('invalid dormant general field')
-            dialog.tmc_fields['time_step'].setValue(1.2e-5)
+            dialog.rb_inter_fuse.setChecked(True);dialog.rb_turb_srh.setChecked(True)
+            dialog.tdc_enabled.setChecked(True);dialog.tdc_equivalence.setChecked(True)
+            dialog.field_time_step.setText('invalid')
+            with self.assertRaises(ValueError):dialog.read_options()
+            dialog.field_time_step.setValue(1.2e-5)
             options=dialog.read_options()
             self.assertEqual(options['time_step'],1.2e-5)
             self.assertFalse(options['initialize_solution'])
-            self.assertTrue(dialog.tabs.isHidden());self.assertFalse(dialog.tmc_tabs.isHidden())
             dialog.apply_options(options);self.assertEqual(dialog.read_options(),options)
-            dialog.apply_options(general);self.assertEqual(dialog.read_options(),general)
-            self.assertEqual(dialog.tabs.count(),6);self.assertEqual(dialog.tmc_tabs.count(),4)
+            self.assertEqual(dialog.tabs.count(),7)
         finally:dialog.deleteLater();self.app.processEvents()
     @staticmethod
     def xyz(result,path,**kwargs):Path(path).write_text('XYZ sentinel')
@@ -96,11 +95,11 @@ class TmcExportTests(unittest.TestCase):
         parent=QWidget();parent.current_mesh_result=self.result;parent.can_export_mesh=lambda:True
         dialog=StarCcmExportDialog(parent,mesh_result=self.result,bundle_model=self.model)
         try:
-            dialog.export_mode.setCurrentIndex(1)
-            with tempfile.TemporaryDirectory() as tmp,patch('starccm_tmc_ui.QFileDialog.getExistingDirectory',return_value=tmp) as chooser,patch('starccm_tmc_ui.write_tmc_bundle',return_value=[]) as writer,patch('starccm_tmc_ui.QMessageBox.information'),patch.object(dialog,'accept') as accepted:
+            dialog.rb_inter_fuse.setChecked(True);dialog.rb_turb_srh.setChecked(True);dialog.tdc_enabled.setChecked(True);dialog.tdc_equivalence.setChecked(True)
+            with tempfile.TemporaryDirectory() as tmp,patch('starccm_unified_export.QFileDialog.getExistingDirectory',return_value=tmp) as chooser,patch('starccm_unified_export.write_tmc_bundle',return_value=[]) as writer,patch('starccm_unified_export.QMessageBox.information'),patch.object(dialog,'accept') as accepted:
                 dialog.generate_and_save();writer.assert_called_once();accepted.assert_called_once()
                 parent.can_export_mesh=lambda:False
-                with patch('starccm_tmc_ui.QMessageBox.warning') as warning:
+                with patch('starccm_unified_export.QMessageBox.warning') as warning:
                     dialog.generate_and_save();warning.assert_called_once()
                 self.assertEqual(chooser.call_count,1)
         finally:dialog.deleteLater();parent.deleteLater();self.app.processEvents()

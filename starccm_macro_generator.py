@@ -25,6 +25,18 @@ QUALITY_METRICS = (
 
 
 def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_props, yplus_data, options):
+    workflow=None
+    if 'workflow' in options:
+        from copy import deepcopy
+        from starccm_workflow import validate_workflow
+        workflow=validate_workflow(options['workflow']);options=deepcopy(options)
+        fluid_props=dict(fluid_props,**workflow['fluid'])
+        if not workflow['quality_enabled']:
+            options.update(create_quality_scene=False,create_quality_histograms=False,create_bad_cells=False)
+            if 'field_functions' in options:options['field_functions']=[key for key in options['field_functions'] if key!='quality']
+        if options.get('use_iapws'):
+            options['enable_thermal']=True
+            if any(workflow[key]=='iapws' for key in ('viscosity_method','conductivity_method')):raise ValueError('Назначение переменных методов вязкости/теплопроводности IAPWS ещё не поддержано; выберите константы из y+ и настройте методы вручную в STAR')
     p = mesh_result.params
     yplus_data = export_yplus_data(yplus_data, default_h1=p.h1)
     blocks = mesh_result.blocks
@@ -73,6 +85,8 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
         raise ValueError("Физические свойства, абсолютные температура и давление должны быть конечными и положительными")
     re_in = float(yplus_data.get("reynolds", 200000.0)) if yplus_data else 200000.0
     w_inlet = float(yplus_data.get("velocity", 5.62)) if yplus_data else 5.62
+    if workflow and workflow["initial_velocity"]=="zero":w_inlet=0.
+    if workflow and p_ref_pa+workflow["initial_pressure"]<=0:raise ValueError("Начальное абсолютное давление должно быть положительным")
     if not math.isfinite(w_inlet):
         raise ValueError("Начальная скорость должна быть конечным числом")
     yplus_tgt = float(yplus_data.get("y_plus", 1.0)) if yplus_data else 1.0
@@ -510,8 +524,11 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('        createParam(sim, gpm, null, "T_ref", ' + f"{t_ref_k:.16e}" + ', "K", Dimensions.Builder().temperature(1).build(), null);')
     c.append('        createParam(sim, gpm, null, "P_ref", ' + f"{p_ref_pa:.16e}" + ', "Pa", Dimensions.Builder().mass(1).length(-1).time(-2).build(), null);')
     c.append('')
-    c.append('        createParam(sim,gpm,null,"P_init",0.0,"Pa",Dimensions.Builder().mass(1).length(-1).time(-2).build(),null);')
-    c.append('        createParam(sim,gpm,null,"T_init",0.0,"K",Dimensions.Builder().temperature(1).build(),"${T_ref}");')
+    c.append('        createParam(sim,gpm,null,"P_init",'+str(workflow['initial_pressure'] if workflow else 0.)+',"Pa",Dimensions.Builder().mass(1).length(-1).time(-2).build(),null);')
+    if workflow:
+        c.append('        createParam(sim,gpm,null,"T_init",'+str(workflow['initial_temperature'])+',"K",Dimensions.Builder().temperature(1).build(),null);')
+    else:
+        c.append('        createParam(sim,gpm,null,"T_init",0.0,"K",Dimensions.Builder().temperature(1).build(),"${T_ref}");')
     c.append('        createParam(sim,gpm,null,"U_init",' + f'{w_inlet:.16e}' + ',"m/s",Dimensions.Builder().length(1).time(-1).build(),null);')
     c.append('        if (' + str(create_params).lower() + ') {')
     c.append('        createParam(sim, gpm, null, "Re_in", ' + f"{re_in:.1f}" + ', "", null, null);')
@@ -526,7 +543,8 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('        createParam(sim, gpm, null, "h1_wall", ' + f"{h1_m:.3e}" + ', "m", Dimensions.Builder().length(1).build(), null);')
     c.append('')
     c.append('        }')
-    c.append('        physicalValuesConfigured = configurePhysicalValues(sim,setupPhysics,subchannelRegions,' + str(use_iapws).lower() + ',' + str(enable_thermal or use_iapws).lower() + ');')
+    transport_flags='' if workflow is None else ','+str(workflow['viscosity_method']=='constant').lower()+','+str(workflow['conductivity_method']=='constant').lower()
+    c.append('        physicalValuesConfigured = configurePhysicalValues(sim,setupPhysics,subchannelRegions,' + str(use_iapws).lower() + ',' + str(enable_thermal or use_iapws).lower() + transport_flags + ');')
     c.append('        }')
     c.append('        initializeFirstSolution(sim,reuse,' + str(initialize_solution).lower() + ',physicalValuesConfigured);')
     if turbulence_model=='hybrid_srh':
@@ -541,15 +559,29 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
         c.append('            }')
         c.append('        } catch (Exception e) { warn(sim,"  [!] TimeStep binding: "+e.getMessage()); }')
 
+    if workflow and turbulence_model=='hybrid_srh':
+        c.append('        if (!reuse) try { configureUnsteadyWorkflow(sim,'+str(workflow['inner_iterations'])+','+str(workflow['warmup_duration'])+'); } catch (Exception e) { throw new IllegalStateException("Unsteady settings incomplete; verify STAR 2602 solver options before running: "+e.getMessage(),e); }')
     if create_field_functions:
         c.append('        supportFunctions(sim,' + f'{lz_m:.16e}' + ', Arrays.asList(' + ','.join(json.dumps(v) for v in field_choices) + '));')
+    if workflow and workflow['velocity_seed']:
+        c.append('        createParam(sim,sim.get(GlobalParameterManager.class),null,"pi",Math.PI,"",null,null);')
+        c.append('        createParam(sim,sim.get(GlobalParameterManager.class),null,"Apert",0.,"m/s",Dimensions.Builder().length(1).time(-1).build(),"0.01*${U_b}");')
+        c.append('        exportHeight(sim,'+str(lz_m)+');')
+        c.append('        UserFieldFunction theta=getOrCreateFF(sim,"thetaZ","2*${pi}*$${Position}[2]/${ExportHeight}");')
+        c.append('        theta.setDimensions(Dimensions.Builder().build());')
+        c.append('        getOrCreateFF(sim,"seedX","sin(${thetaZ})+0.5*sin(3*${thetaZ}+0.7)+0.25*sin(7*${thetaZ}+1.9)");')
+        c.append('        getOrCreateFF(sim,"seedY","sin(2*${thetaZ}+0.4)+0.5*sin(5*${thetaZ}+1.3)+0.25*sin(9*${thetaZ}+2.2)");')
+        c.append('        UserFieldFunction seed=getOrCreateFF(sim,"VelocitySeed","0");')
+        c.append('        seed.setDimensions(Dimensions.Builder().length(1).time(-1).build());')
+        c.append('        try { workflowEnum(workflowCall(seed,"getTypeOption"),"VECTOR"); } catch (Exception e) { throw new IllegalStateException("VelocitySeed vector type unavailable: "+e.getMessage(),e); }')
+        c.append('        seed.setDefinition("[${Apert}*${seedX},${Apert}*${seedY},${U_b}]");')
     # 9. Создание Derived Parts (PlaneSection и LineSection) по точному рекордеру 21.02.007:
     c.append('        // 9. Создание сечений и зондов (Derived Parts) по рекордеру STAR-CCM+ 21.02.007:')
     c.append('        sim.println(">>> Создание производных деталей (Derived Parts)...");')
     c.append('        int planesCreated = 0;')
     c.append('        int probesCreated = 0;')
     c.append('        int[] reportCounts = new int[] {0, 0};')
-    if create_bad_cells or create_summary:
+    if create_bad_cells or (create_summary and workflow is None) or (workflow and workflow["quality_enabled"]):
         c.append('        try { countReport(sim,"Quality_TotalCellCount",subchannelRegions,reportCounts); }')
         c.append('        catch (Exception e) { warn(sim,"  [!] Total cell count: " + e.getMessage()); }')
     c.append('        try {')
@@ -602,6 +634,19 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
             c.append(f'            createOrientedPlaneSection(sim, labCoord, uLen, sourceParts.get({a-1}), "Gap_Sub{a}_Sub{b}", new double[] {{{x:.16e}, {y:.16e}, lz / 2}}, new double[] {{{nx:.16e}, {ny:.16e}, 0}}); planesCreated++;')
             if create_reports:
                 c.append(f'            createMassFlowReport(sim, "MassFlow_Gap_Sub{a}_Sub{b}", Collections.singletonList((PlaneSection) sim.getPartManager().getObject("Gap_Sub{a}_Sub{b}")), reportCounts);')
+            if workflow and (create_reports or analysis_choices):
+                prefix=f'Gap_Sub{a}_Sub{b}'
+                parts=f'Collections.singletonList((PlaneSection)sim.getPartManager().getObject("{prefix}"))'
+                definition=f'$$Velocity[0]*({nx:.16e})+$$Velocity[1]*({ny:.16e})'
+                c.append(f'            UserFieldFunction gapVelocity{a}_{b}=getOrCreateFF(sim,"{prefix}_NormalVelocity",'+json.dumps(definition)+');')
+                c.append(f'            gapVelocity{a}_{b}.setDimensions(Dimensions.Builder().length(1).time(-1).build());')
+                c.append(f'            scalarReport(sim,"area","{prefix}_NormalVelocityMean",{parts},gapVelocity{a}_{b},reportCounts);')
+                c.append(f'            scalarReport(sim,"surface","{prefix}_Area",{parts},getOrCreateFF(sim,"MB_One","1.0"),reportCounts);')
+                if enable_thermal or use_iapws:
+                    c.append(f'            scalarReport(sim,"area","{prefix}_TemperatureMean",{parts},analysisField(sim,"Temperature"),reportCounts);')
+                    c.append(f'            UserFieldFunction gapEnergy{a}_{b}=getOrCreateFF(sim,"{prefix}_EnthalpyFlux","${{Density}} * ${{TotalEnthalpy}} * ${{{prefix}_NormalVelocity}}");')
+                    c.append(f'            gapEnergy{a}_{b}.setDimensions(Dimensions.Builder().mass(1).time(-3).build());')
+                    c.append(f'            scalarReport(sim,"surface","{prefix}_EnthalpyFlow",{parts},gapEnergy{a}_{b},reportCounts);')
     if axis_probes:
         for idx, (xc, yc) in enumerate(sub_centers):
             if idx + 1 in selected_subchannels:
@@ -633,9 +678,9 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
             c.append('        try { UserFieldFunction ff=getOrCreateFF(sim,"MB_EnergyBalanceSigned","${Energy_Flow_Inlet_TotalReport} + ${Energy_Flow_Outlet_TotalReport} - ${Heat_Flux_Walls_TotalReport}"); ff.setDimensions(Dimensions.Builder().mass(1).length(2).time(-3).build()); }')
             c.append('        catch (Exception e) { warn(sim,"  [!] Energy balance field: " + e.getMessage()); }')
     for key in mean_choices:
-        if key in ('temperature','wall_heat_flux') and not (enable_thermal or use_iapws):
+        if key in ('temperature','wall_heat_flux','enthalpy') and not (enable_thermal or use_iapws):
             continue
-        native = dict(velocity='Velocity',pressure='Pressure',temperature='Temperature',density='Density',viscosity='DynamicViscosity',wall_shear='WallShearStress',wall_heat_flux='BoundaryHeatFlux')[key]
+        native = dict(enthalpy='TotalEnthalpy',velocity='Velocity',pressure='Pressure',temperature='Temperature',density='Density',viscosity='DynamicViscosity',wall_shear='WallShearStress',wall_heat_flux='BoundaryHeatFlux')[key]
         parts = 'allRods' if key in ('wall_shear','wall_heat_flux') else 'subchannelRegions'
         c.append(f'        createTimeMean(sim,{parts},"{native}",{mean_start});')
     c.append('        int[] qualityCounts = new int[] {0, 0};')
@@ -649,7 +694,8 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
         c.append(f'            qualitySurfaces.add((PlaneSection) sim.getPartManager().getObject("{middle_name}"));')
         c.append('        } catch (Exception e) { sim.println("  [!] Сечение качества: " + e.getMessage()); }')
     if create_scene or create_histograms or create_bad_cells or "quality" in field_choices:
-        for metric, label, suffix, criterion in QUALITY_METRICS:
+        metrics=QUALITY_METRICS if workflow is None else tuple((key, label, ("gt_" if key=="SkewnessAngle" else "le_")+format(workflow["quality_thresholds"][key],"g"), ("> " if key=="SkewnessAngle" else "<= ")+format(workflow["quality_thresholds"][key],"g")) for key,label,_,_ in QUALITY_METRICS)
+        for metric, label, suffix, criterion in metrics:
             c.append('        try {')
             c.append(f'            FieldFunction metric = qualityField(sim, "{metric}", "{label}");')
             if "quality" in field_choices:
@@ -667,6 +713,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
                 c.append('        } catch (Exception e) { sim.println("  [!] Сцена ' + metric + ': " + e.getMessage()); }')
     if create_bad_cells:
         c.append('        badUnion(sim,subchannelRegions,badMasks,reportCounts);')
+    if create_bad_cells or (workflow and workflow['quality_enabled']):
         c.append('        try { createBadCells(sim,subchannelRegions,qualityField(sim,"Volume","Volume"),"NonPositiveVolume","<= 0",reportCounts); }')
         c.append('        catch (Exception e) { warn(sim,"  [!] Nonpositive volume check: "+e.getMessage()); }')
     c.append('        sim.println("Контроль качества: " + qualityCounts[0] + " гистограмм и " + qualityCounts[1] + " скалярных сцен. Откройте их и проверьте min/max; это не автоматическое заключение о пригодности сетки.");')
@@ -898,11 +945,21 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('            }')
     c.append('        } catch (Exception e) { warn(sim,"  [!] Parameter " + name + ": " + e.getMessage()); }')
     c.append('    }')
-    c.extend(GROUP_SUPPORT.strip('\n').splitlines())
+    from starccm_unified_support import UNIFIED_SUPPORT, flat_groups
+    c.extend((flat_groups(GROUP_SUPPORT) if workflow else GROUP_SUPPORT).strip('\n').splitlines())
+    if workflow:c.extend(UNIFIED_SUPPORT.strip('\n').splitlines())
     c.extend(AUDIT_SUPPORT.strip('\n').splitlines())
     c.extend(PHYSICS_SUPPORT.strip('\n').splitlines())
     c.extend(ANALYSIS_SUPPORT.strip('\n').splitlines())
     c.extend(JAVA_SUPPORT.strip('\n').splitlines())
     c.append('}')
     code = "\n".join(c) + "\n"
+    if workflow:
+        code=code.replace('"TimeStep"','"timeStep"').replace('${TimeStep}','${timeStep}')
+        lookup='            ScalarGlobalParameter timeParameter=findOwned(sim,timeManager,"timeStep",ScalarGlobalParameter.class);'
+        code=code.replace(lookup,lookup+'\n'
+            '            if (reuse && timeParameter==null) {\n'
+            '                ScalarGlobalParameter legacyStep=findOwned(sim,timeManager,"TimeStep",ScalarGlobalParameter.class);\n'
+            '                if (legacyStep!=null) { createParam(sim,timeManager,null,"timeStep",0.,"s",Dimensions.Builder().time(1).build(),"${TimeStep}"); timeParameter=findOwned(sim,timeManager,"timeStep",ScalarGlobalParameter.class); }\n'
+            '            }')
     return re.sub(r'sim\.println\((?="(?:  |>>> )?\[!\])', 'warn(sim, ', code)

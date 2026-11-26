@@ -95,7 +95,7 @@ class WaterPropertyFieldsTests(unittest.TestCase):
         from starccm_export_dialog import StarCcmExportDialog
         d=self.dialog();export=StarCcmExportDialog()
         self.addCleanup(export.deleteLater)
-        self.assertEqual(export.tabs.count(),6)
+        self.assertEqual(export.tabs.count(),7)
         self.assertTrue(hasattr(export,'combo_gravity'))
         self.assertTrue(hasattr(export,'report_checkboxes'))
         self.assertTrue(hasattr(export,'mean_checkboxes'))
