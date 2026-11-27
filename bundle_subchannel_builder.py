@@ -299,6 +299,9 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
             self._pan_start = None
 
     def handle_unified_click(self, xdata, ydata):
+        if xdata is None or ydata is None or not math.isfinite(xdata) or not math.isfinite(ydata):return
+        if any(xdata*n[0]+ydata*n[1]>self.model.s_flat/2+1e-8 for n in self.model.normals):
+            self.on_deselect_rod();return
         click_pt = np.array([xdata, ydata])
 
         # 1. Проверяем попадание внутрь круглого стержня
@@ -363,15 +366,15 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
         self.rebuild_view()
 
     def on_rebuild_geometry(self, silent=False):
-        if not silent:
-            self.model.reset_custom_overrides()
-
-        self.model.s_flat = self.s_flat_spin.value()
-        self.model.pitch = self.pitch_spin.value()
-        self.model.d_fuel = self.d_fuel_spin.value()
-        self.model.d_guide = self.d_guide_spin.value()
-        self.model.d_instrument = self.d_inst_spin.value()
-        self.model.update_geometry()
+        candidate=deepcopy(self.model)
+        try:
+            if not silent:candidate.reset_custom_overrides()
+            for key,control in zip(('s_flat','pitch','d_fuel','d_guide','d_instrument'),self.geometry_controls()):
+                setattr(candidate,key,control.value())
+            candidate.update_geometry()
+        except ValueError as error:
+            QMessageBox.warning(self,'Геометрия сечения',str(error));return
+        self.model=candidate
 
         self.update_inspector()
         self.on_fit_view()
@@ -439,15 +442,18 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
             msg.exec()
 
             clicked = msg.clickedButton()
-            if clicked == btn_cancel:
+            if clicked is None or clicked == btn_cancel:
                 self.rod_type_combo.blockSignals(True)
                 self.rod_type_combo.setCurrentIndex(self.rod_type_combo.findData(rod.rod_type))
                 self.rod_type_combo.blockSignals(False)
+                self.update_inspector()
                 return
             elif clicked == btn_yes:
                 delete_clashes = True
 
-        self.model.apply_rod_change(coord, new_type, target_diam, delete_clashes=delete_clashes)
+        try:self.model.apply_rod_change(coord,new_type,target_diam,delete_clashes=delete_clashes)
+        except ValueError as error:
+            QMessageBox.warning(self,'Геометрия стержня',str(error));self.update_inspector();return
         self.update_inspector()
         self.rebuild_view()
 
@@ -481,7 +487,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
             msg.exec()
 
             clicked = msg.clickedButton()
-            if clicked == btn_cancel:
+            if clicked is None or clicked == btn_cancel:
                 self.rod_diam_spin.blockSignals(True)
                 self.rod_diam_spin.setValue(rod.diameter)
                 self.rod_diam_spin.blockSignals(False)
@@ -489,7 +495,9 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
             elif clicked == btn_yes:
                 delete_clashes = True
 
-        self.model.apply_rod_change(coord, rod.rod_type, new_val, delete_clashes=delete_clashes)
+        try:self.model.apply_rod_change(coord,rod.rod_type,new_val,delete_clashes=delete_clashes)
+        except ValueError as error:
+            QMessageBox.warning(self,'Геометрия стержня',str(error));self.update_inspector();return
         self.update_inspector()
         self.rebuild_view()
 

@@ -3,6 +3,8 @@
 import math, json
 from dataclasses import dataclass, field
 import numpy as np
+from itertools import combinations
+from bundle_geometry_validation import positive,validate_geometry,sub_signature
 
 @dataclass
 class RodData:
@@ -86,6 +88,9 @@ class BundleModel:
         self.active_sub_id = None
 
     def update_geometry(self):
+        validate_geometry(self)
+        selected={sub_signature(self,self.subchannels[k]) for k in self.selected_subchannels if k in self.subchannels}
+        active=sub_signature(self,self.subchannels[self.active_sub_id]) if self.active_sub_id in self.subchannels else None
         self.rods.clear()
         self.coord_to_rod_id.clear()
         self.subchannels.clear()
@@ -170,11 +175,21 @@ class BundleModel:
                             "required_clearance_mm": round(rg + rf, 2)
                         })
 
+        # Special tubes also collide with each other; neither may enter a fluid triangle.
+        for a,b in combinations([r for r in candidate_rods if r.rod_type!='fuel'],2):
+            distance=math.hypot(a.x-b.x,a.y-b.y);required=(a.diameter+b.diameter)/2
+            if distance<required-1e-4:
+                a.is_clashing=b.is_clashing=True
+                self.detected_clashes.append(dict(rod_ids=(a.rod_id,b.rod_id),distance_mm=distance,required_clearance_mm=required))
+
         for r in candidate_rods:
             self.rods[r.rod_id] = r
             self.coord_to_rod_id[(r.q, r.r)] = r.rod_id
 
         self.generate_subchannels()
+        self.selected_subchannels={k for k,v in self.subchannels.items() if sub_signature(self,v) in selected}
+        self.active_sub_id=next((k for k,v in self.subchannels.items() if sub_signature(self,v)==active),None)
+        if self.active_rod_coord not in self.coord_to_rod_id:self.active_rod_coord=None
 
     def check_clashes_for_coord(self, coord, new_diameter):
         x = self.pitch * (coord[0] + coord[1] / 2.0)
@@ -193,6 +208,14 @@ class BundleModel:
         return clashes
 
     def apply_rod_change(self, coord, rod_type, diameter, delete_clashes=False):
+        if coord not in self.coord_to_rod_id:raise ValueError('Стержень отсутствует в текущей геометрии')
+        if rod_type not in ('fuel','guide','instrument'):raise ValueError('Неизвестный тип стержня')
+        use_custom=diameter is not None
+        default={'fuel':self.d_fuel,'guide':self.d_guide,'instrument':self.d_instrument}[rod_type]
+        diameter=default if diameter is None else positive(diameter,'Диаметр стержня')
+        rod=self.rods[self.coord_to_rod_id[coord]]
+        if any(self.s_flat/2-rod.x*n[0]-rod.y*n[1]<diameter/2-1e-4 for n in self.normals):
+            raise ValueError('Стержень пересекает оболочку')
         if delete_clashes:
             clashes = self.check_clashes_for_coord(coord, diameter)
             for c in clashes:
@@ -200,10 +223,11 @@ class BundleModel:
 
         if rod_type == "fuel":
             self.user_rod_types.pop(coord, None)
-            self.user_custom_diameters.pop(coord, None)
+            if math.isclose(diameter,self.d_fuel,rel_tol=0,abs_tol=1e-12):self.user_custom_diameters.pop(coord,None)
+            else:self.user_custom_diameters[coord]=float(diameter)
         else:
             self.user_rod_types[coord] = rod_type
-            if diameter is not None:
+            if use_custom:
                 self.user_custom_diameters[coord] = float(diameter)
             else:
                 self.user_custom_diameters.pop(coord, None)
@@ -243,7 +267,7 @@ class BundleModel:
                     return True
             return False
 
-        enlarged_tubes = [r for r in self.rods.values() if r.diameter > self.pitch * 0.95 and _has_missing_neighbors(r)]
+        enlarged_tubes = [r for r in self.rods.values() if not r.is_clashing and r.diameter > self.pitch * 0.95 and _has_missing_neighbors(r)]
         created_triangles = set()
 
         for g in enlarged_tubes:
@@ -304,7 +328,7 @@ class BundleModel:
         pts = np.array([[rod.x, rod.y] for rod in valid_rods])
         rod_ids = [r.rod_id for r in valid_rods]
 
-        if len(pts) >= 3:
+        if len(pts) >= 3 and np.linalg.matrix_rank(pts-pts[0])>=2:
             from scipy.spatial import Delaunay
             tri = Delaunay(pts)
             for sim in tri.simplices:
@@ -379,7 +403,11 @@ class BundleModel:
                 is_first = (i == 0)
                 is_last = (i == len(rods_on_side) - 2)
 
-                if is_first:
+                if is_first and is_last:
+                    poly=[p1.tolist(),p2.tolist(),v_end.tolist(),v_start.tolist()]
+                    stype='corner';c_idx=-1
+                    f_center=((p1+p2)/2+(v_start+v_end)/2)/2
+                elif is_first:
                     poly = [p1.tolist(), p2.tolist(), w2.tolist(), v_start.tolist()]
                     stype = "corner"
                     c_idx = side_idx
@@ -417,18 +445,16 @@ class BundleModel:
                 self.subchannels[sub_counter] = sub
                 sub_counter += 1
 
-        for s1_id, s1 in self.subchannels.items():
-            for s2_id, s2 in self.subchannels.items():
-                if s1_id >= s2_id:
-                    continue
-                shared = set(s1.boundary_edges) & set(s2.boundary_edges)
-                if shared:
-                    s1.neighbor_sub_ids.append(s2_id)
-                    s2.neighbor_sub_ids.append(s1_id)
-                elif s1.sub_type == "corner" and s2.sub_type == "corner":
-                    if s1.corner_index == s2.corner_index and s1.corner_index != -1:
-                        s1.neighbor_sub_ids.append(s2_id)
-                        s2.neighbor_sub_ids.append(s1_id)
+        edge_index={};corner_index={}
+        for sid,sub in self.subchannels.items():
+            for edge in sub.boundary_edges:edge_index.setdefault(edge,[]).append(sid)
+            if sub.sub_type=='corner':
+                corners=[sub.corner_index] if sub.corner_index>=0 else [sub.wall_side,(sub.wall_side+1)%6]
+                for corner in corners:corner_index.setdefault(corner,[]).append(sid)
+        neighbors={sid:set() for sid in self.subchannels}
+        for ids in list(edge_index.values())+list(corner_index.values()):
+            for a,b in combinations(ids,2):neighbors[a].add(b);neighbors[b].add(a)
+        for sid,sub in self.subchannels.items():sub.neighbor_sub_ids=sorted(neighbors[sid])
 
     def calc_hydraulics(self, sub):
         pts = np.array(sub.polygon_points)
@@ -455,21 +481,14 @@ class BundleModel:
                 r = self.rods[rid].diameter / 2.0
                 a_rods += 0.5 * (r ** 2) * theta
                 p_wet_rods += r * theta
-        elif stype == "peripheral":
-            for rid in sub.rod_ids:
-                r = self.rods[rid].diameter / 2.0
-                theta = math.pi / 2.0
-                a_rods += 0.5 * (r ** 2) * theta
-                p_wet_rods += r * theta
-            p_wet_wall = np.linalg.norm(pts[2] - pts[3])
-        elif stype == "corner":
-            r_corner = self.rods[sub.rod_ids[0]].diameter / 2.0
-            r_adj = self.rods[sub.rod_ids[1]].diameter / 2.0
-            a_rods += 0.5 * (r_corner ** 2) * (math.pi / 6.0)
-            p_wet_rods += r_corner * (math.pi / 6.0)
-            a_rods += 0.5 * (r_adj ** 2) * (math.pi / 2.0)
-            p_wet_rods += r_adj * (math.pi / 2.0)
-            p_wet_wall = np.linalg.norm(pts[2] - pts[3])
+        elif stype in ('peripheral','corner'):
+            for i,rid in enumerate(sub.rod_ids):
+                u=pts[i-1]-pts[i];v=pts[(i+1)%n_pts]-pts[i]
+                denominator=np.linalg.norm(u)*np.linalg.norm(v)
+                theta=math.acos(np.clip(np.dot(u,v)/denominator,-1.,1.)) if denominator>0 else 0.
+                radius=self.rods[rid].diameter/2
+                a_rods+=.5*radius**2*theta;p_wet_rods+=radius*theta
+            p_wet_wall=np.linalg.norm(pts[2]-pts[3])
 
         a_fluid = max(a_poly - a_rods, 1e-4)
         p_wet = max(p_wet_rods + p_wet_wall, 1e-4)
@@ -481,6 +500,7 @@ class BundleModel:
         sub.d_h_mm = round(d_h, 3)
 
     def select_subchannel(self, sub_id):
+        if sub_id not in self.subchannels:raise ValueError('Подканал отсутствует в текущей геометрии')
         if sub_id in self.selected_subchannels:
             self.selected_subchannels.remove(sub_id)
         else:
@@ -488,6 +508,7 @@ class BundleModel:
         self.active_sub_id = sub_id
 
     def add_subchannel(self, sub_id):
+        if sub_id not in self.subchannels:raise ValueError('Подканал отсутствует в текущей геометрии')
         self.selected_subchannels.add(sub_id)
         self.active_sub_id = sub_id
 
