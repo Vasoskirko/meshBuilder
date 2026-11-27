@@ -3,7 +3,7 @@ from copy import deepcopy
 from PySide6.QtCore import Qt,QTimer
 from PySide6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QGridLayout,QFormLayout,
     QGroupBox,QLabel,QComboBox,QToolButton,QPushButton,QCheckBox,QTableWidget,
-    QTableWidgetItem,QHeaderView,QSplitter,QMessageBox)
+    QTableWidgetItem,QHeaderView,QSplitter,QMessageBox,QSizePolicy)
 from number_field import NumberField
 from starccm_surface_catalog import surface_catalog,validate_pairs
 from starccm_surface_preview import SurfacePreview
@@ -19,7 +19,7 @@ def label_help(text,explanation=''):
     widget=QWidget();row=QHBoxLayout(widget);row.setContentsMargins(0,0,0,0);row.setSpacing(5)
     row.addWidget(QLabel(text))
     if explanation:row.addWidget(help_button(explanation))
-    row.addStretch();return widget
+    row.addStretch();widget.setSizePolicy(QSizePolicy.Preferred,QSizePolicy.Fixed);return widget
 
 
 def compact_field(widget):
@@ -27,7 +27,7 @@ def compact_field(widget):
 
 
 def box(title):
-    widget=QGroupBox(title);layout=QVBoxLayout(widget);layout.setSpacing(8);return widget,layout
+    widget=QGroupBox(title);widget.setSizePolicy(QSizePolicy.Preferred,QSizePolicy.Maximum);layout=QVBoxLayout(widget);layout.setSpacing(8);return widget,layout
 
 
 def install_compact(d):

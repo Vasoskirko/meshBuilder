@@ -5,6 +5,13 @@ from PySide6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QFormLayout,QGrou
 from starccm_compact_ui import label_help,box
 
 
+def fit_list(widget,maximum):
+    # Native styles, font size and display scaling determine the actual row height.
+    widget.ensurePolished()
+    row=max(widget.fontMetrics().height()+6,widget.sizeHintForRow(0))
+    widget.setFixedHeight(min(maximum,2*widget.frameWidth()+row*widget.count()+4))
+
+
 def install(d):
     d._parts_stash=QWidget(d);d._parts_stash.hide()
     page=d.tabs.widget(2).widget();layout=page.layout()
@@ -18,10 +25,10 @@ def install(d):
     for index,name in enumerate(('Статистика','Качество','TDC','Итог'),4):d.tabs.setTabText(index,f'{index+1}. {name}')
     targets,tl=box('Области построения');layout.addWidget(targets)
     tl.addWidget(label_help('Для чего создавать плоскости','Отметьте нужные области. Вся модель — единое сечение всех подканалов; выбранные подканалы — отдельные сечения. После Fuse их исходные области выделяются автоматически.'))
-    d.parts_targets=QListWidget();d.parts_targets.setSelectionMode(QAbstractItemView.NoSelection);d.parts_targets.setMaximumHeight(180);tl.addWidget(d.parts_targets)
+    d.parts_targets=QListWidget();d.parts_targets.setSelectionMode(QAbstractItemView.NoSelection);d.parts_targets.setMaximumHeight(200);tl.addWidget(d.parts_targets)
     for number,name in [(0,'Вся модель')]+[(n,f'Подканал {n}') for n in range(1,d.sub_count+1)]:
         item=QListWidgetItem(name,d.parts_targets);item.setData(Qt.UserRole,number);item.setFlags(item.flags()|Qt.ItemIsUserCheckable);item.setCheckState(Qt.Unchecked)
-    d.parts_targets.setFixedHeight(min(180,8+23*d.parts_targets.count()))
+    fit_list(d.parts_targets,200)
     planes,pl=box('Поперечные плоскости');layout.addWidget(planes);form=QFormLayout();pl.addLayout(form)
     d.plane_scheme=QComboBox()
     for text,key in (('Не создавать','none'),('Вход и выход · 2 плоскости','ends'),('Вход, середина, выход · 3 плоскости','three'),('Равномерно по высоте · N плоскостей','uniform')):d.plane_scheme.addItem(text,key)
@@ -36,7 +43,7 @@ def install(d):
     for i in range(d.gap_table.rowCount()):
         name=d.gap_table.item(i,0).text();item=QListWidgetItem(name.replace('Gap_Sub','Подканал ').replace('_Sub',' ↔ Подканал '),d.gap_list);item.setToolTip(name)
     if not d.gap_list.count():QListWidgetItem('Соседних зазоров нет',d.gap_list)
-    d.gap_list.setFixedHeight(min(100,8+23*d.gap_list.count()))
+    fit_list(d.gap_list,120)
     d.chk_axis_probes.setText('Осевые зонды выбранных подканалов');ol.addWidget(d.chk_axis_probes)
     ol.addWidget(label_help('Осевой зонд','Линия вдоль Z в центре живого сечения каждого выбранного подканала. Вся модель отдельно не создаёт дополнительный осевой зонд.'))
     reports.addWidget(label_help('Отчёты по мгновенным значениям · не средним по времени','Все отчёты этой вкладки используют текущие поля решения. В Hybrid это мгновенные значения; в стационарном расчёте — значения текущей итерации. Средние поля по времени включаются во вкладке «Статистика» и не подставляются в мгновенные балансы.'))
@@ -46,7 +53,7 @@ def install(d):
     d.report_targets=QListWidget();d.report_targets.setSelectionMode(QAbstractItemView.NoSelection);d.report_targets.setMaximumHeight(150);sl.addWidget(d.report_targets)
     for n in range(1,d.sub_count+1):
         item=QListWidgetItem(f'Подканал {n}',d.report_targets);item.setData(Qt.UserRole,n);item.setFlags(item.flags()|Qt.ItemIsUserCheckable);item.setCheckState(Qt.Checked)
-    d.report_targets.setFixedHeight(min(150,8+23*d.report_targets.count()))
+    fit_list(d.report_targets,180)
     for key,checkbox in d.report_checkboxes.items():sl.addWidget(checkbox)
     sl.addWidget(label_help('Что измеряется','Геометрия: площадь, объём, смоченный периметр, гидравлический диаметр. Гидравлика: расход, среднемассовая осевая скорость, давление, перепад, Re. Трение: средний модуль напряжения стенки, Cf и Darcy; это ещё не полный КГС. Тепло: среднемассовая температура, температура стенки и тепловая мощность. Здесь «среднее» означает усреднение по поверхности, не по времени.'))
     layout.addStretch();reports.addStretch();busy=[False]
