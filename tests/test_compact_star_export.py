@@ -32,7 +32,7 @@ class CompactExportTests(unittest.TestCase):
             code=self.macro(d)
             self.assertEqual('setMethod(IapwsDynamicViscosityMethod.class)' in code,bool(mu))
             self.assertEqual('setMethod(IapwsThermalConductivityMethod.class)' in code,bool(conductivity))
-            self.assertIn('true,true,'+str(not mu).lower()+','+str(not conductivity).lower()+');',code)
+            self.assertIn('true,true,'+str(not mu).lower()+','+str(not conductivity).lower()+',false);',code)
             other=self.dialog();other.apply_options(d.read_options())
             self.assertEqual(other.viscosity_method.currentIndex(),mu)
             self.assertEqual(other.conductivity_method.currentIndex(),conductivity)

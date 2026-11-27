@@ -82,7 +82,7 @@ class CheckPhysics {
     static void require(boolean b,String m) { if(!b) throw new AssertionError(m); }
     public static void main(String[] args) {
         CheckPhysics c=new CheckPhysics();Simulation s=new Simulation();
-        for(String name:List.of("rho","dynvis","Cp","lambda","P_ref","T_ref","P_init","T_init","U_init"))
+        for(String name:List.of("rho","dynvis","Cp","lambda","P_ref","T_ref","P_init","T_init","U_b"))
             s.parameters.parameters.put(name,new ScalarGlobalParameter());
         SpecificHeatProperty cpContract=new SpecificHeatProperty();boolean rejected=false;
         try { cpContract.setMethod(ConstantMaterialPropertyMethod.class); } catch(IllegalArgumentException expected) { rejected=true; }
@@ -99,11 +99,14 @@ class CheckPhysics {
         require(physics.references.pressure.definition.equals("${P_ref}"),"absolute reference pressure");
         require(physics.initial.get(InitialPressureProfile.class).method.quantity.definition.equals("${P_init}"),"gauge initial pressure");
         require(physics.initial.get(StaticTemperatureProfile.class).method.quantity.definition.equals("${T_init}"),"initial temperature");
-        require(physics.initial.get(VelocityProfile.class).method.quantity.definition.equals("[0, 0, ${U_init}]"),"initial axial velocity");
+        require(physics.initial.get(VelocityProfile.class).method.quantity.definition.equals("[0, 0, ${U_b}]"),"initial axial velocity");
         c.initializeFirstSolution(s,false,true,true);require(s.solution.initializationCount==1,"first initialization");
         c.initializeFirstSolution(s,true,true,true);require(s.solution.initializationCount==1,"rerun reset solution");
         c.initializeFirstSolution(s,false,false,true);require(s.solution.initializationCount==1,"disabled initialization ran");
         c.initializeFirstSolution(s,false,true,false);require(s.solution.initializationCount==1,"initialized after setup failure");
+        PhysicsContinuum zero=new PhysicsContinuum();
+        require(c.configurePhysicalValues(s,zero,List.of(region),false,true,false,false,true),"zero initialization failed");
+        require(zero.initial.get(VelocityProfile.class).method.quantity.definition.equals("[0, 0, 0]"),"zero velocity must be literal, not overwrite U_b");
         PhysicsContinuum isothermal=new PhysicsContinuum();
         require(c.configurePhysicalValues(s,isothermal,List.of(region),false,false),"isothermal configuration failed");
         require(isothermal.models.liquid.material.properties.getMaterialProperty(SpecificHeatProperty.class).writes==0,"isothermal setup changed Cp");

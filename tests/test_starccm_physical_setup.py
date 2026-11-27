@@ -23,11 +23,25 @@ class PhysicalSetupTests(unittest.TestCase):
         self.assertIn('"P_init",0.0,"Pa"',execute)
         self.assertIn('"T_init",0.0,"K"',execute)
         self.assertIn('"${T_ref}"',execute)
-        self.assertIn('if (false)',execute)
+        self.assertIn('createParam(sim, gpm, null, "U_b"',execute);self.assertNotIn('U_init',execute)
         self.assertIn('initializeFirstSolution(sim,reuse,false',self.macro(initialize_solution=False))
         self.assertIn('sim.getSolution().isInitialized()',code)
         self.assertLess(code.index('String reason=auditDeferral(name,evaluateSolution,initialized,progressed)'),code.index('double value=auditReportValue(sim,report'))
         self.assertIn('solution not initialized',code)
+    def test_ub_is_the_only_initial_velocity_parameter(self):
+        from starccm_workflow import validate_workflow
+        for mode in ('theory','zero','seed'):
+            wf=validate_workflow(dict(initial_velocity=mode,velocity_seed=mode=='seed'))
+            code=self.macro(workflow=wf,create_parameters=False)
+            self.assertNotIn('createParam(sim,gpm,null,"U_init"',code);self.assertNotIn('${U_init}',code)
+            if mode!='zero':self.assertIn('"U_b", 0.0, "m/s"',code)
+            if mode=='seed':self.assertIn('initialVelocity.getMethod(FunctionVectorProfileMethod.class).setFieldFunction(seed)',code)
+            if mode=='zero':
+                self.assertIn('false,true,true,true,true);',code)
+                wf['boundary_pairs']=[dict(first='Inlet_s1',second='Outlet_s1',kind='fully_developed',mass_flow=1.,mass_flow_auto=True)]
+                with_flow=self.macro(workflow=wf,create_parameters=False)
+                self.assertIn('"${rhoW_in}/${rho}"',with_flow);self.assertIn('setDefinition("${G_subchannel}*${S_in_Sub1}/${S_in}")',with_flow)
+
     def test_initialization_checkbox_profile_roundtrip(self):
         from starccm_export_dialog import StarCcmExportDialog
         d=StarCcmExportDialog(mesh_result=fused.FusedExportTests.result)

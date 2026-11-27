@@ -16,13 +16,19 @@ PHYSICS_SUPPORT = r'''
     }
     private boolean configurePhysicalValues(Simulation sim, PhysicsContinuum physics, List<Region> regions,
             boolean iapws, boolean thermal, boolean constantMu, boolean constantLambda) {
+        return configurePhysicalValues(sim,physics,regions,iapws,thermal,constantMu,constantLambda,false);
+    }
+    private boolean configurePhysicalValues(Simulation sim, PhysicsContinuum physics, List<Region> regions,
+            boolean iapws, boolean thermal, boolean constantMu, boolean constantLambda, boolean zeroVelocity) {
         try {
             if (physics==null) throw new IllegalStateException("Physical model setup failed");
             // Refuse to bind a property/profile to an unrelated user parameter.
             GlobalParameterManager manager=sim.get(GlobalParameterManager.class);
-            for (String name : new String[]{"rho","dynvis","Cp","lambda","P_ref","T_ref","P_init","T_init","U_init"})
+            for (String name : new String[]{"rho","dynvis","Cp","lambda","P_ref","T_ref","P_init","T_init"})
                 if (findOwned(sim,manager,name,ScalarGlobalParameter.class)==null)
                     throw new IllegalStateException("Missing physical parameter " + name);
+            if (!zeroVelocity && findOwned(sim,manager,"U_b",ScalarGlobalParameter.class)==null)
+                throw new IllegalStateException("Missing physical parameter U_b");
             for (Region region : regions) region.setPhysicsContinuum(physics);
             if (!iapws) {
                 Material material=physics.getModelManager().getModel(SingleComponentLiquidModel.class).getMaterial();
@@ -45,7 +51,7 @@ PHYSICS_SUPPORT = r'''
             }
             VelocityProfile velocity=physics.getInitialConditions().get(VelocityProfile.class);
             velocity.setMethod(ConstantVectorProfileMethod.class);
-            velocity.getMethod(ConstantVectorProfileMethod.class).getQuantity().setDefinition("[0, 0, ${U_init}]");
+            velocity.getMethod(ConstantVectorProfileMethod.class).getQuantity().setDefinition(zeroVelocity ? "[0, 0, 0]" : "[0, 0, ${U_b}]");
             if (iapws) {
                 Material material=physics.getModelManager().getModel(SingleComponentLiquidModel.class).getMaterial();
                 if (constantMu) constantProperty(material,DynamicViscosityProperty.class,"${dynvis}");

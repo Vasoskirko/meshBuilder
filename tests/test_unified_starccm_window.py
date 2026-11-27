@@ -39,7 +39,7 @@ class UnifiedWindowTests(unittest.TestCase):
         d=self.dialog();d.fluid_fields['dyn_vis'].setText('9,1e-5');d.initial_pressure.setText('123,5');d.initial_velocity.setCurrentIndex(0)
         d.initial_temperature.setText('560,25');code=self.macro(d)
         self.assertIn('"P_init",123.5',code);self.assertIn('"T_init",560.25',code)
-        self.assertIn('"U_init",0.0000000000000000e+00',code)
+        self.assertNotIn('createParam(sim,gpm,null,"U_init"',code);self.assertNotIn('${U_init}',code);self.assertIn('zeroVelocity ? "[0, 0, 0]" : "[0, 0, ${U_b}]"',code)
         d.initial_pressure.setText('-17000000')
         with self.assertRaises(ValueError):self.macro(d)
     def test_profile_roundtrip_nested_settings_and_old_profile_migration(self):

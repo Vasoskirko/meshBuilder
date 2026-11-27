@@ -91,7 +91,7 @@ def install(dialog,layout,header):
     form=QFormLayout();ref.addLayout(form)
     d.initial_temperature=NumberField(float(d.fluid_props.get('t_ref_c',300.))+273.15,minimum=1e-15)
     d.initial_pressure=NumberField(0.,minimum=-1e12)
-    d.initial_velocity=QComboBox();d.initial_velocity.addItem('Нулевая','zero');d.initial_velocity.addItem('Осевая из калькулятора y+','theory');d.initial_velocity.addItem('Возмущения VelocitySeed','seed');d.initial_velocity.setCurrentIndex(1)
+    d.initial_velocity=QComboBox();d.initial_velocity.addItem('Нулевая','zero');d.initial_velocity.addItem('Осевая · U_b','theory');d.initial_velocity.addItem('Возмущения VelocitySeed','seed');d.initial_velocity.setCurrentIndex(1)
     form.addRow('Начальная температура, K',d.initial_temperature);form.addRow('Давление относительно опорного, Па',d.initial_pressure);form.addRow('Начальная скорость',d.initial_velocity)
     d.initial_absolute=note(ref,'')
     unsupported(ref,'Назначить VelocitySeed начальным полем — после проверки выражения в STAR')

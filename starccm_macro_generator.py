@@ -85,11 +85,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     if any(not math.isfinite(value) or value <= 0 for value in required_values.values()):
         raise ValueError("Физические свойства, абсолютные температура и давление должны быть конечными и положительными")
     re_in = float(yplus_data.get("reynolds", 200000.0)) if yplus_data else 200000.0
-    w_inlet = float(yplus_data.get("velocity", 5.62)) if yplus_data else 5.62
-    if workflow and workflow["initial_velocity"]=="zero":w_inlet=0.
     if workflow and p_ref_pa+workflow["initial_pressure"]<=0:raise ValueError("Начальное абсолютное давление должно быть положительным")
-    if not math.isfinite(w_inlet):
-        raise ValueError("Начальная скорость должна быть конечным числом")
     yplus_tgt = float(yplus_data.get("y_plus", 1.0)) if yplus_data else 1.0
     h1_m = float(yplus_data.get("delta_y1_m", 2.5e-6)) if yplus_data else float(p.h1)
 
@@ -112,6 +108,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     evaluate_solution = options.get("evaluate_solution_reports", False)
     initialize_solution = options.get("initialize_solution", True)
     create_params = options.get("create_parameters", True)
+    needs_analytic_velocity=not workflow or workflow["initial_velocity"]!="zero" or workflow["velocity_seed"]
     needs_analytic_flow=bool(workflow and any(p['kind']=='fully_developed' and p.get('mass_flow_auto',False) for p in workflow['boundary_pairs']))
     create_reports = options.get("create_mass_reports", True)
     create_scene = options.get("create_quality_scene", True)
@@ -165,7 +162,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     if workflow:
         from starccm_flow_defaults import calculator_mass_flow
         for pair in workflow['boundary_pairs']:
-            if pair.get('mass_flow_auto'):pair['mass_flow']=calculator_mass_flow(catalog,fluid_props,yplus_data,pair['first'])
+            if pair.get('mass_flow_auto'):pair['mass_flow']=calculator_mass_flow(catalog,dict(fluid_props,density=rho,dyn_vis=mu),yplus_data,pair['first'])
     digest = hashlib.sha256()
     topology_settings=dict(schema=2 if custom_surfaces else 1,inter_fuse=inter_fuse,rod_mode=rod_mode,io=inlet_outlet_mode,nz=p.nz,height=lz_m)
     if custom_surfaces:topology_settings.update(disabled_internal_pairs=workflow['disabled_internal_pairs'],pairs=workflow['boundary_pairs'],conditions=workflow['boundary_conditions'],rod_kinds={str(rid):bundle_model.rods[rid].rod_type for row in catalog['rods'] for rid in row['rod_ids']})
@@ -603,8 +600,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
         c.append('        createParam(sim,gpm,null,"T_init",'+str(workflow['initial_temperature'])+',"K",Dimensions.Builder().temperature(1).build(),null);')
     else:
         c.append('        createParam(sim,gpm,null,"T_init",0.0,"K",Dimensions.Builder().temperature(1).build(),"${T_ref}");')
-    c.append('        createParam(sim,gpm,null,"U_init",' + f'{w_inlet:.16e}' + ',"m/s",Dimensions.Builder().length(1).time(-1).build(),null);')
-    c.append('        if (' + str(create_params or needs_analytic_flow).lower() + ') {')
+    c.append('        if (' + str(create_params or needs_analytic_flow or needs_analytic_velocity).lower() + ') {')
     c.append('        createParam(sim, gpm, null, "Re_in", ' + f"{re_in:.1f}" + ', "", null, null);')
     c.append('        createParam(sim, gpm, null, "P_wet", ' + f"{p_wet_total:.8e}" + ', "m", Dimensions.Builder().length(1).build(), null);')
     c.append('        createParam(sim, gpm, null, "S_in", ' + f"{s_in_total:.8e}" + ', "m^2", Dimensions.Builder().length(2).build(), null);')
@@ -617,7 +613,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('        createParam(sim, gpm, null, "h1_wall", ' + f"{h1_m:.3e}" + ', "m", Dimensions.Builder().length(1).build(), null);')
     c.append('')
     c.append('        }')
-    transport_flags='' if workflow is None else ','+str(workflow['viscosity_method']=='constant').lower()+','+str(workflow['conductivity_method']=='constant').lower()
+    transport_flags='' if workflow is None else ','+str(workflow['viscosity_method']=='constant').lower()+','+str(workflow['conductivity_method']=='constant').lower()+','+str(workflow['initial_velocity']=='zero').lower()
     if workflow:
         c.append('        createParam(sim,gpm,null,"MinimumWallDistance",'+str(workflow['minimum_wall_distance'])+',"m",Dimensions.Builder().length(1).build(),null);')
         c.append('        setupPhysics.getReferenceValues().get(MinimumAllowableWallDistance.class).setDefinition("${MinimumWallDistance}");')
@@ -703,7 +699,6 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     if create_field_functions:
         c.append('        supportFunctions(sim,' + f'{lz_m:.16e}' + ', Arrays.asList(' + ','.join(json.dumps(v) for v in field_choices) + '));')
     if workflow and workflow['velocity_seed']:
-        if not (create_params or needs_analytic_flow):c.append('        createParam(sim,sim.get(GlobalParameterManager.class),null,"U_b",'+str(float(yplus_data.get('velocity',5.62)))+',"m/s",Dimensions.Builder().length(1).time(-1).build(),null);')
         c.append('        createParam(sim,sim.get(GlobalParameterManager.class),null,"pi",Math.PI,"",null,null);')
         c.append('        createParam(sim,sim.get(GlobalParameterManager.class),null,"Apert",0.,"m/s",Dimensions.Builder().length(1).time(-1).build(),"0.01*${U_b}");')
         c.append('        exportHeight(sim,'+str(lz_m)+');')
