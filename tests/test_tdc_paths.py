@@ -92,6 +92,7 @@ class PathTests(unittest.TestCase):
                 c=d.tdc_paths_table.cellWidget(i,3);c.setCurrentIndex(c.findData('report'));d.tdc_paths_table.cellWidget(i,4).setText('PowerToThird')
         v=d.read_options();p=self.plan(d)
         self.assertTrue(any(x['neighbor']==3 and x['method']=='report' for x in p['paths']))
+        self.assertTrue(any('сосед · Подканал 3' in d.tdc_connections.item(i,1).text() for i in range(d.tdc_connections.rowCount())))
     def test_native_side_selector_executes_and_rejects_parent_and_ambiguity(self):
         import test_tmc_hybrid as jt
         cmd,java=jt.compiler()

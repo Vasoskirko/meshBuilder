@@ -1,14 +1,15 @@
 """Select one target and explicitly account for every other lateral energy path."""
 from copy import deepcopy
-from PySide6.QtWidgets import QWidget,QVBoxLayout,QFormLayout,QComboBox,QLabel,QCheckBox,QPushButton,QTableWidget,QTableWidgetItem,QLineEdit,QHeaderView
+import re
+from PySide6.QtWidgets import QWidget,QVBoxLayout,QFormLayout,QComboBox,QLabel,QCheckBox,QPushButton,QTableWidget,QTableWidgetItem,QLineEdit,QHeaderView,QAbstractItemView
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from starccm_compact_ui import box,label_help
 from starccm_tdc_plan import TDC_DEFAULTS,validate_tdc
 from starccm_tdc_paths import side_paths,target_connections,channel_labels
 from number_field import NumberField
+from starccm_tdc_connections_ui import KINDS,fill_overview
 
-KINDS=dict(fuse='Внутри Fuse',interface='Internal',periodic='Periodic',wall='Wall · адиабата',symmetry='Symmetry',mass_flow_inlet='Mass Flow Inlet',pressure_outlet='Pressure Outlet')
 CHOICES=dict(boundary='Измерить на границе',reconstruct='Реконструкция · приближённо',report='Готовый отчёт мощности',unmeasured='Не измерено',zero='Нулевой поток',target='Остаток баланса · целевой')
 
 
@@ -34,12 +35,22 @@ def install(d):
     d.tdc_target=QComboBox();form.addRow(label_help('Целевое соединение','Для него определяется остаток баланса. При нескольких соединениях A–B выбирается одно; остальные измеряются отдельно. Эквивалентность зазоров не предполагается.'),d.tdc_target)
     d.tdc_area_hint=QLabel();gl.addWidget(d.tdc_area_hint)
     preview=QPushButton('Показать целевой зазор в «Сетке»');gl.addWidget(preview)
-    paths,pl=box('Все боковые поверхности контрольных объёмов');body.addWidget(paths)
+    paths,pl=box('Теплообмен через боковые стороны');body.addWidget(paths)
+    d.tdc_mapping=QLabel();d.tdc_mapping.setWordWrap(True);pl.addWidget(d.tdc_mapping)
+    d.tdc_connections=QTableWidget(0,4);d.tdc_connections.setHorizontalHeaderLabels(['Что учитываем','Подканалы','Условие','Роль в балансе'])
+    d.tdc_connections.setSelectionBehavior(QAbstractItemView.SelectRows);d.tdc_connections.setSelectionMode(QAbstractItemView.SingleSelection);d.tdc_connections.setMaximumHeight(280);pl.addWidget(d.tdc_connections)
+    d.tdc_connection_details=QLabel();d.tdc_connection_details.setWordWrap(True);d.tdc_connection_details.setTextFormat(Qt.PlainText)
+    show_side=QPushButton('Показать выбранное соединение в «Сетке»');pl.addWidget(show_side)
+    d.tdc_details_toggle=QCheckBox('Подробности: поверхности и способы измерения');pl.addWidget(d.tdc_details_toggle)
+    d.tdc_details_panel=QWidget();details_layout=QVBoxLayout(d.tdc_details_panel);details_layout.setContentsMargins(0,0,0,0);pl.addWidget(d.tdc_details_panel);d.tdc_details_panel.hide()
+    details_layout.addWidget(d.tdc_connection_details)
+    explanation=QLabel('Настройки ниже относятся к отдельным сторонам. Положительная мощность направлена наружу из указанного подканала. Поле отчёта нужно только для способа «Готовый отчёт мощности».');explanation.setWordWrap(True);details_layout.addWidget(explanation)
+    d.tdc_details_toggle.toggled.connect(d.tdc_details_panel.setVisible)
     d.tdc_paths_table=QTableWidget(0,5);d.tdc_paths_table.setHorizontalHeaderLabels(['Объём','Поверхность / сосед','Условие','Учёт','Отчёт, Вт'])
-    d.tdc_paths_table.horizontalHeader().setSectionResizeMode(1,QHeaderView.Stretch);d.tdc_paths_table.setMinimumHeight(220);d.tdc_paths_table.setMaximumHeight(255);pl.addWidget(d.tdc_paths_table)
+    d.tdc_paths_table.horizontalHeader().setSectionResizeMode(1,QHeaderView.Stretch);d.tdc_paths_table.setMinimumHeight(220);d.tdc_paths_table.setMaximumHeight(255);details_layout.addWidget(d.tdc_paths_table)
     d.tdc_paths_table.setToolTip('Знак каждой мощности — наружу из указанного подканала. На каждый контрольный объём допускается один неизвестный перенос: целевой.')
     d.tdc_reconstruction=QCheckBox('Для реконструкции: подтверждаю скалярное замыкание диффузии и проверку баланса')
-    d.tdc_reconstruction.setToolTip('Используется EffectiveConductivity·grad(T), не Boundary Heat Flux на сечении. Это постобработочная реконструкция, а не точный численный поток по граням.');pl.addWidget(d.tdc_reconstruction)
+    d.tdc_reconstruction.setToolTip('Используется EffectiveConductivity·grad(T), не Boundary Heat Flux на сечении. Это постобработочная реконструкция, а не точный численный поток по граням.');details_layout.addWidget(d.tdc_reconstruction)
     d.tdc_components=QCheckBox('Молекулярный и полный адвективный перенос через целевой зазор');d.tdc_components.setChecked(True)
     d.tdc_components.setToolTip('Молекулярный: −λ∫grad(T)·n dS. Адвективный: ρCp∫(T−T_init)u_n dS, включая разрешённые пульсации. Его среднее не равно переносу средним течением. Остаток после вычитания молекулярного переноса не объявляется чисто турбулентным.');pl.addWidget(d.tdc_components)
     method,ml=box('Определение и усреднение');body.addWidget(method);mf=QFormLayout();ml.addLayout(mf)
@@ -68,7 +79,9 @@ def install(d):
             else:d._tdc_reports.pop(p['id'],None)
     def update_status():
         unresolved=[p['id'] for i,p in enumerate(d._tdc_rows) if d.tdc_paths_table.cellWidget(i,3) is not None and d.tdc_paths_table.cellWidget(i,3).currentData()=='unmeasured']
-        d.tdc_status.setText('Не определены прочие потоки: '+', '.join(unresolved) if unresolved else 'Целевой поток определяется отдельно. Перед сбором проверь доступность боковых потоков и фактическую ΔT.')
+        if d._tdc_rows:
+            stash_paths();fill_overview(d,d._tdc_rows,d.tdc_a.currentData(),d.tdc_b.currentData(),d._tdc_target_id)
+        d.tdc_status.setText(f'Не задано измерение для {len(unresolved)} сторон. Откройте «Подробности» и выберите способ учёта.' if unresolved else 'Целевой поток определяется отдельно. Перед сбором проверь доступность боковых потоков и фактическую ΔT.')
     def refresh():
         if d._tdc_busy:return
         d._tdc_busy=True
@@ -76,6 +89,7 @@ def install(d):
             stash_paths();d.tdc_parts_required.setVisible(d.tdc_enabled.isChecked());d.tdc_reports_required.setVisible(d.tdc_enabled.isChecked())
             if not hasattr(d,'_surface_catalog'):return
             cat=d._surface_catalog;a,b=d.tdc_a.currentData(),d.tdc_b.currentData()
+            d.tdc_mapping.setText(f'A = Подканал {a}; B = Подканал {b}. Один открытый обмен — одна строка. Вход/выход учитываются отдельно в осевом балансе.')
             heat={k:f.model.raw for k,f in getattr(d,'_heat_fields',{}).items()}
             if d.mesh_result is not None and d.bundle_model is not None and hasattr(d.mesh_result,'instances_map'):
                 info=channel_labels(d.mesh_result,d.bundle_model,cat,heat)
@@ -85,7 +99,10 @@ def install(d):
             workflow=dict(d._workflow,boundary_pairs=getattr(d,'_pairs',[]),boundary_conditions=getattr(d,'_conditions',[]),disabled_internal_pairs=[k for k,c in getattr(d,'_internal_combos',{}).items() if c.currentData()=='wall'])
             allpaths=side_paths(cat,workflow);candidates=target_connections(allpaths,a,b)
             d.tdc_target.clear()
-            for p in candidates:d.tdc_target.addItem(f'{p["connection"]} · {KINDS[p["kind"]]}',p['connection'])
+            for p in candidates:
+                rods='–'.join('R'+n for n in re.findall(r'R(\d+)',p['id']))
+                d.tdc_target.addItem(f'{KINDS[p["kind"]]} · Подканал {a} ↔ Подканал {b} · {rods}',p['connection'])
+                d.tdc_target.setItemData(d.tdc_target.count()-1,p['connection'],Qt.ToolTipRole)
             index=d.tdc_target.findData(d._tdc_target_id);d.tdc_target.setCurrentIndex(index if index>=0 else (0 if candidates else -1));d._tdc_target_id=d.tdc_target.currentData() or ''
             chosen=next((p for p in candidates if p['connection']==d._tdc_target_id),None)
             d.tdc_area_hint.setText(f'Площадь целевого соединения: {chosen["area"]:.6g} м² · нормаль из A' if chosen else 'Нет открытого соединения между выбранными A и B')
@@ -118,12 +135,21 @@ def install(d):
     def target_changed():
         if d._tdc_busy:return
         stash_paths();d._tdc_target_id=d.tdc_target.currentData() or '';refresh()
-    def show_exchange():
+    def show_surfaces(selected):
         d.tabs.setCurrentIndex(0);view=d.surface_preview;cat=d._surface_catalog;view.set_view_mode('sides');view.draw_catalog(cat,d.rb_inter_fuse.isChecked())
-        selected=[p['id'] for p in d._tdc_rows if p['connection']==d._tdc_target_id]
         for r in cat['sides']:
             if r['id'] in selected and r['id'] not in view.items_by_id:view.add_surface(r,QColor('#d62728'),3.)
-        view.highlight(selected);d.preview_selection.setText('Целевой обмен TDC: '+', '.join(selected))
+        view.highlight(selected);d.preview_selection.setText('Боковой обмен TDC: '+', '.join(selected))
+    def show_exchange():
+        show_surfaces([p['id'] for p in d._tdc_rows if p['connection']==d._tdc_target_id])
+    def selected_details():
+        row=d.tdc_connections.currentRow()
+        item=d.tdc_connections.item(row,0)
+        d.tdc_connection_details.setText(item.toolTip() if item else '')
+    def show_selected():
+        item=d.tdc_connections.item(d.tdc_connections.currentRow(),0)
+        if item:show_surfaces(item.data(Qt.UserRole))
+    d.tdc_connections.itemSelectionChanged.connect(selected_details);show_side.clicked.connect(show_selected)
     def read():
         stash_paths()
         return validate_tdc(dict(TDC_DEFAULTS,target_components=d.tdc_components.isChecked(),a=d.tdc_a.currentData(),b=d.tdc_b.currentData(),target=d._tdc_target_id,path_methods=deepcopy(d._tdc_methods),path_reports=deepcopy(d._tdc_reports),scalar_diffusion_confirmed=d.tdc_reconstruction.isChecked(),sections=d.spin_sub_n_planes.value(),blocks=d.tdc_blocks.isChecked(),min_delta_t=d.tmc_fields['min_delta_t'].value(),balance_tolerance=d.tdc_balance_tol.value()))
