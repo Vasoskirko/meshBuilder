@@ -149,10 +149,13 @@ class CompactExportTests(unittest.TestCase):
         from PySide6.QtTest import QTest
         d=self.dialog();d.show();self.app.processEvents()
         key=next(iter(d._heat_fields));item=d.surface_preview.items_by_id[key][0]
-        point=d.surface_preview.mapFromScene(item.path().pointAtPercent(.5))
-        QTest.mouseClick(d.surface_preview.viewport(),Qt.LeftButton,pos=point);self.app.processEvents()
-        self.assertEqual(d.preview_selection.text(),key)
-        self.assertEqual(d.heat_table.currentRow(),0)
+        for scale in (.6,1.,1.6):
+            d.surface_preview.resetTransform();d.surface_preview.fitInView(d.surface_preview.scene().itemsBoundingRect().adjusted(-1,-1,1,1),Qt.KeepAspectRatio);d.surface_preview.scale(scale,scale)
+            point=d.surface_preview.mapFromScene(item.path().pointAtPercent(.5))
+            self.assertEqual(d.surface_preview.itemAt(point),item)
+            QTest.mouseClick(d.surface_preview.viewport(),Qt.LeftButton,pos=point);self.app.processEvents()
+            self.assertEqual(d.preview_selection.text(),key)
+            self.assertEqual(d.heat_table.currentRow(),0)
         d.close()
     def test_invalid_heat_draft_survives_group_switch(self):
         d=self.dialog();d.heat_enabled.setChecked(True)

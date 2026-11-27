@@ -1,6 +1,6 @@
 """Interactive cross-section preview backed by the export surface catalogue."""
 from PySide6.QtCore import Signal,Qt
-from PySide6.QtGui import QPainterPath,QPen,QBrush,QColor,QPainter
+from PySide6.QtGui import QPainterPath,QPen,QBrush,QColor,QPainter,QPainterPathStroker
 from PySide6.QtWidgets import QGraphicsView,QGraphicsScene,QGraphicsPathItem,QGraphicsItem
 
 
@@ -9,7 +9,13 @@ class SurfaceItem(QGraphicsPathItem):
         super().__init__(path);self.key=key;self.view=view;self.base_pen=pen;self.setPen(pen)
         self.setAcceptedMouseButtons(Qt.LeftButton);self.setToolTip(key)
     def shape(self):
-        return self.path() if self.brush().style()!=Qt.NoBrush else super().shape()
+        if self.brush().style()!=Qt.NoBrush:return self.path()
+        # Cosmetic pens have screen-pixel width; the default item shape uses
+        # scene units and can miss the painted curve after fitInView.
+        scale=max(abs(self.view.transform().m11()),1e-12)
+        stroke=QPainterPathStroker();stroke.setWidth(8./scale)
+        stroke.setCapStyle(Qt.RoundCap);stroke.setJoinStyle(Qt.RoundJoin)
+        return stroke.createStroke(self.path())
     def mousePressEvent(self,event):
         event.accept();self.view.extend_selection=bool(event.modifiers()&Qt.ControlModifier);self.view.surfacePicked.emit(self.key)
 
