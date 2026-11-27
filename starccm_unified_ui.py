@@ -183,6 +183,8 @@ def install(dialog,layout,header):
     install_time_average(d)
     from starccm_tdc_ui import install as install_tdc
     install_tdc(d)
+    from starccm_summary_ui import install as install_summary
+    install_summary(d)
     header.setText('<b>Подготовка расчёта · STAR-CCM+ 2602</b><br>Сетка → физика → производные части → отчёты → среднее по времени → качество → TDC → итог.')
 
 
@@ -223,6 +225,7 @@ def refresh(d):
             'Проверьте свойства, условия и сообщения [!] перед инициализацией. Неподдержанные настройки показаны неактивными.')))
         if hasattr(d,'_compact_refresh'):d._compact_refresh()
         if hasattr(d,'_time_mean_refresh'):d._time_mean_refresh()
+        if hasattr(d,'_summary_refresh'):d._summary_refresh()
     finally:d._refreshing_unified=False
 
 
@@ -253,3 +256,4 @@ def apply_workflow(d,values):
     if hasattr(d,'_apply_parts_workflow'):d._apply_parts_workflow(values)
     if hasattr(d,'_time_mean_apply'):d._time_mean_apply(values)
     if hasattr(d,'_tdc_apply'):d._tdc_apply(values['tdc_settings'])
+    if hasattr(d,'_summary_refresh'):d._summary_refresh()
