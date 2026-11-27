@@ -632,7 +632,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('        }')
     if custom_surfaces and (workflow['boundary_pairs'] or workflow['boundary_conditions']):
         c.append('        if (!reuse) {')
-        c.append('        if (!physicalValuesConfigured) throw new IllegalStateException("Boundary setup requires configured physics");')
+        c.append('        if (!physicalValuesConfigured) throw new IllegalStateException("Boundary setup skipped because physical values failed; see [!] Physical values. After correction use a fresh simulation, not the partially configured import.");')
         c.append('        Map<String,Boundary> selectedSurfaces=new HashMap<>();')
         c.append('        for(GapCandidate candidate:gapCandidates) if(!candidate.paired) selectedSurfaces.put(candidate.bnd.getPresentationName(),candidate.bnd);')
         c.append('        for(Boundary wall:allRods) selectedSurfaces.put(wall.getPresentationName(),wall);')

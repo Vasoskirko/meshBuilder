@@ -5,6 +5,11 @@ PHYSICS_SUPPORT = r'''
         property.setMethod(ConstantMaterialPropertyMethod.class);
         ((ConstantMaterialPropertyMethod)property.getMethod()).getQuantity().setDefinition(definition);
     }
+    private void constantSpecificHeat(Material material, String definition) {
+        MaterialProperty property=material.getMaterialProperties().getMaterialProperty(SpecificHeatProperty.class);
+        property.setMethod(ConstantSpecificHeat.class);
+        ((ConstantSpecificHeat)property.getMethod()).getQuantity().setDefinition(definition);
+    }
     private boolean configurePhysicalValues(Simulation sim, PhysicsContinuum physics, List<Region> regions,
             boolean iapws, boolean thermal) {
         return configurePhysicalValues(sim,physics,regions,iapws,thermal,false,false);
@@ -24,7 +29,7 @@ PHYSICS_SUPPORT = r'''
                 constantProperty(material,ConstantDensityProperty.class,"${rho}");
                 constantProperty(material,DynamicViscosityProperty.class,"${dynvis}");
                 if (thermal) {
-                    constantProperty(material,SpecificHeatProperty.class,"${Cp}");
+                    constantSpecificHeat(material,"${Cp}");
                     constantProperty(material,ThermalConductivityProperty.class,"${lambda}");
                 }
             }
