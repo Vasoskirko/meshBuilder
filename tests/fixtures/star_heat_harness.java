@@ -9,6 +9,7 @@ public static class FieldFunctionTypeOption {
 }
 public static class UserFieldFunction extends NamedObject {
  String functionName,definition;Dimensions dimensions;FieldFunctionTypeOption type=new FieldFunctionTypeOption();
+ public void setSyncName(boolean b){if(!b)throw new AssertionError("sync disabled");}
  public void setFunctionName(String s){functionName=s;}
  public void setDefinition(String s){definition=s;}
  public void setDimensions(Dimensions d){dimensions=d;}

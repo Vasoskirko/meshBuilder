@@ -544,6 +544,11 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
         if workflow['boundary_conditions'] or workflow['boundary_pairs'] or workflow['disabled_internal_pairs'] or (workflow['heat_enabled'] and workflow['heat_values']):
             from starccm_surface_catalog import validate_surface_settings
             validate_surface_settings(self.mesh_result,self.bundle_model,values)
+        unsteady = workflow['run_mode']=='unsteady' or (workflow['run_mode']=='auto' and values['turbulence_model']=='hybrid_srh')
+        if unsteady:
+            from starccm_time_schedule import schedule
+            fluid = dict(self.fluid_props, **workflow['fluid'])
+            schedule(workflow,self._surface_catalog,fluid,self.yplus_data,self.lz_m,values['time_step'])
         # Validate everything before changing the GUI.
         self.rb_inter_fuse.setChecked(values['inter_fuse'])
         self.rb_inter_intf.setChecked(not values['inter_fuse'])

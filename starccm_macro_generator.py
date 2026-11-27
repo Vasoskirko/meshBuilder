@@ -133,6 +133,11 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
         raise ValueError('Шаг времени Δt должен быть положительным конечным числом')
     custom_surfaces=bool(workflow and catalog and catalog['domains'] and not workflow['tdc_enabled'])
     preserve_sectors=(inter_fuse and rod_mode=='sectors_60') or custom_surfaces
+    if workflow and is_unsteady:
+        from starccm_time_schedule import schedule
+        plan=schedule(workflow,catalog,dict(fluid_props,density=rho,dyn_vis=mu),yplus_data,lz_m,time_step)
+        workflow.update(warmup_duration=plan['warmup'],block_duration=plan['block']);options['workflow']=workflow
+        planned_simulation_end=plan['end']
     mean_start = options.get("mean_start_step", 1)
     if workflow and workflow['mean_start_auto'] and is_unsteady:mean_start=math.ceil(workflow['warmup_duration']/float(options.get('time_step',1e-4))-1e-12)+1
     if type(mean_start) is not int or not 1 <= mean_start <= 1000000000:
@@ -357,13 +362,10 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('        // 5. Замер площадей и центроидов для универсального сопряжения')
     c.append('        sim.println(">>> [4/7] Замер площадей и центроидов граней ($$Centroid)...");')
     c.append('        UserFieldFunction unityFF = getOrCreateFF(sim, "MB_One", "1.0");')
-    c.append('        UserFieldFunction coordXFF = getOrCreateFF(sim, "MB_X", "$$Centroid[0]");')
-    c.append('        UserFieldFunction coordYFF = getOrCreateFF(sim, "MB_Y", "$$Centroid[1]");')
-    c.append('        UserFieldFunction coordZFF = getOrCreateFF(sim, "MB_Z", "$$Centroid[2]");')
+    c.append('        FieldFunction coordXFF = sim.getFieldFunctionManager().getFunction("Position").getComponentFunction(0);')
+    c.append('        FieldFunction coordYFF = sim.getFieldFunctionManager().getFunction("Position").getComponentFunction(1);')
+    c.append('        FieldFunction coordZFF = sim.getFieldFunctionManager().getFunction("Position").getComponentFunction(2);')
     c.append('        unityFF.setDimensions(Dimensions.Builder().build());')
-    c.append('        coordXFF.setDimensions(Dimensions.Builder().length(1).build());')
-    c.append('        coordYFF.setDimensions(Dimensions.Builder().length(1).build());')
-    c.append('        coordZFF.setDimensions(Dimensions.Builder().length(1).build());')
     c.append('')
     c.append('        SurfaceIntegralReport areaRep = (SurfaceIntegralReport) sim.getReportManager().create("star.base.report.SurfaceIntegralReport");')
     c.append('        areaRep.setFieldFunction(unityFF);')
@@ -694,7 +696,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
         c.append('        } catch (Exception e) { warn(sim,"  [!] TimeStep binding: "+e.getMessage()); }')
 
     if workflow and is_unsteady:
-        planned_end=workflow['warmup_duration'] if workflow['tdc_enabled'] else workflow['warmup_duration']+workflow['block_duration']*workflow['blocks_per_run']
+        planned_end=workflow['warmup_duration'] if workflow['tdc_enabled'] else planned_simulation_end
         c.append('        if (!reuse) try { configureUnsteadyWorkflow(sim,'+str(workflow['inner_iterations'])+','+str(planned_end)+'); } catch (Exception e) { throw new IllegalStateException("Unsteady settings incomplete; verify STAR 2602 solver options before running: "+e.getMessage(),e); }')
     if create_field_functions:
         c.append('        supportFunctions(sim,' + f'{lz_m:.16e}' + ', Arrays.asList(' + ','.join(json.dumps(v) for v in field_choices) + '));')
@@ -719,6 +721,19 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
             c.append('            initialVelocity.getMethod(FunctionVectorProfileMethod.class).setFieldFunction(seed);')
             c.append('        }')
     c.append('        initializeFirstSolution(sim,reuse,' + str(initialize_solution).lower() + ',physicalValuesConfigured);')
+    c.append('        List<Boundary> reportInlets=new ArrayList<>(allInlets), reportOutlets=new ArrayList<>(allOutlets);')
+    axial_pairs={}
+    if custom_surfaces:
+        cap_names={row['id'] for row in catalog['endcaps']}
+        axial_pairs={pair[key]:i for i,pair in enumerate(workflow['boundary_pairs'],1) for key in ('first','second') if pair[key] in cap_names and pair['kind']!='internal'}
+        if axial_pairs:
+            c.append('        reportInlets.clear();reportOutlets.clear();')
+            for cap in catalog['endcaps']:
+                reg=0 if inter_fuse else cap['sources'][0]-1
+                var='reportInlets' if cap['role']=='Inlet' else 'reportOutlets'
+                if cap['id'] in axial_pairs:
+                    c.append(f'        {var}.add(periodicReportSide(subchannelRegions.get({reg}),"{cap["id"]}","SelectedInterface_{axial_pairs[cap["id"]]}"));')
+                else:c.append(f'        {var}.add(subchannelRegions.get({reg}).getBoundaryManager().getBoundary("{cap["id"]}"));')
     # 9. Создание Derived Parts (PlaneSection и LineSection) по точному рекордеру 21.02.007:
     c.append('        // 9. Создание сечений и зондов (Derived Parts) по рекордеру STAR-CCM+ 21.02.007:')
     c.append('        sim.println(">>> Создание производных деталей (Derived Parts)...");')
@@ -729,7 +744,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
         c.append('        try { countReport(sim,"Quality_TotalCellCount",subchannelRegions,reportCounts); }')
         c.append('        catch (Exception e) { warn(sim,"  [!] Total cell count: " + e.getMessage()); }')
     c.append('        try {')
-    c.append('            Units uLen = sim.getUnitsManager().getPreferredUnits(Dimensions.Builder().length(1).build());')
+    c.append('            Units uLen = sim.getUnitsManager().getObject("m");')
     c.append('            LabCoordinateSystem labCoord = sim.getCoordinateSystemManager().getLabCoordinateSystem();')
     c.append('            double lz = ' + f"{lz_m:.16e}" + ';')
     c.append('')
@@ -748,7 +763,8 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
         c.append(f'            createPlaneSection(sim, labCoord, uLen, subchannelRegions, "{label}", lz * {pos:.16e}); planesCreated++;')
     for number in range(1, subchannels_count + 1):
         positions = plane_positions(n_sub_planes, not workflow or workflow['plane_scheme']=='legacy') if sub_planes and number in selected_subchannels else []
-        if (create_reports or analysis_choices) and (not workflow or number in report_selected):
+        periodic_source=bool(axial_pairs and (inter_fuse or f'Inlet_s{number}' in axial_pairs))
+        if (create_reports or analysis_choices) and (not workflow or number in report_selected) and not periodic_source:
             positions = sorted(set(positions + [0., 1.]))
         for pos in positions:
             # A single source has the same domain as the global plane: reuse it.
@@ -756,9 +772,20 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
             name = plane_label("Section_Global" if reuse else f"Subchannel_{number}_Section", pos, lz_m)
             if not reuse:
                 c.append(f'            createPlaneSection(sim, labCoord, uLen, sourceParts.get({number-1}), "{name}", lz * {pos:.16e}); planesCreated++;')
-            if create_reports and (not workflow or number in report_selected) and pos in (0., 1.) and not (number in report_selected and any(k in analysis_choices for k in ('hydraulics','wall'))):
+            if create_reports and not periodic_source and (not workflow or number in report_selected) and pos in (0., 1.) and not (number in report_selected and any(k in analysis_choices for k in ('hydraulics','wall'))):
                 side = 'In' if pos == 0 else 'Out'
                 c.append(f'            createMassFlowReport(sim, "MassFlow_{side}_Sub{number}", Collections.singletonList((PlaneSection) sim.getPartManager().getObject("{name}")), reportCounts);')
+        report_in=report_out=None
+        if periodic_source and number in report_selected:
+            if inter_fuse:
+                c.append(f'            ThresholdPart reportIn{number}=threshold(sim,reportInlets,mask{number},"Subchannel_{number}_InletSide");')
+                c.append(f'            ThresholdPart reportOut{number}=threshold(sim,reportOutlets,mask{number},"Subchannel_{number}_OutletSide");')
+                report_in=f'reportIn{number}';report_out=f'reportOut{number}'
+            else:
+                report_in=f'reportInlets.get({number-1})';report_out=f'reportOutlets.get({number-1})'
+            if create_reports and not any(k in analysis_choices for k in ('hydraulics','wall')):
+                c.append(f'            createMassFlowReport(sim,"MassFlow_In_Sub{number}",Collections.singletonList({report_in}),reportCounts);')
+                c.append(f'            createMassFlowReport(sim,"MassFlow_Out_Sub{number}",Collections.singletonList({report_out}),reportCounts);')
         if analysis_choices and number in report_selected:
             in_name = plane_label("Section_Global" if subchannels_count == 1 and 0. in plane_positions(n_planes,key_planes) else f"Subchannel_{number}_Section", 0., lz_m)
             out_name = plane_label("Section_Global" if subchannels_count == 1 and 1. in plane_positions(n_planes,key_planes) else f"Subchannel_{number}_Section", 1., lz_m)
@@ -770,21 +797,30 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
             else:
                 walls = f'rodBoundaries(subchannelRegions.get({number-1}))'
             categories = ','.join(json.dumps(v) for v in analysis_choices)
-            c.append(f'            createSubchannelAnalysis(sim,{number},sourceParts.get({number-1}),{walls},(PlaneSection)sim.getPartManager().getObject("{in_name}"),(PlaneSection)sim.getPartManager().getObject("{out_name}"),lz,Arrays.asList({categories}),{str(enable_thermal or use_iapws).lower()},reportCounts);')
+            inlet_arg=report_in or f'(PlaneSection)sim.getPartManager().getObject("{in_name}")'
+            outlet_arg=report_out or f'(PlaneSection)sim.getPartManager().getObject("{out_name}")'
+            c.append(f'            createSubchannelAnalysis(sim,{number},sourceParts.get({number-1}),{walls},{inlet_arg},{outlet_arg},lz,Arrays.asList({categories}),{str(enable_thermal or use_iapws).lower()},reportCounts);')
     if gap_sections:
         for gap in shared_gap_sections(domains):
             a, b = gap['a'], gap['b']
             x, y = gap['origin']; nx, ny = gap['normal']
-            c.append(f'            createOrientedPlaneSection(sim, labCoord, uLen, sourceParts.get({a-1}), "Gap_Sub{a}_Sub{b}", new double[] {{{x:.16e}, {y:.16e}, lz / 2}}, new double[] {{{nx:.16e}, {ny:.16e}, 0}}); planesCreated++;')
+            c.append(f'            CartesianCoordinateSystem gapFrame{a}_{b}=gapCoordinateSystem(sim,labCoord,uLen,"Normal_Gap_Sub{a}_to_Sub{b}",new double[] {{{x:.16e},{y:.16e},lz/2}},{nx:.16e},{ny:.16e});')
+            c.append(f'            createOrientedPlaneSection(sim,gapFrame{a}_{b},uLen,sourceParts.get({a-1}),"Gap_Sub{a}_Sub{b}",new double[] {{0,0,0}},new double[] {{0,1,0}});planesCreated++;')
             if create_reports:
                 c.append(f'            createMassFlowReport(sim, "MassFlow_Gap_Sub{a}_Sub{b}", Collections.singletonList((PlaneSection) sim.getPartManager().getObject("Gap_Sub{a}_Sub{b}")), reportCounts);')
             if workflow and (create_reports or analysis_choices):
                 prefix=f'Gap_Sub{a}_Sub{b}'
                 parts=f'Collections.singletonList((PlaneSection)sim.getPartManager().getObject("{prefix}"))'
-                definition=f'$$Velocity[0]*({nx:.16e})+$$Velocity[1]*({ny:.16e})'
-                c.append(f'            UserFieldFunction gapVelocity{a}_{b}=getOrCreateFF(sim,"{prefix}_NormalVelocity",'+json.dumps(definition)+');')
+                velocity_start=json.dumps('$${Velocity}(@CoordinateSystem("')
+                velocity_end=json.dumps('"))[1]')
+                c.append(f'            String gapVelocityDef{a}_{b}={velocity_start}+labCoord.getPresentationName()+"."+gapFrame{a}_{b}.getPresentationName()+{velocity_end};')
+                c.append(f'            UserFieldFunction gapVelocity{a}_{b}=getOrCreateFF(sim,"{prefix}_NormalVelocity",gapVelocityDef{a}_{b});')
                 c.append(f'            gapVelocity{a}_{b}.setDimensions(Dimensions.Builder().length(1).time(-1).build());')
                 c.append(f'            scalarReport(sim,"area","{prefix}_NormalVelocityMean",{parts},gapVelocity{a}_{b},reportCounts);')
+                c.append(f'            UserFieldFunction gapMassFlux{a}_{b}=getOrCreateFF(sim,"{prefix}_MassFlux","${{Density}}*${{{prefix}_NormalVelocity}}");gapMassFlux{a}_{b}.setDimensions(Dimensions.Builder().mass(1).length(-2).time(-1).build());')
+                c.append(f'            scalarReport(sim,"area","{prefix}_MassFluxMean",{parts},gapMassFlux{a}_{b},reportCounts);')
+                c.append(f'            UserFieldFunction gapAbsMassFlux{a}_{b}=getOrCreateFF(sim,"{prefix}_AbsMassFlux","abs(${{{prefix}_MassFlux}})");gapAbsMassFlux{a}_{b}.setDimensions(Dimensions.Builder().mass(1).length(-2).time(-1).build());')
+                c.append(f'            scalarReport(sim,"area","{prefix}_AbsMassFluxMean",{parts},gapAbsMassFlux{a}_{b},reportCounts);')
                 c.append(f'            scalarReport(sim,"surface","{prefix}_Area",{parts},getOrCreateFF(sim,"MB_One","1.0"),reportCounts);')
                 if enable_thermal or use_iapws:
                     c.append(f'            scalarReport(sim,"area","{prefix}_TemperatureMean",{parts},analysisField(sim,"Temperature"),reportCounts);')
@@ -801,16 +837,17 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     if create_reports:
         if turbulence_model == "hybrid_srh":
             c.append('        warn(sim,"  [!] HYBRID: flux balances exclude dM/dt and dE/dt; they are not full transient conservation residuals.");')
-        c.append('        createMassFlowReport(sim, "MassFlow_Inlet_Total", allInlets, reportCounts);')
-        c.append('        createMassFlowReport(sim, "MassFlow_Outlet_Total", allOutlets, reportCounts);')
+        c.append('        createMassFlowReport(sim, "MassFlow_Inlet_Total", reportInlets, reportCounts);')
+        c.append('        createMassFlowReport(sim, "MassFlow_Outlet_Total", reportOutlets, reportCounts);')
         c.append('        createExpressionReport(sim, "Imbalance_MassFlow", "abs(${MassFlow_Inlet_TotalReport} + ${MassFlow_Outlet_TotalReport}) / max(abs(${MassFlow_Inlet_TotalReport}), 1e-30) * 100", reportCounts);')
         if enable_thermal or use_iapws:
-            c.append('        List<Boundary> thermalWalls = new ArrayList<>(allRods);')
-            c.append('        for (GapCandidate gap : gapCandidates) if (!gap.paired) thermalWalls.add(gap.bnd);')
-            c.append('        createHeatReport(sim, "Heat_Flux_Rods_Total", allRods, reportCounts);')
+            c.append('        List<Boundary> thermalWalls = new ArrayList<>(),thermalRods=new ArrayList<>();')
+            c.append('        for(Region region:subchannelRegions)for(Boundary wall:region.getBoundaryManager().getBoundaries())if(wall.getBoundaryType() instanceof WallBoundary)thermalWalls.add(wall);')
+            c.append('        for(Boundary rod:allRods)if(rod.getBoundaryType() instanceof WallBoundary)thermalRods.add(rod);')
+            c.append('        createHeatReport(sim, "Heat_Flux_Rods_Total", thermalRods, reportCounts);')
             c.append('        createHeatReport(sim, "Heat_Flux_Walls_Total", thermalWalls, reportCounts);')
-            c.append('        createEnthalpyReport(sim, "TotalEnthalpy_Inlet", allInlets, reportCounts);')
-            c.append('        createEnthalpyReport(sim, "TotalEnthalpy_Outlet", allOutlets, reportCounts);')
+            c.append('        createEnthalpyReport(sim, "TotalEnthalpy_Inlet", reportInlets, reportCounts);')
+            c.append('        createEnthalpyReport(sim, "TotalEnthalpy_Outlet", reportOutlets, reportCounts);')
             c.append('        createExpressionReport(sim, "Energy_Flow_Inlet_Total", "${MassFlow_Inlet_TotalReport} * ${TotalEnthalpy_InletReport}", reportCounts);')
             c.append('        createExpressionReport(sim, "Energy_Flow_Outlet_Total", "${MassFlow_Outlet_TotalReport} * ${TotalEnthalpy_OutletReport}", reportCounts);')
             c.append('        createExpressionReport(sim, "Imbalance_Energy", "abs(${Energy_Flow_Inlet_TotalReport} + ${Energy_Flow_Outlet_TotalReport} - ${Heat_Flux_Walls_TotalReport}) / max(max(abs(${Energy_Flow_Inlet_TotalReport}), abs(${Energy_Flow_Outlet_TotalReport})), max(abs(${Heat_Flux_Walls_TotalReport}), 1e-30)) * 100", reportCounts);')
@@ -910,7 +947,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
         createOrientedPlaneSection(sim, labCoord, uLen, parts, name,
                 new double[] {0, 0, zVal}, new double[] {0, 0, 1});
     }
-    private void createOrientedPlaneSection(Simulation sim, LabCoordinateSystem labCoord, Units uLen, List<? extends NamedObject> parts, String name, double[] origin, double[] normal) {
+    private void createOrientedPlaneSection(Simulation sim, CoordinateSystem labCoord, Units uLen, List<? extends NamedObject> parts, String name, double[] origin, double[] normal) {
         try {
             PlaneSection ps = findOwned(sim,sim.getPartManager(),name,PlaneSection.class);
             if (ps == null) { ps = (PlaneSection) sim.getPartManager().createImplicitPart(
@@ -955,7 +992,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     }
     private void registerReport(Simulation sim, Report report, int[] counts) {
         counts[0]++;
-        if (meshOnlyReport(report.getPresentationName())) return;
+        if (!reportNeedsMonitor(report.getPresentationName())) return;
         try {
             boolean found=false;
             for (ReportMonitor monitor : sim.getMonitorManager().getObjectsOf(ReportMonitor.class))
@@ -968,7 +1005,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     private void createMassFlowReport(Simulation sim, String name, List<? extends NamedObject> parts, int[] counts) {
         try {
             MassFlowReport report = ownedReport(sim,name,MassFlowReport.class);
-            report.setPresentationName(name); report.getParts().setObjects(parts);
+            report.setPresentationName(name); report.getParts().setQuery(null); report.getParts().setObjects(parts);
             registerReport(sim, report, counts);
         } catch (Exception e) { sim.println("  [!] Отчет " + name + ": " + e.getMessage()); }
     }
@@ -993,7 +1030,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
             FieldFunction enthalpy = sim.getFieldFunctionManager().getFunction("TotalEnthalpy");
             if (enthalpy == null) throw new IllegalStateException("Недоступно поле TotalEnthalpy");
             MassFlowAverageReport report = ownedReport(sim,name,MassFlowAverageReport.class);
-            report.setPresentationName(name); report.setFieldFunction(enthalpy); report.getParts().setObjects(parts);
+            report.setPresentationName(name); report.setFieldFunction(enthalpy); report.getParts().setQuery(null); report.getParts().setObjects(parts);
             registerReport(sim, report, counts);
         } catch (Exception e) { sim.println("  [!] Отчет " + name + ": " + e.getMessage()); }
     }
@@ -1064,7 +1101,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     }
 """.strip('\n').splitlines())
     c.append('    private double measureArea(SurfaceIntegralReport areaRep, UserFieldFunction unityFF, Boundary b) { try { areaRep.getParts().setObjects(b); areaRep.setFieldFunction(unityFF); return areaRep.getReportMonitorValue() * 1e6; } catch (Exception e) { return 0.0; } }')
-    c.append('    private double[] getCentroid3D(SurfaceIntegralReport rep, UserFieldFunction unityFF, UserFieldFunction ffX, UserFieldFunction ffY, UserFieldFunction ffZ, Boundary b) {')
+    c.append('    private double[] getCentroid3D(SurfaceIntegralReport rep, UserFieldFunction unityFF, FieldFunction ffX, FieldFunction ffY, FieldFunction ffZ, Boundary b) {')
     c.append('        try {')
     c.append('            rep.getParts().setObjects(b); rep.setFieldFunction(unityFF);')
     c.append('            double area = rep.getReportMonitorValue();')
@@ -1081,8 +1118,8 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
         if (ff==null) {
             ff=sim.getFieldFunctionManager().createFieldFunction(); ff.setPresentationName(name); own(sim,ff);
         }
-        ff.setPresentationName(displayName(name));
-        ff.setFunctionName(name); ff.setDefinition(definition); return ff;
+        ff.setSyncName(true); ff.setPresentationName(displayName(name));
+        ff.setFunctionName(displayName(name)); ff.setDefinition(definition); return ff;
     }
 """.strip('\n').splitlines())
     c.append('    private void createParam(Simulation sim, GlobalParameterManager gpm, ClientServerObjectGroup grp, String name, double val, String unitStr, Dimensions dims, String defStr) {')
@@ -1097,6 +1134,8 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     c.append('            }')
     c.append('        } catch (Exception e) { warn(sim,"  [!] Parameter " + name + ": " + e.getMessage()); }')
     c.append('    }')
+    from starccm_report_support import REPORT_SUPPORT
+    c.extend(REPORT_SUPPORT.strip('\n').splitlines())
     from starccm_unified_support import UNIFIED_SUPPORT, HEAT_SUPPORT, flat_groups
     c.extend((flat_groups(GROUP_SUPPORT) if workflow else GROUP_SUPPORT).strip('\n').splitlines())
     if workflow:c.extend(UNIFIED_SUPPORT.strip('\n').splitlines())

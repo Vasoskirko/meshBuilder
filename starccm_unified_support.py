@@ -40,6 +40,7 @@ HEAT_SUPPORT = r'''
             field=sim.getFieldFunctionManager().createFieldFunction();
             field.setPresentationName(name);own(sim,field);field.setFunctionName(name);
         }
+        field.setSyncName(true);
         field.getTypeOption().setSelected(FieldFunctionTypeOption.Type.SCALAR);
         // W/m^2 = kg/s^3; set physical dimensions, never look up a unit by text.
         field.setDimensions(Dimensions.Builder().mass(1).time(-3).build());

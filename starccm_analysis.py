@@ -28,16 +28,16 @@ ANALYSIS_SUPPORT = r'''
             if (parts.isEmpty()) throw new IllegalStateException("No input parts");
             if (kind.equals("area")) {
                 AreaAverageReport r=ownedReport(sim,name,AreaAverageReport.class);
-                r.setFieldFunction(field); r.getParts().setObjects(parts); registerReport(sim,r,counts);
+                r.setFieldFunction(field); r.getParts().setQuery(null); r.getParts().setObjects(parts); registerReport(sim,r,counts);
             } else if (kind.equals("massflow")) {
                 MassFlowAverageReport r=ownedReport(sim,name,MassFlowAverageReport.class);
-                r.setFieldFunction(field); r.getParts().setObjects(parts); registerReport(sim,r,counts);
+                r.setFieldFunction(field); r.getParts().setQuery(null); r.getParts().setObjects(parts); registerReport(sim,r,counts);
             } else if (kind.equals("surface")) {
                 SurfaceIntegralReport r=ownedReport(sim,name,SurfaceIntegralReport.class);
-                r.setFieldFunction(field); r.getParts().setObjects(parts); registerReport(sim,r,counts);
+                r.setFieldFunction(field); r.getParts().setQuery(null); r.getParts().setObjects(parts); registerReport(sim,r,counts);
             } else if (kind.equals("volume")) {
                 VolumeIntegralReport r=ownedReport(sim,name,VolumeIntegralReport.class);
-                r.setFieldFunction(field); r.getParts().setObjects(parts); registerReport(sim,r,counts);
+                r.setFieldFunction(field); r.getParts().setQuery(null); r.getParts().setObjects(parts); registerReport(sim,r,counts);
             } else throw new IllegalArgumentException("Unknown report kind " + kind);
         } catch (Exception e) { warn(sim,"  [!] Report " + name + ": " + e.getMessage()); }
     }
@@ -52,7 +52,7 @@ ANALYSIS_SUPPORT = r'''
     }
     private String reportRef(String name) { return "${" + name + "Report}"; }
     private void createSubchannelAnalysis(Simulation sim, int number, List<? extends NamedObject> domain,
-            List<? extends NamedObject> walls, PlaneSection inlet, PlaneSection outlet, double length,
+            List<? extends NamedObject> walls, NamedObject inlet, NamedObject outlet, double length,
             List<String> choices, boolean thermal, int[] counts) {
         String prefix="Sub"+number+"_";
         List<NamedObject> in=Collections.singletonList(inlet), out=Collections.singletonList(outlet);
@@ -76,7 +76,7 @@ ANALYSIS_SUPPORT = r'''
             scalarReport(sim,"area",prefix+"Viscosity_In",in,analysisField(sim,"DynamicViscosity"),counts);
             scalarReport(sim,"area",prefix+"Density_Out",out,analysisField(sim,"Density"),counts);
             scalarReport(sim,"area",prefix+"Viscosity_Out",out,analysisField(sim,"DynamicViscosity"),counts);
-            UserFieldFunction axial=getOrCreateFF(sim,"MB_AxialVelocity","$$Velocity[2]");
+            UserFieldFunction axial=getOrCreateFF(sim,"Velocity_k","$${Velocity}[2]");
             axial.setDimensions(Dimensions.Builder().length(1).time(-1).build());
             scalarReport(sim,"area",prefix+"BulkAxialVelocity_In",in,axial,counts);
             scalarReport(sim,"area",prefix+"BulkAxialVelocity_Out",out,axial,counts);

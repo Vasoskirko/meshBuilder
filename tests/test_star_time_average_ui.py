@@ -38,7 +38,7 @@ class TimeAverageTests(unittest.TestCase):
             self.assertNotIn(f'createTimeMean(sim,allRods,"{field}"',code)
         self.assertTrue(d.mean_checkboxes['density'].isChecked());d.close()
     def test_start_after_runup_and_collection_window(self):
-        d=self.dialog();d.simulation_mode.setCurrentIndex(1);d.warmup_duration.setValue(.2);d.field_time_step.setValue(.01);d.block_duration.setValue(.3);d.blocks_per_run.setValue(2)
+        d=self.dialog();d.simulation_mode.setCurrentIndex(1);d.time_input_mode.setCurrentIndex(d.time_input_mode.findData('seconds'));d.warmup_duration.setValue(.2);d.field_time_step.setValue(.01);d.block_duration.setValue(.3);d.blocks_per_run.setValue(2)
         d.mean_checkboxes['pressure'].setChecked(True);values=d.read_options();self.assertEqual(values['mean_start_step'],21)
         self.assertTrue(values['workflow']['mean_start_auto']);self.assertIn('createTimeMean(sim,subchannelRegions,"Pressure",21)',self.macro(d))
         self.assertIn('configureUnsteadyWorkflow(sim,5,0.8)',self.macro(d))

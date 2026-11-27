@@ -2,7 +2,7 @@
 from copy import deepcopy
 import math
 
-WORKFLOW_DEFAULTS = dict(mean_start_auto=False,plane_scheme='legacy',report_subchannels=[-1],reference_density=0.,minimum_wall_distance=1e-7,boundary_conditions=[],run_mode='auto',heat_enabled=False,heat_values={},boundary_pairs=[],disabled_internal_pairs=[],quality_thresholds=dict(CellQuality=.01,FaceValidity=.95,VolumeChange=.01,SkewnessAngle=85.),fluid={},version=1, quality_enabled=False, tdc_enabled=False,tdc_equivalence=False,
+WORKFLOW_DEFAULTS = dict(time_input_mode='seconds',runup_passes=10,block_passes=5,end_time=0.,mean_start_auto=False,plane_scheme='legacy',report_subchannels=[-1],reference_density=0.,minimum_wall_distance=1e-7,boundary_conditions=[],run_mode='auto',heat_enabled=False,heat_values={},boundary_pairs=[],disabled_internal_pairs=[],quality_thresholds=dict(CellQuality=.01,FaceValidity=.95,VolumeChange=.01,SkewnessAngle=85.),fluid={},version=1, quality_enabled=False, tdc_enabled=False,tdc_equivalence=False,
     viscosity_method='constant', conductivity_method='constant', initial_velocity='theory',
     initial_temperature=573.15, initial_pressure=0., initial_ux=0., initial_uy=0.,
     inner_iterations=5, warmup_duration=.45, block_duration=.45, blocks_per_run=1,
@@ -31,6 +31,10 @@ def validate_workflow(data):
     if result['version']!=1:raise ValueError('Неизвестная версия настроек окна')
     for key in ('viscosity_method','conductivity_method'):
         if result[key] not in ('constant','iapws'):raise ValueError(f'{key}: неизвестный метод')
+    if result['time_input_mode'] not in ('passes','seconds'):raise ValueError('Неизвестный способ задания времени')
+    if result['end_time']<0:raise ValueError('Некорректное время окончания')
+    for key in ('runup_passes','block_passes'):
+        if not 1<=result[key]<=1000000000:raise ValueError('Число пролётов должно быть положительным целым')
     if result['plane_scheme'] not in ('legacy','none','ends','three','uniform'):raise ValueError('Неизвестная схема плоскостей')
     if result['run_mode'] not in ('auto','steady','unsteady'):raise ValueError('Неизвестный режим расчёта')
     for key,value in result['heat_values'].items():

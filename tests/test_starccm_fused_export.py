@@ -137,6 +137,8 @@ class FusedExportTests(unittest.TestCase):
         reports=macro[end:macro.index('    private void createHeatReport',end)]
         from starccm_physics_support import PHYSICS_SUPPORT
         reports += PHYSICS_SUPPORT[PHYSICS_SUPPORT.index('    private boolean meshOnlyReport'):]
+        from starccm_report_support import REPORT_SUPPORT
+        reports += REPORT_SUPPORT[REPORT_SUPPORT.index('    private boolean reportNeedsMonitor'):REPORT_SUPPORT.index('    private CartesianCoordinateSystem')]
         signatures,domains=export_geometry(self.result,self.model)
         rows=',\n'.join('{'+','.join(format(float(v),'.16e') for v in row)+'}' for row in signatures)
         # Execute the exact emitted classifier, including the fourth fused gap.
@@ -156,7 +158,7 @@ static class ReportMonitor { Report getReport() { return null; } }
 static class MonitorManager { <T> List<T> getObjectsOf(Class<T> type) { return List.of(); } }
 
 static class NamedObject {}
-static class Parts { void setObjects(List<? extends NamedObject> parts) {} }
+static class Parts { void setQuery(Object q) {} void setObjects(List<? extends NamedObject> parts) {} }
 static class Report extends NamedObject {
     String name;
     void setPresentationName(String s) { name=s; }
@@ -188,7 +190,7 @@ public static void main(String[] args) throws Exception {
     check.createExpressionReport(sim,"Imbalance_MassFlow","0",counts);
     check.createMassFlowReport(sim,"Quality_Min_Test",List.of(),counts);
     check.createExpressionReport(sim,"Sub1_Area_In","1",counts);
-    if (counts[0]!=5 || counts[1]!=0 || sim.errors.size()!=3) throw new AssertionError("monitor failure suppressed reports");
+    if (counts[0]!=5 || counts[1]!=0 || sim.errors.size()!=1) throw new AssertionError("monitor failure suppressed reports");
     JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
     DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
     try (StandardJavaFileManager fm = compiler.getStandardFileManager(diagnostics,null,null)) {
@@ -230,7 +232,7 @@ public static void main(String[] args) throws Exception {
         self.assertAlmostEqual(np.dot(common[1]-common[0],gap['normal']),0,places=12)
         self.assertGreater(np.dot(domains[1]['center']-domains[0]['center'],gap['normal']),0)
         macro=self.macro()
-        self.assertIn('createOrientedPlaneSection(sim, labCoord, uLen, sourceParts.get(0), "Gap_Sub1_Sub2"',macro)
+        self.assertIn('createOrientedPlaneSection(sim,gapFrame1_2,uLen,sourceParts.get(0),"Gap_Sub1_Sub2"',macro)
         self.assertNotIn('"Gap_Sub1_Sub2"',self.macro(gap_sections=False))
     def test_histograms_and_scenes_are_configured_with_real_fields_and_parts(self):
         macro=self.macro(quality_bins=37)

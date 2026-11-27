@@ -129,8 +129,7 @@ JAVA_SUPPORT = r'''
         if (selected.contains("z_fraction")) try {
             // A dimensioned global parameter is valid STAR syntax; inline [m] literals are not.
             exportHeight(sim,height);
-            getOrCreateFF(sim,"MB_Z","$$Centroid[2]").setDimensions(Dimensions.Builder().length(1).build());
-            UserFieldFunction ff=getOrCreateFF(sim,"MB_ZFraction","${MB_Z} / ${ExportHeight}");
+            UserFieldFunction ff=getOrCreateFF(sim,"MB_ZFraction","$${Position}[2] / ${ExportHeight}");
             ff.setDimensions(Dimensions.Builder().build());
         } catch (Exception e) { warn(sim,"  [!] Relative height: " + e.getMessage()); }
         if (selected.contains("speed")) try {

@@ -1,8 +1,9 @@
 """Compact transient averaging controls, with physical-time based default start."""
 import math
-from PySide6.QtWidgets import QWidget,QVBoxLayout,QFormLayout,QCheckBox,QLabel,QGridLayout
+from PySide6.QtWidgets import QWidget,QVBoxLayout,QFormLayout,QCheckBox,QLabel,QGridLayout,QSpinBox,QComboBox,QHBoxLayout
 from starccm_compact_ui import box,label_help
-from starccm_flow_defaults import calculator_mass_flow
+from starccm_time_schedule import schedule
+from number_field import NumberField
 
 
 def install(d):
@@ -19,9 +20,20 @@ def install(d):
     form.addRow(label_help('Δt, с','Постоянный шаг времени; параметр ${timeStep}. Выбирайте по разрешению характерных временных масштабов и контролю CFL, затем проверьте независимость результата от Δt.'),d.field_time_step)
     d.inner_iterations.setMaximumWidth(145);d.blocks_per_run.setMaximumWidth(145)
     form.addRow('Число внутренних итераций',d.inner_iterations)
-    form.addRow(label_help('Отрезок разгона, с','Пролёт: t_f=L/U_b. Для предварительного планирования можно взять 10–20 пролётов совместного гидродинамического/теплового разгона; это не критерий стационарности. Продолжайте до отсутствия дрейфа расхода, перепада давления, температур и балансов. При медленной тепловой релаксации понадобится больше времени.'),d.warmup_duration)
-    form.addRow(label_help('Длительность блока усреднения, с','Начальная оценка: 5–10 пролётов на блок. Блок должен быть существенно длиннее времени корреляции измеряемой величины. Сравнивайте последовательные блочные средние и проверяйте увеличение окна; число пролётов само по себе не доказывает сходимость. Сейчас средние поля накапливаются одним общим окном, без автоматического сброса между блоками.'),d.block_duration)
-    form.addRow(label_help('Число блоков','Задаёт планируемую длительность сбора: T_avg=N_blocks·T_block. В общем экспорте остановка задаётся на T_runup+T_avg. Независимые блочные скалярные статистики создаёт контроллер TDC; их общий состав обсудим отдельно.'),d.blocks_per_run)
+    d.time_input_mode=QComboBox();d.time_input_mode.addItem('Числом пролётов','passes');d.time_input_mode.addItem('Секундами · совместимость профиля','seconds');form.addRow('Задание времени',d.time_input_mode)
+    d.runup_passes=QSpinBox();d.block_passes=QSpinBox()
+    for spin,value in ((d.runup_passes,10),(d.block_passes,5)):spin.setRange(1,1000000000);spin.setValue(value);spin.setMaximumWidth(145)
+    d.runup_seconds_hint=QLabel();d.block_seconds_hint=QLabel()
+    d.runup_time_row=QWidget();runup=QHBoxLayout(d.runup_time_row);runup.setContentsMargins(0,0,0,0);runup.addWidget(d.runup_passes);runup.addWidget(d.warmup_duration);runup.addWidget(d.runup_seconds_hint);runup.addStretch()
+    d.block_time_row=QWidget();block=QHBoxLayout(d.block_time_row);block.setContentsMargins(0,0,0,0);block.addWidget(d.block_passes);block.addWidget(d.block_duration);block.addWidget(d.block_seconds_hint);block.addStretch()
+    form.addRow(label_help('Разгон · пролёты','t_f=L/U_b, T_runup=N_runup·t_f. Для начального планирования можно взять 10–20 пролётов. Продолжайте до отсутствия дрейфа расхода, перепада давления, температур и балансов; число пролётов не доказывает стационарность.'),d.runup_time_row)
+    form.addRow(label_help('Блок · пролёты','T_block=N_block·t_f. Предварительный ориентир — 5–10 пролётов. Блок должен быть длиннее времени корреляции; длительность нужно проверять увеличением окна и сравнением статистики.'),d.block_time_row)
+    form.addRow(label_help('Планируемых блоков','Сейчас N блоков задают одно накопленное окно длиной N·T_block. Например, 5 блоков не создают 5 отдельных средних полей, сбросов или результатов. Независимый блочный контроллер — отдельный этап TDC.'),d.blocks_per_run)
+    d.end_time_auto=QCheckBox('По разгону и сбору');d.end_time_auto.setChecked(True)
+    d.end_time=NumberField(1.,minimum=1e-15);d.end_time.setMaximumWidth(145)
+    end_row=QWidget();el=QHBoxLayout(end_row);el.setContentsMargins(0,0,0,0);el.addWidget(d.end_time);el.addWidget(d.end_time_auto);el.addStretch()
+    form.addRow(label_help('Окончание, с','T_min=T_runup+N_blocks·T_block, округлённое вверх до шага Δt. Время окончания нельзя задать ниже T_min. Поля продолжают накапливаться до остановки, включая дополнительное время при ручном увеличении.'),end_row)
+    d.time_minimum_hint=QLabel();sl.addWidget(d.time_minimum_hint)
     d.flight_time_hint=QLabel();sl.addWidget(d.flight_time_hint)
     d.mean_group.setTitle('Функции для усреднения по времени');layout.addWidget(d.mean_group)
     # Reparent fields to remove the old start-step row and all legacy explanations.
@@ -39,6 +51,8 @@ def install(d):
     d.manual_mean_start_row=QWidget();manual=QFormLayout(d.manual_mean_start_row);manual.setContentsMargins(0,0,0,0);manual.addRow('Абсолютный номер шага',d.spin_mean_start);d.spin_mean_start.setMaximumWidth(145);al.addWidget(d.manual_mean_start_row)
     d.spin_mean_start.setToolTip('Ручной абсолютный номер отсчёта Physical Time Monitor. Требуется только для продолжения расчёта или специального окна.')
     d._workflow['mean_start_auto']=True
+    initial_mode='passes' if d._surface_catalog.get('endcaps') else 'seconds'
+    d._workflow['time_input_mode']=initial_mode;d.time_input_mode.setCurrentIndex(d.time_input_mode.findData(initial_mode))
     layout.addStretch()
     def refresh():
         unsteady=d.simulation_mode.currentData()=='unsteady';iapws=d.rb_eos_iapws.isChecked();thermal=d.chk_thermal.isChecked()
@@ -49,22 +63,46 @@ def install(d):
             if key in ('density','viscosity'):cb.setEnabled(iapws);cb.setVisible(iapws)
             if key in ('enthalpy','temperature','wall_heat_flux'):cb.setEnabled(thermal)
         d.manual_mean_start_row.setVisible(not d.mean_start_auto.isChecked())
+        passes=d.time_input_mode.currentData()=='passes'
+        for w in (d.runup_passes,d.block_passes):w.setVisible(passes)
+        for w in (d.warmup_duration,d.block_duration):w.setVisible(not passes)
         try:
-            cap=next(r for r in d._surface_catalog.get('endcaps',[]) if r['role']=='Inlet')
-            props=d.read_fluid();flow=calculator_mass_flow(d._surface_catalog,props,d.yplus_data,cap['id']);velocity=flow/(props['density']*cap['area'])
-            flight=d.lz_m/velocity
-            d.flight_time_hint.setText(f'Один пролёт L/U_b = {flight:.4g} с')
-        except (ValueError,KeyError,StopIteration):d.flight_time_hint.setText('Пролёт L/U_b: проверьте Re, свойства и геометрию')
+            values=current_values(parse_end=False)
+            plan=schedule(values,d._surface_catalog,d.read_fluid(),d.yplus_data,d.lz_m,d.field_time_step.value())
+            d.flight_time_hint.setText('Один пролёт L/U_b = '+(f'{plan["flight"]:.6g} с' if plan['flight'] else 'нет геометрии'))
+            d.runup_seconds_hint.setText(f'≈ {plan["warmup"]:.6g} с' if passes else '')
+            d.block_seconds_hint.setText(f'≈ {plan["block"]:.6g} с' if passes else '')
+            d.time_minimum_hint.setText(f'Минимальное окончание: {plan["minimum"]:.6g} с')
+            d.end_time.setLimits(plan['minimum'],1e12)
+            if d.end_time_auto.isChecked():d.end_time.setValue(plan['minimum'])
+        except (ValueError,KeyError,StopIteration):d.time_minimum_hint.setText('Проверьте время, Re, свойства и геометрию')
+        tdc=d.tdc_enabled.isChecked()
+        d.end_time_auto.setEnabled(not tdc)
+        d.end_time.setEnabled(not d.end_time_auto.isChecked() and not tdc)
+        d.end_time.setToolTip('Для TDC окончанием управляет отдельный контроллер этапов.' if tdc else 'Окончание не меньше разгона и планируемого сбора.')
+    def current_values(parse_end=True):
+        return dict(d._workflow,time_input_mode=d.time_input_mode.currentData(),runup_passes=d.runup_passes.value(),block_passes=d.block_passes.value(),warmup_duration=d.warmup_duration.value(),block_duration=d.block_duration.value(),blocks_per_run=d.blocks_per_run.value(),end_time=0. if d.end_time_auto.isChecked() or not parse_end else d.end_time.value())
     def read():
         automatic=d.mean_start_auto.isChecked()
-        if automatic and d.simulation_mode.currentData()=='unsteady':
-            step=math.ceil(d.warmup_duration.value()/d.field_time_step.value()-1e-12)+1
-            if not 1<=step<=1000000000:raise ValueError('Начало усреднения вне допустимого диапазона шагов')
-            d.spin_mean_start.setValue(step)
-        return dict(mean_start_auto=automatic)
+        active=d.simulation_mode.currentData()=='unsteady'
+        result=dict(mean_start_auto=automatic,time_input_mode=d.time_input_mode.currentData(),runup_passes=d.runup_passes.value(),block_passes=d.block_passes.value(),end_time=0. if d.end_time_auto.isChecked() else d.end_time.model.raw)
+        if active:
+            values=current_values();plan=schedule(values,d._surface_catalog,d.read_fluid(),d.yplus_data,d.lz_m,d.field_time_step.value())
+            result.update(warmup_duration=plan['warmup'],block_duration=plan['block'],end_time=values['end_time'])
+            if automatic:
+                step=math.ceil(plan['warmup']/d.field_time_step.value()-1e-12)+1
+                if not 1<=step<=1000000000:raise ValueError('Начало усреднения вне допустимого диапазона шагов')
+                d.spin_mean_start.setValue(step)
+        return result
     def apply(values):
+        d.end_time.setLimits(1e-15,1e12)
+        d.time_input_mode.setCurrentIndex(d.time_input_mode.findData(values.get('time_input_mode','seconds')))
+        d.runup_passes.setValue(values.get('runup_passes',10));d.block_passes.setValue(values.get('block_passes',5));d.end_time_auto.setChecked(values.get('end_time',0.)==0)
+        if values.get('end_time',0.):d.end_time.setValue(values['end_time'])
         d.mean_start_auto.setChecked(values.get('mean_start_auto',False));refresh()
     d.mean_start_auto.toggled.connect(refresh)
+    d.time_input_mode.currentIndexChanged.connect(refresh);d.end_time_auto.toggled.connect(refresh)
+    for spin in (d.runup_passes,d.block_passes,d.blocks_per_run):spin.valueChanged.connect(refresh)
     for field in (d.field_time_step,d.warmup_duration):field.editingFinished.connect(refresh)
     for field in d.fluid_fields.values():field.editingFinished.connect(refresh)
     d._time_mean_refresh=refresh;d._time_mean_read=read;d._time_mean_apply=apply
