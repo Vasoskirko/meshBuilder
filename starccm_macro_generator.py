@@ -709,7 +709,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
         c.append('        getOrCreateFF(sim,"seedY","sin(2*${thetaZ}+0.4)+0.5*sin(5*${thetaZ}+1.3)+0.25*sin(9*${thetaZ}+2.2)");')
         c.append('        UserFieldFunction seed=getOrCreateFF(sim,"VelocitySeed","0");')
         c.append('        seed.setDimensions(Dimensions.Builder().length(1).time(-1).build());')
-        c.append('        try { workflowEnum(workflowCall(seed,"getTypeOption"),"VECTOR"); } catch (Exception e) { throw new IllegalStateException("VelocitySeed vector type unavailable: "+e.getMessage(),e); }')
+        c.append('        seed.getTypeOption().setSelected(FieldFunctionTypeOption.Type.VECTOR);')
         c.append('        seed.setDefinition("[${Apert}*${seedX},${Apert}*${seedY},${U_b}]");')
         if workflow['initial_velocity']=='seed':
             c.append('        if (!reuse) {')

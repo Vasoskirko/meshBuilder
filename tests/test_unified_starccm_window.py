@@ -63,7 +63,7 @@ class UnifiedWindowTests(unittest.TestCase):
         d=self.dialog();d.rb_turb_srh.setChecked(True);d.inner_iterations.setValue(7)
         code=self.macro(d)
         self.assertIn('${timeStep}',code);self.assertIn('configureUnsteadyWorkflow(sim,7,0.9)',code)
-        self.assertIn('"SECOND_ORDER"',code);self.assertIn('"SIMPLEC"',code)
+        self.assertIn('getTimeDiscretizationOption().setSelected(TimeDiscretizationOption.Type.SECOND_ORDER)',code);self.assertIn('getSchemeOption().setSelected(ImplicitSchemeOption.Type.SIMPLEC)',code)
         self.assertIn('"Maximum Steps"',code);self.assertNotIn('nativeGroupObjects(roots,"meshBuilder_"',code)
     def test_size_estimate_matches_current_ascii_writer_without_3d_allocation(self):
         low,high=estimate_plot3d_bytes(self.mesh)
@@ -100,7 +100,7 @@ class UnifiedWindowTests(unittest.TestCase):
             run=subprocess.run(command+[str(root/'classes')]+[str(p) for p in root.rglob('*.java') if p!=paths[1] and p!=paths[2]],capture_output=True,text=True,timeout=60)
             self.assertEqual(run.returncode,0,run.stdout+run.stderr)
             self.assertNotIn('TMC_',paths[5].read_text())
-    def test_actual_solver_adapter_executes_and_unknown_option_fails(self):
+    def test_recorded_solver_api_executes_and_invalid_settings_fail(self):
         import shutil,subprocess
         from starccm_unified_support import UNIFIED_SUPPORT
         java=shutil.which('java') or os.environ.get('TMC_JAVA')
