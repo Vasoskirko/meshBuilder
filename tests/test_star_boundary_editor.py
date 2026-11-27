@@ -28,6 +28,46 @@ class BoundaryEditorTests(unittest.TestCase):
             self.assertEqual(d.reference_density.value(),d.fluid_fields['density'].model.raw)
             self.assertEqual(d._surface_catalog.get('endcaps',[]),[])
 
+    def test_external_gap_references_compile_in_generated_lexical_scopes(self):
+        import re,shutil,subprocess,tempfile
+        from pathlib import Path
+        java=os.environ.get('TMC_JAVA') or shutil.which('java')
+        if not java:self.skipTest('JDK unavailable')
+        projections=[]
+        for fuse in (False,True):
+            for kind in ('none','symmetry','fully_developed'):
+                d=self.dialog();d.topology_choice.setCurrentIndex(int(fuse))
+                if kind=='symmetry':self.select(d,'Inlet' if fuse else 'Inlet_s1',kind=kind)
+                if kind=='fully_developed':self.select(d,'Inlet' if fuse else 'Inlet_s1','Outlet' if fuse else 'Outlet_s1',kind, .154)
+                source=self.macro(d)
+                # Preserve actual brace ancestry, remove unrelated STAR operations.
+                # This is a lexical-scope compilation check, not a Siemens API stub.
+                clean=re.sub(r'"(?:\\.|[^"\\])*"|/\*.*?\*/|//[^\n]*',lambda m:re.sub(r'[^\n]',' ',m.group()),source,flags=re.S)
+                root=[];stack=[root]
+                for original,line in zip(source.splitlines(),clean.splitlines()):
+                    if re.search(r'\bexternalGaps\b',line):
+                        statement=original.strip()
+                        if 'markBoundaryRoles' in statement:statement='externalGaps.size();'
+                        stack[-1].append(statement)
+                    for ch in line:
+                        if ch=='{':
+                            child=[];stack[-1].append(child);stack.append(child)
+                        elif ch=='}':stack.pop()
+                def render(items):
+                    result=[]
+                    for item in items:
+                        if isinstance(item,str):result.append(item)
+                        else:
+                            nested=render(item)
+                            if nested:result.append('{\n'+nested+'\n}')
+                    return '\n'.join(result)
+                projections.append('{\n'+render(root)+'\n}')
+        source='import java.util.*; class GapScopeCheck { static class Boundary {} static class GapCandidate { boolean paired; Boundary bnd; } static List<GapCandidate> gapCandidates=new ArrayList<>(); public static void main(String[] args) {\n'+'\n'.join(projections)+'\n} }'
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'GapScopeCheck.java';path.write_text(source)
+            result=subprocess.run([java,str(path)],capture_output=True,text=True,timeout=60)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+
     def test_reference_fields_visibility_and_native_definitions(self):
         d=self.dialog();d.show();d.tabs.setCurrentIndex(1);self.app.processEvents()
         self.assertFalse(d.reference_density_row.isVisible())

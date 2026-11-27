@@ -666,7 +666,6 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
                 c.append(f'        assignedBoundary{i}.getValues().get({profile}.class).getMethod(ConstantScalarProfileMethod.class).getQuantity().setDefinition("{value:.16e}");')
                 if kind=='mass_flow_inlet' and (enable_thermal or use_iapws):
                     c.append(f'        assignedBoundary{i}.getValues().get(StaticTemperatureProfile.class).getMethod(ConstantScalarProfileMethod.class).getQuantity().setDefinition("${{T_init}}");')
-        c.append('        externalGaps.clear(); for(GapCandidate gap:gapCandidates) if(!gap.paired)externalGaps.add(gap.bnd);')
         c.append('        }')
     if custom_surfaces and workflow['heat_enabled']:
         c.append('        if (!physicalValuesConfigured && !reuse) throw new IllegalStateException("Heat setup requires configured physics");')
