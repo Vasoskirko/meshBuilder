@@ -79,11 +79,11 @@ class UnifiedTdcTests(unittest.TestCase):
         right=[r for r in cat['sides'] if r['source']==2 and not r['shared']]
         self.assertEqual(len(left),2)
         for a,b in zip(left,right):d._pairs.append(dict(first=a['id'],second=b['id'],kind='periodic'))
-        with self.assertRaisesRegex(ValueError,'эквивалентность'):d.read_options()
-        d.tdc_equivalence.setChecked(True);p=self.plan(d)
-        self.assertEqual(len(p['exchanges']),3)
-        self.assertAlmostEqual(p['area'],3*left[0]['area'])
-        d._show_tdc_exchange();self.assertIn('Обмен TDC',d.preview_selection.text())
+        p=self.plan(d)
+        self.assertEqual(len(p['exchanges']),1)
+        self.assertAlmostEqual(p['area'],left[0]['area'])
+        self.assertEqual(sum(x['method']=='boundary' for x in p['paths']),4)
+        d._show_tdc_exchange();self.assertIn('обмен TDC',d.preview_selection.text())
 
     def test_java_derived_kernel_and_csv_resume_use_actual_generated_code(self):
         import test_tmc_hybrid as jt
@@ -107,19 +107,21 @@ class Check {
  KERNEL
  public static void main(String[] a)throws Exception {
   Check c=new Check();c.dir=Paths.get(a[0]);
-  List<String> names=Arrays.asList("TDC_A_Exchange_NoStorage","TDC_B_Exchange_NoStorage","TDC_A_SensibleEnergy","TDC_B_SensibleEnergy","TDC_DeltaT_BulkLength","TDC_MassFluxRef");
+  List<String> names=Arrays.asList("TDC_A_Exchange_NoStorage","TDC_B_Exchange_NoStorage","TDC_A_SensibleEnergy","TDC_B_SensibleEnergy","TDC_DeltaT_BulkLength","TDC_MassFluxRef","TDC_A_OtherOut","TDC_B_OtherOut");
   for(String n:names)c.sampled.put(n,new Object());
-  WeightedWindow w=new WeightedWindow(names);w.add(0,new double[]{12,-11,0,2,2,5});w.add(2,new double[]{12,-11,4,0,2,5});
+  WeightedWindow w=new WeightedWindow(names);w.add(0,new double[]{12,-11,0,2,2,5,0,0});w.add(2,new double[]{12,-11,4,0,2,5,0,0});
   Map<String,Double> r=c.derived(w);if(r.get("ResultValid")!=1 || Math.abs(r.get("Exchange_A_W")-10)>1e-12 || Math.abs(r.get("Exchange_B_W")-10)>1e-12)throw new AssertionError(r.toString());
   if(Math.abs(r.get("TDC_Effective")-10/(AREA*2*5*2))>1e-8)throw new AssertionError("ratio");
-  WeightedWindow fluct=new WeightedWindow(names);fluct.add(0,new double[]{1,-1,0,0,1,5});fluct.add(2,new double[]{9,-9,0,0,3,5});
+  WeightedWindow fluct=new WeightedWindow(names);fluct.add(0,new double[]{1,-1,0,0,1,5,0,0});fluct.add(2,new double[]{9,-9,0,0,3,5,0,0});
   if(Math.abs(c.derived(fluct).get("TDC_Effective")-5/(AREA*2*5*2))>1e-8)throw new AssertionError("mean of instantaneous ratios used");
+  WeightedWindow lateral=new WeightedWindow(names);lateral.add(0,new double[]{12,-11,0,2,2,5,2,-2});lateral.add(2,new double[]{12,-11,4,0,2,5,6,-6});
+  Map<String,Double> lr=c.derived(lateral);if(lr.get("ResultValid")!=1 || Math.abs(lr.get("Exchange_A_W")-6)>1e-12 || Math.abs(lr.get("Exchange_B_W")-6)>1e-12 || Math.abs(lr.get("OtherOut_A_W")-4)>1e-12)throw new AssertionError("lateral subtraction "+lr);
   c.writeCumulative(w);if(Files.readAllLines(c.dir.resolve("cumulative.csv")).size()!=2)throw new AssertionError("CSV newline");
   String header="time_s,"+String.join(",",names)+"\\n";
-  Files.writeString(c.dir.resolve("block_00001.csv"),header+"0,12,-11,0,2,2,5\\n1,12,-11,2,1,2,5\\n");
-  Files.writeString(c.dir.resolve("block_00002.csv"),header+"1,12,-11,2,1,2,5\\n2,12,-11,4,0,2,5\\n");
+  Files.writeString(c.dir.resolve("block_00001.csv"),header+"0,12,-11,0,2,2,5,0,0\\n1,12,-11,2,1,2,5,0,0\\n");
+  Files.writeString(c.dir.resolve("block_00002.csv"),header+"1,12,-11,2,1,2,5,0,0\\n2,12,-11,4,0,2,5,0,0\\n");
   WeightedWindow total=c.loadTotal(c.dir,2);if(total.count!=3 || total.duration()!=2 || c.derived(total).get("ResultValid")!=1)throw new AssertionError("duplicate boundary or wrong total");
-  WeightedWindow bad=new WeightedWindow(names);bad.add(0,new double[]{12,-11,0,2,0,5});bad.add(2,new double[]{12,-11,4,0,0,5});
+  WeightedWindow bad=new WeightedWindow(names);bad.add(0,new double[]{12,-11,0,2,0,5,0,0});bad.add(2,new double[]{12,-11,4,0,0,5,0,0});
   if(c.derived(bad).containsKey("TDC_Effective") || c.derived(bad).get("ResultValid")!=0)throw new AssertionError("accepted zero delta");
   System.out.println("checks passed");
  }
@@ -169,4 +171,4 @@ class Check {
         model=BundleModel(pitch=11.64);model.selected_subchannels={18,22,23}
         mesh=build_mesh_from_bundle_model(model,MeshParams(ni=15,nj=12,nz=2,z_len=.1))
         d=enable_tdc(StarCcmExportDialog(mesh_result=mesh,bundle_model=model));self.addCleanup(d.deleteLater)
-        with self.assertRaisesRegex(ValueError,'третьим'):d.read_options()
+        with self.assertRaisesRegex(ValueError,'неизвестный'):d.read_options()

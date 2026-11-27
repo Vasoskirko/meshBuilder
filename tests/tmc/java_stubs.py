@@ -22,6 +22,7 @@ def write_stubs(root):
     'GlobalParameterManager':'public <T>T createGlobalParameter(Class<T> c,String s){return null;}',
     'ModelValues':'public <T>T get(Class<T> c){return null;}',
     'Region':'public BoundaryManager getBoundaryManager(){return null;} public ModelValues getConditions(){return null;} public ModelValues getValues(){return null;}',
+    'InterfaceBoundary':'',
     'BoundaryManager':'',
     'Boundary':'public ModelValues getConditions(){return null;} public ModelValues getValues(){return null;}',
     'BoundaryInterface':'public ModelValues getConditions(){return null;} public ModelValues getValues(){return null;} public Topology getTopology(){return null;} public void setInterfaceType(star.flow.FullyDevelopedInterface o){}',
@@ -55,6 +56,7 @@ def write_stubs(root):
     extends={n:'NamedObject' for n in common if n not in ('NamedObject','StarMacro','Dimensions')}
     for n in ('PhysicalTimeMonitor','ReportMonitor','FieldMeanMonitor'):extends[n]='Monitor'
     extends['UserFieldFunction']='FieldFunction'
+    extends['InterfaceBoundary']='Boundary'
     def put(pkg,name,body,base=None):
         path=Path(root)/pkg.replace('.','/');path.mkdir(parents=True,exist_ok=True)
         (path/(name+'.java')).write_text('package '+pkg+';\npublic class '+name+(' extends '+base if base else '')+' {\n'+body+'\n}\n')

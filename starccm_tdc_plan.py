@@ -1,11 +1,13 @@
 """Geometry/physics contract for effective, dimensionless energy-balance TDC."""
 from copy import deepcopy
 import math
+import re
+from starccm_tdc_paths import account_paths
 from starccm_surface_catalog import surface_catalog, validate_pairs
 from starccm_flow_defaults import calculator_mass_flow
 from starccm_time_schedule import schedule
 
-TDC_DEFAULTS=dict(a=1,b=2,gaps=[],equivalent=False,min_delta_t=.01,balance_tolerance=.05,
+TDC_DEFAULTS=dict(target='',path_methods={},path_reports={},scalar_diffusion_confirmed=False,a=1,b=2,gaps=[],equivalent=False,min_delta_t=.01,balance_tolerance=.05,
                   sections=11,blocks=True,conduction=False,compensating_source=True)
 
 def validate_tdc(data):
@@ -20,6 +22,10 @@ def validate_tdc(data):
     if not 3<=v['sections']<=101:raise ValueError('TDC: число сечений 3…101')
     if v['balance_tolerance']>1:raise ValueError('TDC: допуск баланса не больше 1')
     if any(not isinstance(k,str) for k in v['gaps']) or len(v['gaps'])!=len(set(v['gaps'])):raise ValueError('TDC: повторяющиеся зазоры')
+    if v['target'] and v['gaps'] and v['gaps']!=[v['target']]:raise ValueError('Устаревший выбор зазоров конфликтует с целевым соединением')
+    if len(v['gaps'])>1 and not v['target']:raise ValueError('Выберите один целевой зазор вместо прежней суммы эквивалентных зазоров')
+    if any(not isinstance(k,str) or m not in ('boundary','reconstruct','report','unmeasured','zero') for k,m in v['path_methods'].items()):raise ValueError('Неверный способ учёта боковой поверхности')
+    if any(not isinstance(k,str) or not isinstance(name,str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]*',name) for k,name in v['path_reports'].items()):raise ValueError('Отчёт мощности: используйте имя из латинских букв, цифр и _')
     return v
 
 def build_plan(result,model,options,fluid,yplus=None):
@@ -42,37 +48,15 @@ def build_plan(result,model,options,fluid,yplus=None):
     axial={p[k] for p in pairs if p['kind']!='internal' for k in ('first','second') if p[k] in capids}
     if any(r['id'] not in axial for r in cat['endcaps'] if set(r['sources'])&{a,b}):
         raise ValueError('Для балансового TDC задайте периодические пары вход–выход во вкладке «Сетка»')
-    # Every open lateral face of the two control volumes must exchange A <-> B.
-    exchanges=[];seen=set()
-    for r in cat['sides']:
-        if r['source'] not in (a,b) or not r['shared']:continue
-        if r['pair_id'] in w['disabled_internal_pairs']:raise ValueError('TDC: внутренний зазор отключён')
-        if r['neighbor'] not in (a,b):raise ValueError('Баланс TDC включает обмен с третьим подканалом; выберите изолированную пару')
-        if r['pair_id'] in seen:continue
-        seen.add(r['pair_id']);exchanges.append(dict(id=f'Gap_Sub{min(a,b)}_Sub{max(a,b)}',area=r['area'],periodic=False,normal=r['normal'] if r['source']==a else [-x for x in r['normal']]))
-    for p in pairs:
-        if p['first'] not in rows or p['second'] not in rows:continue
-        r,s=rows[p['first']],rows[p['second']]
-        if not ({r['source'],s['source']}&{a,b}):continue
-        if {r['source'],s['source']}!={a,b}:raise ValueError('Боковая периодичность TDC должна соединять выбранные A и B')
-        if p['kind']!='periodic':raise ValueError('Разнесённые боковые границы TDC требуют Periodic')
-        r=r if r['source']==a else s
-        exchanges.append(dict(id=p['first']+'__'+p['second'],area=r['area'],periodic=True,normal=r['normal']))
     assigned={r['surface']:r['kind'] for r in w['boundary_conditions']}
     for r in cat['rods']:
         if set(r['sources'])&{a,b} and assigned.get(r['id'],'wall')!='wall':raise ValueError('Для TDC поверхности ТВЭЛ/НК/ИК должны оставаться стенками')
-    for r in cat['sides']:
-        if r['source'] in (a,b) and assigned.get(r['id'],'wall') not in ('wall','symmetry'):raise ValueError('TDC: открытая боковая граница вне обмена A–B')
-    if not exchanges:raise ValueError('Между выбранными подканалами нет зазора')
-    ids=[r['id'] for r in exchanges];chosen=v['gaps'] or ids
-    if set(chosen)-set(ids):raise ValueError('Выбранный зазор TDC устарел')
-    if set(chosen)!=set(ids):raise ValueError('Баланс даёт суммарный обмен: выберите все зазоры A–B')
-    if len(exchanges)>1 and not v['equivalent']:raise ValueError('Для нескольких зазоров подтвердите эквивалентность; баланс определяет их сумму')
-    if len(exchanges)>1 and max(r['area'] for r in exchanges)-min(r['area'] for r in exchanges)>max(r['area'] for r in exchanges)*1e-5:raise ValueError('Для эквивалентных зазоров нужны одинаковые площади')
+    target,paths,all_paths=account_paths(cat,w,v)
+    exchanges=[dict(id=target['connection'],area=target['area'],periodic=target['kind']=='periodic',normal=target['normal'])]
     if v['conduction']:raise ValueError('Молекулярная поправка пока недоступна: нужен проверенный полный диффузионный поток на всех зазорах')
     if not v['compensating_source']:raise ValueError('Периодический нагреваемый TDC требует компенсационного объёмного стока')
     if not w['heat_enabled'] or not w['heat_values']:raise ValueError('Задайте нагрев во вкладке «Физика»')
-    time=schedule(w,cat,fluid,yplus,result.params.z_len,options['time_step'])
+    time=schedule(w,cat,fluid,yplus or {},result.params.z_len,options['time_step'])
     dt=options['time_step'];time['warmup']=math.ceil(time['warmup']/dt-1e-12)*dt;time['block']=math.ceil(time['block']/dt-1e-12)*dt
     minimum=time['warmup']+w['blocks_per_run']*time['block']
     if w['end_time'] and w['end_time']+dt*1e-8<minimum:raise ValueError(f'TDC: после округления этапов окончание должно быть не меньше {minimum:.12g} с')
@@ -83,14 +67,14 @@ def build_plan(result,model,options,fluid,yplus=None):
     # Separate regions: calculator may supply per-source mass; G stays a common reference.
     source_cat=surface_catalog(result,model,options['rod_wall_mode'],False)
     volumes={r['sources'][0]:r['area']*result.params.z_len for r in source_cat['endcaps'] if r['role']=='Inlet'}
-    return dict(volumes=volumes,settings=v,catalog=cat,exchanges=exchanges,area=sum(r['area'] for r in exchanges),
+    return dict(target=target,paths=paths,all_paths=all_paths,volumes=volumes,settings=v,catalog=cat,exchanges=exchanges,area=target['area'],
                 height=result.params.z_len,g_ref=g,time=time,a=a,b=b)
 
 
-def result_from_means(qa,qb,ha0,ha1,hb0,hb1,duration,delta,area,cp,g,min_delta,tolerance):
-    vals=(qa,qb,ha0,ha1,hb0,hb1,duration,delta,area,cp,g,min_delta,tolerance)
+def result_from_means(qa,qb,ha0,ha1,hb0,hb1,duration,delta,area,cp,g,min_delta,tolerance,other_a=0.,other_b=0.):
+    vals=(qa,qb,ha0,ha1,hb0,hb1,duration,delta,area,cp,g,min_delta,tolerance,other_a,other_b)
     if any(not math.isfinite(x) for x in vals) or min(duration,area,cp,g,min_delta,tolerance)<=0:raise ValueError('Неверные данные TDC')
-    q_a=qa-(ha1-ha0)/duration;q_b=-(qb-(hb1-hb0)/duration)
+    q_a=qa-other_a-(ha1-ha0)/duration;q_b=-(qb-other_b-(hb1-hb0)/duration)
     residual=q_a-q_b;relative=abs(residual)/max(abs(q_a),abs(q_b),1e-30)
     valid=abs(delta)>=min_delta and q_a*delta>0 and relative<=tolerance
     return dict(q_a=q_a,q_b=q_b,residual=residual,relative=relative,valid=valid,

@@ -4,6 +4,7 @@ from copy import deepcopy
 import json, math, hashlib, tempfile
 from starccm_tdc_plan import build_plan
 from starccm_export_geometry import plane_label
+from starccm_tdc_flux import BOUNDARY_SUPPORT,emit_flux_reports
 
 ROOT=Path(__file__).parent
 
@@ -34,7 +35,7 @@ def render_controller(plan,options):
     cat=plan['catalog'];v=plan['settings'];height=plan['height'];dt=options['time_step'];w=options['workflow']
     source=(ROOT/'tmc'/'TMC_Hybrid.java').read_text().replace('TMC','TDC')
     source=source.replace('// STAR-CCM+ 2602 add-on for the two-subchannel reference mesh.','// STAR-CCM+ 2602 unified effective energy-balance TDC; see TDC_START.txt.')
-    source=source.replace('private static final String OWNER="meshBuilder.TDC.v1"','private static final String OWNER="meshBuilder.TDC.unified.v2"')
+    source=source.replace('private static final String OWNER="meshBuilder.TDC.v1"','private static final String OWNER="meshBuilder.TDC.unified.v3"')
     import re
     source=re.sub(r'    private static final String\[\] WALLS[12]=.*?;\n','',source)
     source=source.replace('    private NamedObject gap;','    private NamedObject gap;\n    private final List<Region> modelRegions=new ArrayList<>();')
@@ -55,10 +56,8 @@ def render_controller(plan,options):
         for row in cat['rods']:
             if n in row['sources']:pre.append(f'          rod.add((Boundary)required(modelRegions.get({ridx}).getBoundaryManager(),"{row["id"]}",Boundary.class));')
         pre.append('          walls.add(rod); }')
-    realgap=next((r for r in plan['exchanges'] if not r['periodic']),None)
-    if realgap:pre.append(f'        gap=(NamedObject)required(sim.getPartManager(),"{realgap["id"]}",NamedObject.class);')
     pre.append('    }');source=replace_method(source,'preflightGeometry','\n'.join(pre))
-    defaults=dict(Action=(0,'dim()',''),Schema=(2,'dim()',''),Ready=(0,'dim()',''),Length=(height,'dim(0,1,0,0)','m'),
+    defaults=dict(Action=(0,'dim()',''),Schema=(3,'dim()',''),Ready=(0,'dim()',''),Length=(height,'dim(0,1,0,0)','m'),
       HydroDuration=(math.ceil(plan['time']['warmup']/dt-1e-12)*dt,'dim(0,0,1,0)','s'),
       BlockDuration=(math.ceil(plan['time']['block']/dt-1e-12)*dt if v['blocks'] else plan['time']['end']-math.ceil(plan['time']['warmup']/dt-1e-12)*dt,'dim(0,0,1,0)','s'),
       PlannedBlocks=(w['blocks_per_run'] if v['blocks'] else 1,'dim()',''),EndTime=(plan['time']['end'],'dim(0,0,1,0)','s'),BlocksToRun=(w['blocks_per_run'] if v['blocks'] else 1,'dim()',''),SeriesId=(0,'dim()',''),CompletedBlocks=(0,'dim()',''),AllowStatistics=(0,'dim()',''),
@@ -76,7 +75,7 @@ def render_controller(plan,options):
         for(String key:new String[]{"Rho","Mu","Cp","Lambda","Length","TimeStep","BlockDuration","MinDeltaT","BalanceTolerance"})positive(value(key),key);
     }''')
     source=source.replace('            requireSetup(); bindReports();', '            requireSetup(); bindReports();if((action==1||action==2||action==3||action==4) && !((Boolean)call(sim.getSolution(),"isInitialized")))throw new IllegalStateException("Initialize after TDC Action=0 before advancing time or starting statistics");')
-    source=source.replace('parameterOr("Schema",0)!=1','parameterOr("Schema",0)!=2')
+    source=source.replace('parameterOr("Schema",0)!=1','parameterOr("Schema",0)!=3')
     source=source.replace('region.getConditions().get(EnergyUserVolumeSourceOption.class).setSelected(EnergyUserVolumeSourceOption.Type.VOLUMETRIC_HEAT_SOURCE);','for(Region r:modelRegions) r.getConditions().get(EnergyUserVolumeSourceOption.class).setSelected(EnergyUserVolumeSourceOption.Type.VOLUMETRIC_HEAT_SOURCE);')
     source=replace_method(source,'configureSource','''    private void configureSource() {
         for(Region r:modelRegions) r.getValues().get(VolumetricHeatSourceProfile.class).getMethod(ConstantScalarProfileMethod.class).getQuantity().setDefinition(rr("qvSource"));
@@ -144,17 +143,22 @@ def render_controller(plan,options):
     lines.append('        expression("DeltaT_BulkLength",rr("Sub1_TemperatureBulkLength")+" - "+rr("Sub2_TemperatureBulkLength"),dim(0,0,0,1),true);')
     # Fixed analytical reference, not mean of a changing mass-flux signal.
     lines.append('        expression("MassFluxRef","${rho} * ${U_b}",dim(1,-2,-1,0),true);')
+    side_lines,pair_check=emit_flux_reports(plan,options['inter_fuse'])
+    lines.extend(side_lines)
     lines.append('        for(Object o:objects(sim.getReportManager())) if(o instanceof Report) { Report r=(Report)o;String name=r.getPresentationName();if(tagged(r,"meshBuilder.Managed") && !name.startsWith("Quality_") && name.matches(".*(MassFlow|Imbalance|PressureDrop|Reynolds|Darcy|BulkTemperature|WallTemperature|HeatPower|Heat_Flux|Energy_Flow|TotalEnthalpy|NormalVelocity|MassFluxMean|EnthalpyFlux).*"))sample(r); }')
     lines.append('        createMonitors();\n    }')
     source=replace_method(source,'configureReports','\n'.join(lines))
     source=replace_method(source,'derived',f'''    private Map<String,Double> derived(WeightedWindow w) {{
         Map<String,Double> r=new LinkedHashMap<>();
-        double qa=w.mean("Sub1_Exchange_NoStorage")-(w.last("Sub1_SensibleEnergy")-w.first("Sub1_SensibleEnergy"))/w.duration();
-        double qb=-(w.mean("Sub2_Exchange_NoStorage")-(w.last("Sub2_SensibleEnergy")-w.first("Sub2_SensibleEnergy"))/w.duration());
+        double otherA=w.mean("Sub1_OtherOut"),otherB=w.mean("Sub2_OtherOut");
+        double qa=w.mean("Sub1_Exchange_NoStorage")-otherA-(w.last("Sub1_SensibleEnergy")-w.first("Sub1_SensibleEnergy"))/w.duration();
+        double qb=-(w.mean("Sub2_Exchange_NoStorage")-otherB-(w.last("Sub2_SensibleEnergy")-w.first("Sub2_SensibleEnergy"))/w.duration());
         double delta=w.mean("DeltaT_BulkLength"),g=w.mean("MassFluxRef");
         double relative=Math.abs(qa-qb)/Math.max(Math.max(Math.abs(qa),Math.abs(qb)),1e-30);
-        boolean valid=Math.abs(delta)>=value("MinDeltaT") && qa*delta>0 && relative<=value("BalanceTolerance") && g>0;
+        double pairRelative={pair_check};
+        boolean valid=pairRelative<=value("BalanceTolerance") && Math.abs(delta)>=value("MinDeltaT") && qa*delta>0 && relative<=value("BalanceTolerance") && g>0;
         r.put("Duration_s",w.duration());r.put("DeltaTMean_K",delta);r.put("MassFluxMean_kg_m2_s",g);
+        r.put("OtherOut_A_W",otherA);r.put("OtherOut_B_W",otherB);r.put("SidePairRelative",pairRelative);
         r.put("Exchange_A_W",qa);r.put("Exchange_B_W",qb);r.put("BalanceMismatch_W",qa-qb);
         r.put("BalanceRelative",relative);r.put("ResultValid",valid?1.:0.);
         if(valid)r.put("TDC_Effective",qa/({plan['area']:.17g}*value("Cp")*g*delta));
@@ -163,7 +167,7 @@ def render_controller(plan,options):
     # Save invalid blocks and diagnostics; never replace a failed ratio by an accepted result.
     source=source.replace('if(!exists)out.write("block,start_s,end_s,"+String.join(",",data.keySet())+"\\n");','if(!exists)out.write("block,start_s,end_s,"+String.join(",",derivedKeys())+"\\n");')
     source=source.replace('for(double v:data.values())out.write(","+v);out.newLine();','for(String key:derivedKeys())out.write(","+(data.containsKey(key)?data.get(key):""));out.newLine();')
-    source=source.replace('    private void appendBlock(','''    private List<String> derivedKeys(){return Arrays.asList("Duration_s","DeltaTMean_K","MassFluxMean_kg_m2_s","Exchange_A_W","Exchange_B_W","BalanceMismatch_W","BalanceRelative","ResultValid","TDC_Effective");}
+    source=source.replace('    private void appendBlock(','''    private List<String> derivedKeys(){return Arrays.asList("Duration_s","DeltaTMean_K","MassFluxMean_kg_m2_s","Exchange_A_W","Exchange_B_W","OtherOut_A_W","OtherOut_B_W","SidePairRelative","BalanceMismatch_W","BalanceRelative","ResultValid","TDC_Effective");}
     private void appendBlock(''')
     source=source.replace('    private int actionSteps=0;', '    private int actionSteps=0;\n    private WeightedWindow cumulative;')
     source=source.replace('        ensureContinuation(directory);', '        ensureContinuation(directory);\n        cumulative=loadTotal(directory,integer("CompletedBlocks",0,1000000));')
@@ -196,7 +200,7 @@ def render_controller(plan,options):
             ((NamedObject)previous).setPresentationName(P+prefix+"Unavailable_TDC_"+System.currentTimeMillis());
         }
         for(Map.Entry<String,Double> entry:result.entrySet()) {''')
-    source=source.replace('entry.getKey().contains("TDC")||entry.getKey().startsWith("CfSigned")','entry.getKey().contains("TDC")||entry.getKey().equals("ResultValid")||entry.getKey().equals("BalanceRelative")')
+    source=source.replace('entry.getKey().contains("TDC")||entry.getKey().startsWith("CfSigned")','entry.getKey().contains("TDC")||entry.getKey().equals("ResultValid")||entry.getKey().equals("BalanceRelative")||entry.getKey().equals("SidePairRelative")')
     source=source.replace('r.setDimensions(units);r.setDefinition(Double.toString(entry.getValue()));','r.setDimensions(units);r.setDefinition(Double.toString(entry.getValue()));if(prefix.equals("Cumulative_") && Arrays.asList("DeltaTMean_K","Exchange_A_W","BalanceRelative","ResultValid","TDC_Effective").contains(entry.getKey()))cumulativePlot(r);')
     source=source.replace('    private void createMonitors() {', r'''
     private void cumulativePlot(Report r) {
@@ -256,6 +260,7 @@ def render_controller(plan,options):
     source=source.replace('            Path path=directory.resolve(String.format(Locale.ROOT,"block_%05d.csv",number));', '            if(number>integer("PlannedBlocks",1,10000))throw new IllegalStateException("Planned blocks completed; extend plan in a new series");\n            Path path=directory.resolve(String.format(Locale.ROOT,"block_%05d.csv",number));')
     source=source.replace('runUntil(start+value("BlockDuration"),window,out);', 'double target=number==integer("PlannedBlocks",1,10000)?value("EndTime"):start+value("BlockDuration");\n                if(target<=start)throw new IllegalStateException("End time reached");runUntil(target,window,out);')
     source=source.replace('        int max=integer("MaxStepsPerAction",1,100000000);', '        sim.getSolverStoppingCriterionManager().getSolverStoppingCriterion("Maximum Physical Time");\n        PhysicalTimeStoppingCriterion stop=(PhysicalTimeStoppingCriterion)sim.getSolverStoppingCriterionManager().getSolverStoppingCriterion("Maximum Physical Time");\n        stop.getMaximumTime().setValueAndUnits(target,sim.getUnitsManager().getObject("s"));stop.setIsUsed(true);\n        int max=integer("MaxStepsPerAction",1,100000000);')
+    source=source.replace("    // Pure Java numerical kernel,",BOUNDARY_SUPPORT+"\n    // Pure Java numerical kernel,")
     source=source.replace('"Sub1_', '"A_').replace('"Sub2_', '"B_')
     return source
 
@@ -280,8 +285,8 @@ def write_bundle(directory,xyz,result,model,fluid,yplus,options,progress):
     setup=generate_starccm_java_macro(xyz,result,model,fluid,yplus,options)
     control=render_controller(plan,options)
     guide=f'''STAR-CCM+ 2602 — эффективный безразмерный TDC, без BMBC.
-Пара: A=Sub{plan['a']}, B=Sub{plan['b']}; Q>0 из A в B; ΔT=T_A-T_B.
-Площадь всех выбранных обменов: {plan['area']:.12g} м².
+Пара: A=Sub{plan['a']}, B=Sub{plan['b']}; целевой путь: {plan['target']['connection']}; Q>0 из A в B; ΔT=T_A-T_B.
+Площадь целевого соединения: {plan['area']:.12g} м².
 1. Новый пустой .sim: setup_starccm_subchannels.java. Физика, нагрев и пары — из общего окна.
 2. TDC_Hybrid.java, TDC_Action=0: отчёты, равномерный компенсационный сток. Решатель НЕ запускается.
 3. Проверить условия, периодическое преобразование, источники и инициализировать вручную.
@@ -293,13 +298,19 @@ def write_bundle(directory,xyz,result,model,fluid,yplus,options,progress):
 Средние скалярных мгновенных отчётов: интеграл трапециями по фактическому времени / длительность.
 Поля: один отсчёт на завершённый шаг, постоянный dt; отличие от трапеций ограничено весами концов окна.
 Общий результат — из объединённой истории, не среднее блочных TDC. ΔH/Δt учитывается для каждого окна.
-TDC=Q_A/(A_exchange*Cp*(rho*U_b)*ΔT_mean). Проверяется согласованность балансов A/B.
+Q_target=mean(нагрев+сток−осевой перенос−OtherOut_A)−ΔH_A/Δt.
+TDC=Q_target/(A_target*Cp*(rho*U_b)*ΔT_mean). Проверяется согласованность балансов A/B.
 ResultValid=0: TDC не публикуется; исходные сигналы, балансы и средние сохраняются.
 Плохой результат не блокирует сохранение блока. Проверить ΔT, знак, баланс, периодичность.
 Физические wall-условия помимо заданного нагрева должны быть адиабатическими.
 Осевые диффузионные потоки на периодических копиях должны компенсироваться.
-Несколько зазоров: коэффициент по суммарной площади, эквивалентность подтверждена пользователем.
+Зазоры независимы: из баланса вычитается каждый прочий боковой поток. Эквивалентность не предполагается.
+Boundary Conduction Heat Flux должен быть определён на действительной стороне интерфейса; проверяйте до сбора.
+Реконструкция на Fuse использует EffectiveConductivity и grad(Temperature), это приближённая постобработка для скалярного замыкания.
+Пользовательские отчёты — полная знаковая мощность в Вт, наружу из соответствующего подканала.
+Все компоненты используют чувствительную энтальпию Cp*(T−T_init), а не смешение с TotalEnthalpy.
 Это эффективный обмен: включает молекулярную и среднюю конвективную составляющие.
+Проверьте средние Path_*_MassFlowOut: ненулевой направленный расход не является чистым перемешиванием; мощность зависит от T_init.
 Молекулярная поправка и оценка статистической погрешности не реализованы.
 Не менять dt, физику, BC и не запускать шаги вне контроллера в активной серии.
 После изменения физики/геометрии — новый экспорт и новая симуляция.
@@ -307,7 +318,7 @@ ResultValid=0: TDC не публикуется; исходные сигналы,
 '''
     with tempfile.TemporaryDirectory(prefix='.tdc_',dir=target) as tmp:
         staging=Path(tmp)
-        for name,text in zip(names[1:],(setup,control,json.dumps(dict(options=options,area=plan['area'],exchanges=plan['exchanges']),ensure_ascii=False,indent=2),guide)):
+        for name,text in zip(names[1:],(setup,control,json.dumps(dict(options=options,area=plan['area'],target=plan['target'],paths=plan['paths']),ensure_ascii=False,indent=2),guide)):
             (staging/name).write_text(text,encoding='utf-8')
         export_subchannel_plot3d(result,staging/xyz,progress_callback=progress)
         progress(95,'Публикация комплекта TDC')
