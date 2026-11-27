@@ -131,7 +131,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     time_step=options.get('time_step',1e-4)
     if isinstance(time_step,bool) or not isinstance(time_step,(int,float)) or not math.isfinite(time_step) or time_step<=0:
         raise ValueError('Шаг времени Δt должен быть положительным конечным числом')
-    custom_surfaces=bool(workflow and catalog and catalog['domains'] and not workflow['tdc_enabled'])
+    custom_surfaces=bool(workflow and catalog and catalog['domains'] and options.get('export_mode')!='tmc_reference')
     preserve_sectors=(inter_fuse and rod_mode=='sectors_60') or custom_surfaces
     if workflow and is_unsteady:
         from starccm_time_schedule import schedule
@@ -696,7 +696,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
         c.append('        } catch (Exception e) { warn(sim,"  [!] TimeStep binding: "+e.getMessage()); }')
 
     if workflow and is_unsteady:
-        planned_end=workflow['warmup_duration'] if workflow['tdc_enabled'] else planned_simulation_end
+        planned_end=planned_simulation_end
         c.append('        if (!reuse) try { configureUnsteadyWorkflow(sim,'+str(workflow['inner_iterations'])+','+str(planned_end)+'); } catch (Exception e) { throw new IllegalStateException("Unsteady settings incomplete; verify STAR 2602 solver options before running: "+e.getMessage(),e); }')
     if create_field_functions:
         c.append('        supportFunctions(sim,' + f'{lz_m:.16e}' + ', Arrays.asList(' + ','.join(json.dumps(v) for v in field_choices) + '));')
@@ -758,6 +758,11 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
             c.append(f'            sourceParts.add(Collections.singletonList(domain{number}));')
     else:
         c.append('            for (Region region : subchannelRegions) sourceParts.add(Collections.singletonList(region));')
+    if options.get('export_mode')=='tdc':
+        from starccm_tdc_plan import build_plan
+        from starccm_tdc_export import emit_dependencies
+        tdc_plan=build_plan(mesh_result,bundle_model,options,fluid_props,yplus_data)
+        c.extend(emit_dependencies(tdc_plan,inter_fuse))
     for pos in plane_positions(n_planes, key_planes):
         label = plane_label("Section_Global", pos, lz_m)
         c.append(f'            createPlaneSection(sim, labCoord, uLen, subchannelRegions, "{label}", lz * {pos:.16e}); planesCreated++;')
@@ -871,7 +876,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
         else:
             native = dict(enthalpy='TotalEnthalpy',velocity='Velocity',pressure='Pressure',temperature='Temperature',density='Density',viscosity='DynamicViscosity',wall_shear='WallShearStress',wall_heat_flux='BoundaryHeatFlux')[key]
             parts = 'allRods' if key in ('wall_shear','wall_heat_flux') else 'subchannelRegions'
-        c.append(f'        createTimeMean(sim,{parts},"{native}",{mean_start});')
+        if options.get('export_mode')!='tdc':c.append(f'        createTimeMean(sim,{parts},"{native}",{mean_start});')
     c.append('        int[] qualityCounts = new int[] {0, 0};')
     c.append('        List<UserFieldFunction> badMasks = new ArrayList<>();')
     if create_scene:

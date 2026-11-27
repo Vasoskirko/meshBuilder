@@ -1,8 +1,9 @@
 """Versioned settings for the unified export window; independent of Qt."""
+from starccm_tdc_plan import TDC_DEFAULTS,validate_tdc
 from copy import deepcopy
 import math
 
-WORKFLOW_DEFAULTS = dict(time_input_mode='seconds',runup_passes=10,block_passes=5,end_time=0.,mean_start_auto=False,plane_scheme='legacy',report_subchannels=[-1],reference_density=0.,minimum_wall_distance=1e-7,boundary_conditions=[],run_mode='auto',heat_enabled=False,heat_values={},boundary_pairs=[],disabled_internal_pairs=[],quality_thresholds=dict(CellQuality=.01,FaceValidity=.95,VolumeChange=.01,SkewnessAngle=85.),fluid={},version=1, quality_enabled=False, tdc_enabled=False,tdc_equivalence=False,
+WORKFLOW_DEFAULTS = dict(tdc_settings=deepcopy(TDC_DEFAULTS),time_input_mode='seconds',runup_passes=10,block_passes=5,end_time=0.,mean_start_auto=False,plane_scheme='legacy',report_subchannels=[-1],reference_density=0.,minimum_wall_distance=1e-7,boundary_conditions=[],run_mode='auto',heat_enabled=False,heat_values={},boundary_pairs=[],disabled_internal_pairs=[],quality_thresholds=dict(CellQuality=.01,FaceValidity=.95,VolumeChange=.01,SkewnessAngle=85.),fluid={},version=1, quality_enabled=False, tdc_enabled=False,tdc_equivalence=False,
     viscosity_method='constant', conductivity_method='constant', initial_velocity='theory',
     initial_temperature=573.15, initial_pressure=0., initial_ux=0., initial_uy=0.,
     inner_iterations=5, warmup_duration=.45, block_duration=.45, blocks_per_run=1,
@@ -19,6 +20,7 @@ def validate_workflow(data):
             if type(value) not in (int,float) or not math.isfinite(value):raise ValueError(f'{key}: требуется конечное число')
             result[key]=float(value)
         elif type(value) is not type(default):raise ValueError(f'{key}: неверный тип')
+    result['tdc_settings']=validate_tdc(result['tdc_settings'])
     thresholds=result['quality_thresholds']
     if set(thresholds)!={'CellQuality','FaceValidity','VolumeChange','SkewnessAngle'}:raise ValueError('Неизвестные пороги качества')
     for key,value in thresholds.items():

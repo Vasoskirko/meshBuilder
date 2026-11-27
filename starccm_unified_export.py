@@ -41,7 +41,8 @@ def tdc_options(d,workflow):
 def export_tdc(d):
     from mesh_export_jobs import run_export,ExportCancelled
     try:
-        options=d.read_options();reference_geometry(d.mesh_result,d.bundle_model)
+        options=d.read_options()
+        if options["export_mode"]=="tmc_reference":reference_geometry(d.mesh_result,d.bundle_model)
         from starccm_tmc_export import bundle_names
         xyz=d.edit_xyz.text().strip();bundle_names(xyz)
     except (ValueError,TypeError) as exc:QMessageBox.warning(d,'Проверьте TDC',str(exc));return
@@ -50,11 +51,16 @@ def export_tdc(d):
         QMessageBox.warning(d,'Экспорт недоступен','Сетка устарела; перестройте её.');return
     directory=QFileDialog.getExistingDirectory(d,'Папка комплекта TDC')
     if not directory:return
-    names=(xyz,'setup_starccm_subchannels.java','TDC_Hybrid.java','TDC_export.json','TDC_START.txt','TDC_analyse_series.py')
+    names=(xyz,'setup_starccm_subchannels.java','TDC_Hybrid.java','TDC_export.json','TDC_START.txt')
+    if options['export_mode']=='tmc_reference':names+=('TDC_analyse_series.py',)
     existing=[name for name in names if (Path(directory)/name).exists()]
     if existing and QMessageBox.question(d,'Заменить файлы?', '\n'.join(existing),QMessageBox.Yes|QMessageBox.No,QMessageBox.No)!=QMessageBox.Yes:return
     result=d.mesh_result;model=deepcopy(d.bundle_model);settings=deepcopy(options['tmc_settings'])
-    def compute(progress):return write_tmc_bundle(directory,xyz,result,model,settings,progress,unified_options=options)
+    fluid=deepcopy(d.read_fluid());yplus=deepcopy(d.yplus_data)
+    def compute(progress):
+        if options['export_mode']=='tmc_reference':return write_tmc_bundle(directory,xyz,result,model,settings,progress,unified_options=options)
+        from starccm_tdc_export import write_bundle
+        return write_bundle(directory,xyz,result,model,fluid,yplus,options,progress)
     def success(paths):
         QMessageBox.information(d,'Комплект TDC создан','\n'.join(map(str,paths))+'\nПорядок запуска: TDC_START.txt.');d.accept()
     def failure(exc):

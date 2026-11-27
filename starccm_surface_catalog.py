@@ -112,6 +112,6 @@ def validate_surface_settings(result,model,options):
         if key not in available or key in assigned or key in paired:raise ValueError('Граница недоступна, повторяется или входит в пару')
         assigned.add(key)
         if workflow.get('heat_enabled') and key in {r['id'] for r in catalog['rods'] if r['kind']=='fuel'}:raise ValueError('Нагреваемые ТВЭЛ нельзя переопределять в редакторе границ')
-    if workflow.get('tdc_enabled') and workflow.get('boundary_conditions'):raise ValueError('Граничные условия эталона TDC назначаются контроллером')
-    if workflow.get('tdc_enabled') and workflow.get('boundary_pairs'):raise ValueError('Боковые пары эталона TDC задаются контроллером. Удалите дополнительные пары')
+    if options.get('export_mode')=='tmc_reference' and workflow.get('boundary_conditions'):raise ValueError('Граничные условия эталона TDC назначаются контроллером')
+    if options.get('export_mode')=='tmc_reference' and workflow.get('boundary_pairs'):raise ValueError('Боковые пары эталона TDC задаются контроллером. Удалите дополнительные пары')
     return catalog

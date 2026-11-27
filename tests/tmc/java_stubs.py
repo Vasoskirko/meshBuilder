@@ -8,14 +8,16 @@ def write_stubs(root):
     'Simulation':'''public void println(String s){} public <T>T get(Class<T> c){return null;}
     public RegionManager getRegionManager(){return null;} public PartManager getPartManager(){return null;}
     public FieldFunctionManager getFieldFunctionManager(){return null;} public ReportManager getReportManager(){return null;}
-    public MonitorManager getMonitorManager(){return null;} public SolverManager getSolverManager(){return null;}
+    public MonitorManager getMonitorManager(){return null;} public SolverManager getSolverManager(){return null;} public StoppingManager getSolverStoppingCriterionManager(){return null;} public Object getPlotManager(){return null;}
     public InterfaceManager getInterfaceManager(){return null;} public UpdateEventManager getUpdateEventManager(){return null;}
     public UnitsManager getUnitsManager(){return null;} public IteratorApi getSimulationIterator(){return null;}
     public Object getSolution(){return null;} public String getSessionDir(){return ".";}''',
     'RegionManager':'', 'PartManager':'',
     'Dimensions':'public static Builder Builder(){return new Builder();} public static class Builder {public Builder mass(int n){return this;} public Builder length(int n){return this;} public Builder time(int n){return this;} public Builder temperature(int n){return this;} public Dimensions build(){return null;}}',
     'Quantity':'public void setDefinition(String s){} public void setValue(double d){} public void setValueAndUnits(double d,Units u){}',
-    'Units':'','UnitsManager':'public Units getObject(String s){return null;}',
+    'StoppingManager':'public Object getSolverStoppingCriterion(String name){return null;}',
+    'PhysicalTimeStoppingCriterion':'public Quantity getMaximumTime(){return null;} public void setIsUsed(boolean b){}',
+    'Units':'public String getPresentationName(){return "";} public Dimensions getDimensions(){return null;}','UnitsManager':'public Units getObject(String s){return null;}',
     'ScalarGlobalParameter':'public void setDimensions(Dimensions d){} public Quantity getQuantity(){return null;}',
     'GlobalParameterManager':'public <T>T createGlobalParameter(Class<T> c,String s){return null;}',
     'ModelValues':'public <T>T get(Class<T> c){return null;}',
@@ -28,11 +30,11 @@ def write_stubs(root):
     'InterfaceManager':'public BoundaryInterface createBoundaryInterface(Boundary a,Boundary b,String s){return null;}',
     'ConditionTypeManager':'public <T>T get(Class<T> c){return null;}',
     'FieldFunction':'public String getFunctionName(){return "";}',
-    'UserFieldFunction':'public FieldFunctionTypeOption getTypeOption(){return null;} public void setFunctionName(String s){} public void setDimensions(Dimensions d){} public void setDefinition(String s){} public String getDefinition(){return "";}',
+    'UserFieldFunction':'public void setSyncName(boolean b){} public FieldFunctionTypeOption getTypeOption(){return null;} public void setFunctionName(String s){} public void setDimensions(Dimensions d){} public void setDefinition(String s){} public String getDefinition(){return "";}',
     'FieldFunctionTypeOption':'public enum Type{SCALAR} public void setSelected(Type t){}',
     'FieldFunctionManager':'public FieldFunction getFunction(String s){return null;} public UserFieldFunction createFieldFunction(){return null;}',
     'ReportManager':'public <T extends star.base.report.Report>T createReport(Class<T> c){return null;}',
-    'Parts':'public void setObjects(Object... o){}',
+    'Parts':'public void setQuery(Object q){} public void setObjects(Object... o){}',
     'Monitor':'public StarUpdate getStarUpdate(){return null;}',
     'PhysicalTimeMonitor':'',
     'ReportMonitor':'public star.base.report.Report getReport(){return null;}',
@@ -57,7 +59,7 @@ def write_stubs(root):
         path=Path(root)/pkg.replace('.','/');path.mkdir(parents=True,exist_ok=True)
         (path/(name+'.java')).write_text('package '+pkg+';\npublic class '+name+(' extends '+base if base else '')+' {\n'+body+'\n}\n')
     for n,body in common.items():put('star.common',n,body,extends.get(n))
-    put('star.base.report','Report','public double getReportMonitorValue(){return 0;} public star.common.ReportMonitor createMonitor(){return null;}','star.common.NamedObject')
+    put('star.base.report','Report','public star.common.Units getUnits(){return null;} public double getReportMonitorValue(){return 0;} public star.common.ReportMonitor createMonitor(){return null;}','star.common.NamedObject')
     for n in ('SurfaceIntegralReport','VolumeIntegralReport','VolumeAverageReport','AreaAverageReport','MassFlowAverageReport','MaxReport'):
         put('star.base.report',n,'public void setFieldFunction(star.common.FieldFunction f){} public star.common.Parts getParts(){return null;}','Report')
     put('star.base.report','ExpressionReport','public void setDimensions(star.common.Dimensions d){} public void setDefinition(String s){} public String getDefinition(){return "";}','Report')

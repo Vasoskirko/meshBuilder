@@ -126,7 +126,7 @@ def install_compact(d):
     heat,hl=box('Тепловой поток на ТВЭЛ');physics.addWidget(heat)
     d.heat_enabled=QCheckBox('Задать тепловой поток');hl.addWidget(d.heat_enabled)
     d.heat_table=QTableWidget(0,3);d.heat_table.setHorizontalHeaderLabels(['Функция поля','Группа стенок','q, Вт/м²']);d.heat_table.horizontalHeader().setSectionResizeMode(1,QHeaderView.Stretch);d.heat_table.setMaximumHeight(240);hl.addWidget(d.heat_table)
-    hl.addWidget(label_help('Соответствие q и стенок','Список следует группировке на вкладке «Сетка». Создаются скалярные функции поля qN с размерностью Вт/м² (кг/с³), без глобальных параметров qN. В нагрев входят только ТВЭЛ, НК и ИК исключены. Положительный q нагревает жидкость. Для TDC все сектора одного подканала должны иметь одинаковый q.'))
+    hl.addWidget(label_help('Соответствие q и стенок','Список следует группировке на вкладке «Сетка». Создаются скалярные функции поля qN с размерностью Вт/м² (кг/с³), без глобальных параметров qN. В нагрев входят только ТВЭЛ, НК и ИК исключены. Положительный q нагревает жидкость. TDC использует заданный q каждой поверхности без дополнительного ввода.'))
     d.heat_status=QLabel();d.heat_status.setWordWrap(True);hl.addWidget(d.heat_status)
     physics.addStretch()
     # Existing reference controls remain aliases for old profile imports, not a second input form.
@@ -183,11 +183,10 @@ def install_compact(d):
         current={key:field.model.raw for key,field in getattr(d,'_heat_fields',{}).items()}
         d._heat_cache.update(current);d._heat_fields={};d.heat_table.setRowCount(0)
         for i,row in enumerate(r for r in d._surface_catalog['rods'] if r['kind']=='fuel'):
-            key=row['id'];default=d.tmc_fields['heat_flux_2'].model.raw if d.tdc_enabled.isChecked() and row['sources']==[2] else (d.tmc_fields['heat_flux_1'].model.raw if d.tdc_enabled.isChecked() else 10000.)
+            key=row['id'];default=10000.
             value=d._heat_cache.get(key,default)
-            if d.tdc_enabled.isChecked() and key not in d._edited_heat_keys:value=default
             field=NumberField(value,minimum=0)
-            if key in d._heat_drafts and (not d.tdc_enabled.isChecked() or key in d._edited_heat_keys):field.setText(d._heat_drafts[key])
+            if key in d._heat_drafts:field.setText(d._heat_drafts[key])
             field.setMaximumWidth(145);field.edited.connect(lambda k=key:d._edited_heat_keys.add(k));d._heat_fields[key]=field
             d.heat_table.insertRow(i);name=QTableWidgetItem(f'q{i+1}');name.setFlags(name.flags()&~Qt.ItemIsEditable);target=QTableWidgetItem(key);target.setFlags(target.flags()&~Qt.ItemIsEditable)
             d.heat_table.setItem(i,0,name);d.heat_table.setItem(i,1,target);d.heat_table.setCellWidget(i,2,field)
@@ -204,7 +203,7 @@ def install_compact(d):
             for j,value in enumerate((row['surface'],str(row['value']),row['kind'])):d.surface_pairs_table.setItem(i,j,QTableWidgetItem(value))
     def update_condition_choices():
         previous=d.surface_condition.currentData();pair=d.boundary_selection_mode.currentData()=='pair'
-        d.surface_b.setEnabled(pair and not d.tdc_enabled.isChecked());d.surface_condition.clear()
+        d.surface_b.setEnabled(pair);d.surface_condition.clear()
         choices=(('Internal','internal'),('Internal + Periodic','periodic'),('Fully Developed + Periodic','fully_developed')) if pair else (('Wall','wall'),('Mass Flow Inlet','mass_flow_inlet'),('Pressure Outlet','pressure_outlet'),('Symmetry','symmetry'))
         for text,key in choices:d.surface_condition.addItem(text,key)
         index=d.surface_condition.findData(previous)
@@ -289,10 +288,9 @@ def install_compact(d):
             d.constant_properties.setVisible(not iapws);d.iapws_transport.setVisible(iapws)
             d.heat_enabled.setEnabled(d.chk_thermal.isChecked())
             d.heat_table.setEnabled(d.heat_enabled.isChecked() and d.chk_thermal.isChecked());d.heat_table.setVisible(d.heat_enabled.isChecked() and d.chk_thermal.isChecked())
-            for w in (d.surface_a,d.surface_b,d.surface_condition,add):w.setEnabled(not d.tdc_enabled.isChecked())
+            for w in (d.surface_a,d.surface_b,d.surface_condition,add):w.setEnabled(True)
             remove.setEnabled(bool(d._pairs or d._conditions))
-            d.surface_b.setEnabled(d.boundary_selection_mode.currentData()=='pair' and not d.tdc_enabled.isChecked())
-            if d.tdc_enabled.isChecked():d.surface_status.setText('Боковые пары эталона TDC назначаются контроллером.')
+            d.surface_b.setEnabled(d.boundary_selection_mode.currentData()=='pair')
             signature=(rod,d.rb_inter_fuse.isChecked(),d.tdc_enabled.isChecked())
             if signature!=d._heat_signature:
                 changed_grouping=d._heat_signature is not None and d._heat_signature[0]!=signature[0]

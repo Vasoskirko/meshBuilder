@@ -13,6 +13,8 @@ def schedule(workflow,catalog,fluid,yplus,height,dt):
         if flight is None:raise ValueError('Для числа пролётов нужна построенная геометрия и опорная скорость')
         warmup=workflow['runup_passes']*flight;block=workflow['block_passes']*flight
     else:warmup=workflow['warmup_duration'];block=workflow['block_duration']
+    if workflow.get('tdc_enabled'):
+        warmup=math.ceil(warmup/dt-1e-12)*dt;block=math.ceil(block/dt-1e-12)*dt
     budget=warmup+block*workflow['blocks_per_run']
     if not math.isfinite(budget/dt):raise ValueError('Слишком большой диапазон времён')
     minimum=max(budget,math.ceil(budget/dt)*dt)

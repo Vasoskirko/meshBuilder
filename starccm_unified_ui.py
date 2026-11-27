@@ -37,7 +37,7 @@ def install(dialog,layout,header):
         d.tabs.addTab(scroll,name);pages.append(content)
     header.setText('<b>Подготовка расчёта · STAR-CCM+ 2602</b><br>Сетка → физика → отчёты → статистика → качество → TDC → итог.')
     # Legacy mode is a backend compatibility switch, never a second visible form.
-    d.export_mode=QComboBox(d);d.export_mode.addItem('Общий экспорт','general');d.export_mode.addItem('TDC','tmc_reference');d.export_mode.hide()
+    d.export_mode=QComboBox(d);d.export_mode.addItem('Общий экспорт','general');d.export_mode.addItem('TDC','tdc');d.export_mode.hide()
     d._tmc_last_valid=deepcopy(TMC_DEFAULTS)
     d.tmc_tabs=QWidget(d);d.tmc_tabs.hide()  # Compatibility with existing callers.
     d.generate_button.setText('Проверить и сохранить комплект…')
@@ -96,7 +96,7 @@ def install(dialog,layout,header):
     d.initial_absolute=note(ref,'')
     unsupported(ref,'Назначить VelocitySeed начальным полем — после проверки выражения в STAR')
     conditions=group(phys,'Вход, выход, боковые пары и нагрев')
-    note(conditions,'Общий экспорт сохраняет границы wall для ручной настройки. Для эталона TDC осевая и боковая периодичность, массовый расход и нагрев назначаются отдельным макросом TDC.')
+    note(conditions,'Общий экспорт сохраняет границы wall для ручной настройки. В TDC используются те же заданные пары, расход и нагрев; второй макрос добавляет компенсационный сток и статистику.')
     unsupported(conditions,'Массовый вход / давление на выходе для произвольной модели — ещё не поддержано')
     unsupported(conditions,'Выбрать произвольные боковые периодические пары на схеме — ещё не поддержано')
     # Reports: reuse native report controls, expose actual geometric source list.
@@ -136,7 +136,7 @@ def install(dialog,layout,header):
     d.warmup_duration=NumberField(.45,minimum=1e-15);d.block_duration=NumberField(.45,minimum=1e-15)
     d.blocks_per_run=QSpinBox();d.blocks_per_run.setRange(1,10000);d.blocks_per_run.setValue(1)
     for label,w in (('Maximum Inner Iterations',d.inner_iterations),('Отрезок совместного разгона, с',d.warmup_duration),('Длительность блока, с',d.block_duration),('Блоков за запуск',d.blocks_per_run)):form.addRow(label,w)
-    note(stats,'Автоматическое управление разгоном и блоками доступно в контроллере эталона TDC. Для общего HYBRID параметры этапов сохраняются в проекте; решение запускается вручную. Совместный разгон идёт с энергией, без сбора итоговой статистики.')
+    note(stats,'Автоматическое управление разгоном и блоками доступно в контроллере TDC. Для общего HYBRID параметры этапов сохраняются в проекте; решение запускается вручную. Совместный разгон идёт с энергией, без сбора итоговой статистики.')
     stats.addWidget(d.mean_group)
     note(stats,'Средние поля и средние скалярных отчётов — разные объекты. В общем экспорте задайте шаг начала средних вручную; пауза/блоки штатных средних проверяются контроллером TDC. Геометрическим отчётам мониторы не создаются.')
     # Quality is opt-in and completely gated at read_options.
@@ -153,7 +153,7 @@ def install(dialog,layout,header):
     # TDC owns only method-specific controls; properties and time are shared.
     tdc=pages[5];d.tdc_enabled=QCheckBox('Подготовить расчёт TDC');tdc.addWidget(d.tdc_enabled)
     d.tdc_status=note(tdc,'')
-    d.tdc_equivalence=QCheckBox('Подтверждаю допущение трёх эквивалентных зазоров эталона');tdc.addWidget(d.tdc_equivalence)
+    d.tdc_equivalence=QCheckBox('Подтверждаю эквивалентность нескольких зазоров');tdc.addWidget(d.tdc_equivalence)
     d.tmc_fields={}
     for key,value in TMC_DEFAULTS.items():
         if type(value) is bool:w=QCheckBox();w.setChecked(value)
@@ -161,11 +161,7 @@ def install(dialog,layout,header):
         else:w=NumberField(value,minimum=0 if key=='heat_flux_1' else 1e-15)
         d.tmc_fields[key]=w;w.setParent(d);w.hide()
     d.tmc_xyz=d.edit_xyz
-    d.tdc_controls=QWidget();tl=QFormLayout(d.tdc_controls);tdc.addWidget(d.tdc_controls)
-    for key,label in (('heat_flux_1','Нагрев Sub1, Вт/м²'),('heat_flux_2','Нагрев Sub2, Вт/м²'),('mass_flow','Общий расход, кг/с'),('min_delta_t','Минимальная |средняя ΔT|, K'),('create_field_means','Средние поля контроллера'),('gap_conduction','Молекулярный перенос через зазор')):
-        w=d.tmc_fields[key];tl.addRow(label,w);w.show()
-    note(tdc,'Эталон S18/S22, L=300 мм: Fuse, постоянные свойства, SRH/SST, осевая периодичность и две заданные боковые пары. Нагрев и равномерный компенсационный сток создаются контроллером. Три эквивалентных зазора — допущение методики, не общее правило.')
-    note(tdc,'Для TDC средние поля выбираются общим флажком контроллера; индивидуальный выбор средних общего экспорта не применяется. Температура для TDC: среднее по времени мгновенной среднемассовой температуры подканала, затем согласованное усреднение по длине. Не подстановка Mean of Temperature в мгновенный баланс. Коэффициент по выбранной формуле безразмерный; размерная диффузивность требует отдельного определения.')
+    d.tdc_controls=QWidget();tdc.addWidget(d.tdc_controls)
     # Summary and initialization are the final step only.
     final=pages[6];d.summary_text=QPlainTextEdit();d.summary_text.setReadOnly(True);final.addWidget(d.summary_text)
     for w in (d.chk_summary,d.chk_evaluate_solution,d.chk_initialize):final.addWidget(w)
@@ -185,6 +181,8 @@ def install(dialog,layout,header):
     install_parts_reports(d)
     from starccm_time_average_ui import install as install_time_average
     install_time_average(d)
+    from starccm_tdc_ui import install as install_tdc
+    install_tdc(d)
     header.setText('<b>Подготовка расчёта · STAR-CCM+ 2602</b><br>Сетка → физика → производные части → отчёты → среднее по времени → качество → TDC → итог.')
 
 
@@ -206,12 +204,11 @@ def refresh(d):
         d.fluid_fields['lambda'].setEnabled(not iapws or d.conductivity_method.currentData()=='constant')
         d.initial_temperature.setEnabled(d.chk_thermal.isChecked())
         for w in (d.inner_iterations,d.warmup_duration,d.block_duration,d.blocks_per_run,d.field_time_step):w.setEnabled(unsteady)
-        d.mean_group.setEnabled(unsteady and not d.tdc_enabled.isChecked())
+        d.mean_group.setEnabled(unsteady)
         d.solver_hint.setText('Implicit Unsteady · Second Order · SIMPLEC; постоянный Δt через ${timeStep}. Maximum Steps выключен; остановка по физическому времени.' if unsteady else 'Стационарный RST. Временные этапы и средние поля недоступны.')
         tdc=d.tdc_enabled.isChecked();d.export_mode.setCurrentIndex(1 if tdc else 0)
-        try:reference_geometry(d.mesh_result,d.bundle_model);compat='Геометрия совместима с эталоном.'
-        except (ValueError,AttributeError,TypeError) as exc:compat=str(exc)
-        d.tdc_status.setText(compat)
+        compat='Общие настройки; проверка пары и баланса при экспорте.'
+        if hasattr(d,'_tdc_refresh'):d._tdc_refresh()
         # Current generic export deliberately keeps wall conditions manual.
         d.chk_initialize.setEnabled(False)
         d.chk_initialize.setChecked(False)
@@ -222,7 +219,7 @@ def refresh(d):
         d.summary_text.setPlainText('\n'.join((d.boundary_hint.text(),d.file_size_label.text(),d.solver_hint.text(),
             'Качество: '+('включено' if d.quality_enabled.isChecked() else 'выключено; объекты качества не создаются'),
             'TDC: '+('включён; '+compat if tdc else 'выключен'),
-            'Обычный экспорт: setup_starccm_subchannels.java + XYZ. TDC: дополнительно TDC_Hybrid.java, JSON, инструкция и анализатор CSV.',
+            'Обычный экспорт: setup_starccm_subchannels.java + XYZ. TDC: дополнительно TDC_Hybrid.java, JSON и инструкция; результаты в CSV, без BMBC.',
             'Проверьте свойства, условия и сообщения [!] перед инициализацией. Неподдержанные настройки показаны неактивными.')))
         if hasattr(d,'_compact_refresh'):d._compact_refresh()
         if hasattr(d,'_time_mean_refresh'):d._time_mean_refresh()
@@ -238,8 +235,7 @@ def read_workflow(d):
         blocks_per_run=d.blocks_per_run.value(),velocity_seed=d.seed_functions.isChecked())
     if hasattr(d,'_compact_workflow'):result.update(d._compact_workflow())
     if hasattr(d,'_parts_workflow'):result.update(d._parts_workflow())
-    if result['tdc_enabled'] and d.chk_initialize.isChecked():
-        raise ValueError('Для TDC инициализируйте вручную после Action=0, до разгона. Импортный макрос ещё не назначает периодичность.')
+    if result['tdc_enabled'] and hasattr(d,'_tdc_read'):result['tdc_settings']=d._tdc_read()
     if hasattr(d,'_time_mean_read'):result.update(d._time_mean_read())
     return validate_workflow(result)
 
@@ -256,3 +252,4 @@ def apply_workflow(d,values):
     if hasattr(d,'_compact_apply'):d._compact_apply(values)
     if hasattr(d,'_apply_parts_workflow'):d._apply_parts_workflow(values)
     if hasattr(d,'_time_mean_apply'):d._time_mean_apply(values)
+    if hasattr(d,'_tdc_apply'):d._tdc_apply(values['tdc_settings'])

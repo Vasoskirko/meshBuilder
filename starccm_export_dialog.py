@@ -486,8 +486,6 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
     def read_options(self):
         from starccm_unified_ui import read_workflow
         workflow = read_workflow(self)
-        if workflow["tdc_enabled"]:
-            return self.read_tdc_options(workflow)
         w_mode = "by_rod"
         if self.rb_wall_60.isChecked():
             w_mode = "sectors_60"
@@ -496,9 +494,9 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
 
         sel_subs = [idx + 1 for idx, cb in enumerate(self.sub_checkboxes) if cb.isChecked()]
 
-        return {
+        values = {
             "workflow": workflow,
-            "export_mode": "general",
+            "export_mode": "tdc" if workflow["tdc_enabled"] else "general",
             "tmc_settings": dict(self._tmc_last_valid),
             "import_mesh": self.chk_import.isChecked(),
             "inner_fuse": True,
@@ -538,9 +536,16 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
             "selected_subchannels": sel_subs
         }
 
+        if workflow['tdc_enabled']:
+            from starccm_tdc_plan import build_plan
+            build_plan(self.mesh_result,self.bundle_model,values,self.read_fluid(),self.yplus_data)
+        return values
+
     def apply_options(self, options):
         values = validate_options(options, self.sub_count)
         workflow=values['workflow']
+        if values['export_mode']=='tmc_reference':
+            raise ValueError('Это старый эталонный профиль TMC. Новый TDC требует явных общих периодических пар и нагрева: настройте вкладки 1, 2, 5 и 7. Файл профиля сохранён без изменений.')
         if workflow['boundary_conditions'] or workflow['boundary_pairs'] or workflow['disabled_internal_pairs'] or (workflow['heat_enabled'] and workflow['heat_values']):
             from starccm_surface_catalog import validate_surface_settings
             validate_surface_settings(self.mesh_result,self.bundle_model,values)
@@ -549,6 +554,9 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
             from starccm_time_schedule import schedule
             fluid = dict(self.fluid_props, **workflow['fluid'])
             schedule(workflow,self._surface_catalog,fluid,self.yplus_data,self.lz_m,values['time_step'])
+        if values['export_mode']=='tdc':
+            from starccm_tdc_plan import build_plan
+            build_plan(self.mesh_result,self.bundle_model,values,dict(self.fluid_props,**workflow['fluid']),self.yplus_data)
         # Validate everything before changing the GUI.
         self.rb_inter_fuse.setChecked(values['inter_fuse'])
         self.rb_inter_intf.setChecked(not values['inter_fuse'])
@@ -612,7 +620,7 @@ class StarCcmExportDialog(QDialog if HAS_QT else object):
 
     def generate_and_save(self):
         if getattr(self,'_export_job',None) is not None:return
-        if self.export_mode.currentData() == 'tmc_reference':
+        if self.export_mode.currentData() in ('tmc_reference','tdc'):
             from starccm_unified_export import export_tdc
             export_tdc(self)
             return

@@ -14,6 +14,7 @@ from starccm_macro_generator import generate_starccm_java_macro
 from starccm_export_profile import save_profile,load_profile,validate_options
 from starccm_workflow import validate_workflow,estimate_plot3d_bytes
 from starccm_tmc_export import write_tmc_bundle
+from starccm_tdc_export import write_bundle
 
 class UnifiedWindowTests(unittest.TestCase):
     @classmethod
@@ -80,12 +81,13 @@ class UnifiedWindowTests(unittest.TestCase):
     def test_tdc_bundle_uses_shared_physics_time_and_new_names(self):
         d=self.dialog();d.rb_inter_fuse.setChecked(True);d.rb_turb_srh.setChecked(True);d.tdc_enabled.setChecked(True);d.tdc_equivalence.setChecked(True);d.heat_enabled.setChecked(True)
         d.field_time_step.setText('2,5e-5');d.warmup_duration.setValue(.6);d.block_duration.setValue(.3)
-        values=d.read_options();self.assertEqual(values['tmc_settings']['rho'],747.339)
+        d._pairs=[dict(first='Inlet',second='Outlet',kind='fully_developed',mass_flow=.1,mass_flow_auto=True)]
+        values=d.read_options();self.assertEqual(values['workflow']['fluid']['density'],747.339)
         with tempfile.TemporaryDirectory() as tmp,patch('mesh_subchannel.export_subchannel_plot3d',side_effect=lambda r,p,**kw:Path(p).write_text('XYZ')):
-            paths=write_tmc_bundle(tmp,'mesh.xyz',self.mesh,self.model,values['tmc_settings'],lambda *a:None,unified_options=values)
+            paths=write_bundle(tmp,'mesh.xyz',self.mesh,self.model,d.read_fluid(),d.yplus_data,values,lambda *a:None)
             self.assertEqual(paths[2].name,'TDC_Hybrid.java');control=paths[2].read_text()
             self.assertIn('public class TDC_Hybrid',control);self.assertIn('case 1: phase(false,',control)
-            self.assertIn('${timeStep}',control);self.assertIn('"Maximum Physical Time"',control)
+            self.assertIn('case "TimeStep":return "timeStep"',control);self.assertIn('"Maximum Physical Time"',control)
             self.assertNotIn('TMC_',control);self.assertIn('TDC_START.txt',[p.name for p in paths])
     def test_generated_tdc_compiles_against_explicit_api_contracts(self):
         import shutil,subprocess
@@ -94,14 +96,15 @@ class UnifiedWindowTests(unittest.TestCase):
         if command is None:self.skipTest('Java compiler unavailable; not a Siemens SDK compile')
         d=self.dialog();d.rb_inter_fuse.setChecked(True);d.rb_turb_srh.setChecked(True)
         d.tdc_enabled.setChecked(True);d.tdc_equivalence.setChecked(True);d.heat_enabled.setChecked(True)
+        d._pairs=[dict(first='Inlet',second='Outlet',kind='fully_developed',mass_flow=.1,mass_flow_auto=True)]
         values=d.read_options()
         with tempfile.TemporaryDirectory() as tmp,patch('mesh_subchannel.export_subchannel_plot3d',side_effect=lambda r,p,**kw:Path(p).write_text('XYZ')):
-            root=Path(tmp);paths=write_tmc_bundle(root,'mesh.xyz',self.mesh,self.model,values['tmc_settings'],lambda *a:None,unified_options=values)
+            root=Path(tmp);paths=write_bundle(root,'mesh.xyz',self.mesh,self.model,d.read_fluid(),d.yplus_data,values,lambda *a:None)
             test_tmc_hybrid.write_stubs(root)
             macro=root/'macro';macro.mkdir();shutil.copy(paths[2],macro/paths[2].name)
             run=subprocess.run(command+[str(root/'classes')]+[str(p) for p in root.rglob('*.java') if p!=paths[1] and p!=paths[2]],capture_output=True,text=True,timeout=60)
             self.assertEqual(run.returncode,0,run.stdout+run.stderr)
-            self.assertNotIn('TMC_',paths[5].read_text())
+            self.assertNotIn('TMC_',paths[4].read_text())
     def test_recorded_solver_api_executes_and_invalid_settings_fail(self):
         import shutil,subprocess
         from starccm_unified_support import UNIFIED_SUPPORT

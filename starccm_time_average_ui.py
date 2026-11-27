@@ -28,7 +28,7 @@ def install(d):
     d.block_time_row=QWidget();block=QHBoxLayout(d.block_time_row);block.setContentsMargins(0,0,0,0);block.addWidget(d.block_passes);block.addWidget(d.block_duration);block.addWidget(d.block_seconds_hint);block.addStretch()
     form.addRow(label_help('Разгон · пролёты','t_f=L/U_b, T_runup=N_runup·t_f. Для начального планирования можно взять 10–20 пролётов. Продолжайте до отсутствия дрейфа расхода, перепада давления, температур и балансов; число пролётов не доказывает стационарность.'),d.runup_time_row)
     form.addRow(label_help('Блок · пролёты','T_block=N_block·t_f. Предварительный ориентир — 5–10 пролётов. Блок должен быть длиннее времени корреляции; длительность нужно проверять увеличением окна и сравнением статистики.'),d.block_time_row)
-    form.addRow(label_help('Планируемых блоков','Сейчас N блоков задают одно накопленное окно длиной N·T_block. Например, 5 блоков не создают 5 отдельных средних полей, сбросов или результатов. Независимый блочный контроллер — отдельный этап TDC.'),d.blocks_per_run)
+    form.addRow(label_help('Планируемых блоков','В TDC контроллер сохраняет отдельные скалярные результаты блоков и общее среднее за весь сбор. Поля накапливаются общим окном. Без TDC — одно общее окно, без блочных скалярных результатов.'),d.blocks_per_run)
     d.end_time_auto=QCheckBox('По разгону и сбору');d.end_time_auto.setChecked(True)
     d.end_time=NumberField(1.,minimum=1e-15);d.end_time.setMaximumWidth(145)
     end_row=QWidget();el=QHBoxLayout(end_row);el.setContentsMargins(0,0,0,0);el.addWidget(d.end_time);el.addWidget(d.end_time_auto);el.addStretch()
@@ -58,11 +58,14 @@ def install(d):
         unsteady=d.simulation_mode.currentData()=='unsteady';iapws=d.rb_eos_iapws.isChecked();thermal=d.chk_thermal.isChecked()
         d.tabs.setTabEnabled(d.tabs.indexOf(d.averaging_tab),unsteady)
         d.averaging_tab.setEnabled(unsteady)
-        d.mean_group.setEnabled(unsteady and not d.tdc_enabled.isChecked())
+        d.mean_group.setEnabled(unsteady)
         for key,cb in d.mean_checkboxes.items():
             if key in ('density','viscosity'):cb.setEnabled(iapws);cb.setVisible(iapws)
             if key in ('enthalpy','temperature','wall_heat_flux'):cb.setEnabled(thermal)
-        d.manual_mean_start_row.setVisible(not d.mean_start_auto.isChecked())
+        tdc=d.tdc_enabled.isChecked()
+        d.mean_start_auto.setEnabled(not tdc)
+        d.mean_start_auto.setText('TDC: с начала новой серии после разгона (Action=3)' if tdc else 'После отрезка разгона')
+        d.manual_mean_start_row.setVisible(not d.mean_start_auto.isChecked() and not tdc)
         passes=d.time_input_mode.currentData()=='passes'
         for w in (d.runup_passes,d.block_passes):w.setVisible(passes)
         for w in (d.warmup_duration,d.block_duration):w.setVisible(not passes)
@@ -77,11 +80,11 @@ def install(d):
             if d.end_time_auto.isChecked():d.end_time.setValue(plan['minimum'])
         except (ValueError,KeyError,StopIteration):d.time_minimum_hint.setText('Проверьте время, Re, свойства и геометрию')
         tdc=d.tdc_enabled.isChecked()
-        d.end_time_auto.setEnabled(not tdc)
-        d.end_time.setEnabled(not d.end_time_auto.isChecked() and not tdc)
-        d.end_time.setToolTip('Для TDC окончанием управляет отдельный контроллер этапов.' if tdc else 'Окончание не меньше разгона и планируемого сбора.')
+        d.end_time_auto.setEnabled(True)
+        d.end_time.setEnabled(not d.end_time_auto.isChecked())
+        d.end_time.setToolTip('Окончание не меньше разгона и планируемого сбора.')
     def current_values(parse_end=True):
-        return dict(d._workflow,time_input_mode=d.time_input_mode.currentData(),runup_passes=d.runup_passes.value(),block_passes=d.block_passes.value(),warmup_duration=d.warmup_duration.value(),block_duration=d.block_duration.value(),blocks_per_run=d.blocks_per_run.value(),end_time=0. if d.end_time_auto.isChecked() or not parse_end else d.end_time.value())
+        return dict(d._workflow,tdc_enabled=d.tdc_enabled.isChecked(),time_input_mode=d.time_input_mode.currentData(),runup_passes=d.runup_passes.value(),block_passes=d.block_passes.value(),warmup_duration=d.warmup_duration.value(),block_duration=d.block_duration.value(),blocks_per_run=d.blocks_per_run.value(),end_time=0. if d.end_time_auto.isChecked() or not parse_end else d.end_time.value())
     def read():
         automatic=d.mean_start_auto.isChecked()
         active=d.simulation_mode.currentData()=='unsteady'

@@ -37,7 +37,7 @@ DEFAULTS = dict(workflow=deepcopy(WORKFLOW_DEFAULTS),export_mode='general',tmc_s
     key_planes=True, sub_planes=True, axis_probes=True, selected_subchannels=[],
     create_bad_cells=True, group_objects=True, create_summary=True, create_field_functions=True, initialize_solution=True,
     field_functions=list(FIELD_CHOICES), subchannel_reports=[], time_mean_fields=[], mean_start_step=1, time_step=1e-4)
-ENUMS = dict(export_mode=('general','tmc_reference'),gravity_axis=('-X','+X','-Y','+Y','-Z','+Z'), region_mode=('by_subchannel','monolithic'), inlet_outlet_mode=('by_subchannel','single'),
+ENUMS = dict(export_mode=('general','tmc_reference','tdc'),gravity_axis=('-X','+X','-Y','+Y','-Z','+Z'), region_mode=('by_subchannel','monolithic'), inlet_outlet_mode=('by_subchannel','single'),
     rod_wall_mode=('by_rod','sectors_60','monolithic'), turbulence_model=('rst','hybrid_srh'))
 
 
@@ -88,7 +88,7 @@ def validate_options(options, sub_count=None):
     elif values['region_mode']!='by_subchannel' or values['inlet_outlet_mode']!='by_subchannel':
         raise ValueError('Несовместимые параметры Internal Interface')
     if values['workflow']['run_mode']=='steady' and values['turbulence_model']=='hybrid_srh':raise ValueError('Hybrid SRH–SST требует нестационарного режима')
-    if values['workflow']['tdc_enabled'] != (values['export_mode']=='tmc_reference'):
+    if values['workflow']['tdc_enabled'] != (values['export_mode'] in ('tmc_reference','tdc')):
         raise ValueError('Режим экспорта и флажок TDC не согласованы')
     if values['export_mode']=='tmc_reference':
         if sub_count is not None and sub_count!=2:raise ValueError('Эталон TMC поддерживает два подканала')
