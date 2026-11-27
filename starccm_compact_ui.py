@@ -58,7 +58,7 @@ def install_compact(d):
     pairs,pl=box('Граничные поверхности');cl.addWidget(pairs)
     d.surface_a=QComboBox();d.surface_b=QComboBox();d.surface_condition=QComboBox()
     d.boundary_selection_mode=QComboBox();d.boundary_selection_mode.addItem('Одна поверхность','single');d.boundary_selection_mode.addItem('Пара поверхностей','pair')
-    d.boundary_value=NumberField(1.,minimum=-1e12);d.boundary_value_label=QLabel('Расход, кг/с');d.boundary_flow_auto=QCheckBox('Расход из y+');d.boundary_flow_auto.setChecked(True)
+    d.boundary_value=NumberField(1.,minimum=-1e12);d.boundary_value_label=QLabel('Расход, кг/с');d.boundary_flow_auto=QCheckBox('Аналитический расход · G_subchannel');d.boundary_flow_auto.setChecked(True);d.boundary_flow_auto.setToolTip('В интерфейс передаётся ссылка на G_subchannel. Для отдельного подканала расход масштабируется его долей площади; изменения Re и свойств в STAR пересчитывают расход автоматически. Без флажка — ручное значение.')
     form=QFormLayout();pl.addLayout(form)
     form.addRow('Выбор',d.boundary_selection_mode);form.addRow('Первая',d.surface_a);form.addRow('Вторая',d.surface_b);form.addRow(label_help('Условие','Условия назначаются физическим границам. Periodic сохраняет стандартное Rotational + Translational STAR; трансформацию нужно проверить. Fully Developed соединяет вход и выход одного региона. Давление — избыточное относительно опорного. Для Mass Flow Inlet используется начальная температура; входную турбулентность проверьте в STAR.'),d.surface_condition)
     form.addRow(d.boundary_value_label,d.boundary_value);pl.addWidget(d.boundary_flow_auto)

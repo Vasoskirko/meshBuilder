@@ -107,7 +107,7 @@ class BoundaryEditorTests(unittest.TestCase):
             self.assertIn('setInterfaceType((FullyDevelopedInterface)',code)
             self.assertIn('FullyDevelopedFlowOption.Type.MASS_FLOW_RATE',code)
             self.assertIn('get(FullyDevelopedMassFlowRate.class)',code)
-            self.assertIn('${PeriodicMassFlow_1}',code)
+            self.assertNotIn('PeriodicMassFlow_',code);self.assertIn('setDefinition("1.5400000000000000e-01")',code)
             self.assertLess(code.index('physicalValuesConfigured = configurePhysicalValues'),code.index('setInterfaceType((FullyDevelopedInterface)'))
             self.assertLess(code.index('get(FullyDevelopedMassFlowRate.class)'),code.index('initializeFirstSolution(sim,reuse,'))
             self.select(d,a,b,'fully_developed',.2);self.assertEqual(len(d._pairs),1);self.assertEqual(d._pairs[0]['mass_flow'],.2)

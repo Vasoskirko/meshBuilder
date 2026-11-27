@@ -112,6 +112,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     evaluate_solution = options.get("evaluate_solution_reports", False)
     initialize_solution = options.get("initialize_solution", True)
     create_params = options.get("create_parameters", True)
+    needs_analytic_flow=bool(workflow and any(p['kind']=='fully_developed' and p.get('mass_flow_auto',False) for p in workflow['boundary_pairs']))
     create_reports = options.get("create_mass_reports", True)
     create_scene = options.get("create_quality_scene", True)
     create_histograms = options.get("create_quality_histograms", True)
@@ -168,6 +169,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     digest = hashlib.sha256()
     topology_settings=dict(schema=2 if custom_surfaces else 1,inter_fuse=inter_fuse,rod_mode=rod_mode,io=inlet_outlet_mode,nz=p.nz,height=lz_m)
     if custom_surfaces:topology_settings.update(disabled_internal_pairs=workflow['disabled_internal_pairs'],pairs=workflow['boundary_pairs'],conditions=workflow['boundary_conditions'],rod_kinds={str(rid):bundle_model.rods[rid].rod_type for row in catalog['rods'] for rid in row['rod_ids']})
+    if needs_analytic_flow:topology_settings['periodic_flow_binding']='analytic_reference_v1'
     digest.update(json.dumps(topology_settings,sort_keys=True).encode())
     for block in blocks:
         for coordinate in block:
@@ -602,7 +604,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     else:
         c.append('        createParam(sim,gpm,null,"T_init",0.0,"K",Dimensions.Builder().temperature(1).build(),"${T_ref}");')
     c.append('        createParam(sim,gpm,null,"U_init",' + f'{w_inlet:.16e}' + ',"m/s",Dimensions.Builder().length(1).time(-1).build(),null);')
-    c.append('        if (' + str(create_params).lower() + ') {')
+    c.append('        if (' + str(create_params or needs_analytic_flow).lower() + ') {')
     c.append('        createParam(sim, gpm, null, "Re_in", ' + f"{re_in:.1f}" + ', "", null, null);')
     c.append('        createParam(sim, gpm, null, "P_wet", ' + f"{p_wet_total:.8e}" + ', "m", Dimensions.Builder().length(1).build(), null);')
     c.append('        createParam(sim, gpm, null, "S_in", ' + f"{s_in_total:.8e}" + ', "m^2", Dimensions.Builder().length(2).build(), null);')
@@ -651,8 +653,16 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
                 c.append(f'        selectedPair{i}.getTopology().setSelected(InterfaceConfigurationOption.Type.PERIODIC);')
             if pair['kind']=='fully_developed':
                 c.append(f'        selectedPair{i}.getConditions().get(FullyDevelopedFlowOption.class).setSelected(FullyDevelopedFlowOption.Type.MASS_FLOW_RATE);')
-                c.append(f'        createParam(sim,sim.get(GlobalParameterManager.class),null,"PeriodicMassFlow_{i}",{pair["mass_flow"]:.16e},"kg/s",Dimensions.Builder().mass(1).time(-1).build(),null);')
-                c.append(f'        selectedPair{i}.getValues().get(FullyDevelopedMassFlowRate.class).getFullyDevelopedMassFlowRate().setDefinition("${{PeriodicMassFlow_{i}}}");')
+                if pair.get('mass_flow_auto',False):
+                    definition='${G_subchannel}'
+                    if not inter_fuse:
+                        cap=next(row for row in catalog['endcaps'] if row['id']==pair['first'])
+                        area_name=f'S_in_Sub{cap["sources"][0]}'
+                        c.append(f'        createParam(sim,sim.get(GlobalParameterManager.class),null,"{area_name}",{cap["area"]:.16e},"m^2",Dimensions.Builder().length(2).build(),null);')
+                        definition+='*${'+area_name+'}/${S_in}'
+                else:
+                    definition=f'{pair["mass_flow"]:.16e}'
+                c.append(f'        selectedPair{i}.getValues().get(FullyDevelopedMassFlowRate.class).getFullyDevelopedMassFlowRate().setDefinition("{definition}");')
             c.append(f'        for(GapCandidate candidate:gapCandidates) if(candidate.bnd==pairA{i}||candidate.bnd==pairB{i})candidate.paired=true;')
             c.append(f'        pairCount++; pairedNames.add("SelectedInterface_{i}");')
         for i,bc in enumerate(workflow['boundary_conditions'],1):
@@ -693,7 +703,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
     if create_field_functions:
         c.append('        supportFunctions(sim,' + f'{lz_m:.16e}' + ', Arrays.asList(' + ','.join(json.dumps(v) for v in field_choices) + '));')
     if workflow and workflow['velocity_seed']:
-        if not create_params:c.append('        createParam(sim,sim.get(GlobalParameterManager.class),null,"U_b",'+str(float(yplus_data.get('velocity',5.62)))+',"m/s",Dimensions.Builder().length(1).time(-1).build(),null);')
+        if not (create_params or needs_analytic_flow):c.append('        createParam(sim,sim.get(GlobalParameterManager.class),null,"U_b",'+str(float(yplus_data.get('velocity',5.62)))+',"m/s",Dimensions.Builder().length(1).time(-1).build(),null);')
         c.append('        createParam(sim,sim.get(GlobalParameterManager.class),null,"pi",Math.PI,"",null,null);')
         c.append('        createParam(sim,sim.get(GlobalParameterManager.class),null,"Apert",0.,"m/s",Dimensions.Builder().length(1).time(-1).build(),"0.01*${U_b}");')
         c.append('        exportHeight(sim,'+str(lz_m)+');')

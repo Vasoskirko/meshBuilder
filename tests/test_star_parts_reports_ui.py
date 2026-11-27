@@ -42,11 +42,34 @@ class PartsReportsTests(unittest.TestCase):
         values=d.read_options();self.assertAlmostEqual(values['workflow']['boundary_pairs'][0]['mass_flow'],expected*2)
         d.surface_tree.clearSelection();d._surface_tree_items['Inlet_s1'].setSelected(True);d._surface_tree_items['Outlet_s1'].setSelected(True)
         self.assertAlmostEqual(d.boundary_value.value(),expected*2)
-        code=self.macro(d);self.assertIn(f'{expected*2:.16e}',code)
+        code=self.macro(d);self.assertIn('setDefinition("${G_subchannel}*${S_in_Sub1}/${S_in}")',code);self.assertNotIn('PeriodicMassFlow_',code)
         other=self.dialog();other.apply_options(values);self.assertTrue(other._pairs[0]['mass_flow_auto'])
         d.topology_choice.setCurrentIndex(1)
         fused=calculator_mass_flow(d._surface_catalog,d.read_fluid(),d.yplus_data,'Inlet')
         self.assertAlmostEqual(fused,expected*4,10)
+    def test_fully_developed_links_analytic_reference_even_without_optional_parameters(self):
+        from starccm_macro_generator import generate_starccm_java_macro
+        for fuse in (False,True):
+            d=self.dialog();d.topology_choice.setCurrentIndex(int(fuse));d.boundary_selection_mode.setCurrentIndex(1)
+            first,second=('Inlet','Outlet') if fuse else ('Inlet_s1','Outlet_s1')
+            d.surface_a.setCurrentIndex(d.surface_a.findData(first));d.surface_b.setCurrentIndex(d.surface_b.findData(second))
+            d.surface_condition.setCurrentIndex(d.surface_condition.findData('fully_developed'));d.add_surface_pair()
+            values=d.read_options();values['create_parameters']=False
+            code=generate_starccm_java_macro('mesh.xyz',self.mesh,self.model,d.read_fluid(),d.yplus_data,values)
+            self.assertNotIn('PeriodicMassFlow_',code)
+            definition='${G_subchannel}' if fuse else '${G_subchannel}*${S_in_Sub1}/${S_in}'
+            self.assertIn('getFullyDevelopedMassFlowRate().setDefinition("'+definition+'")',code)
+            self.assertIn('"G_subchannel", 0.0, "kg/s"',code)
+            self.assertIn('"${rho}*${U_b}*${S_in}"',code)
+            self.assertNotIn('createParam(sim,sim.get(GlobalParameterManager.class),null,"U_b",',code)
+            if fuse:self.assertNotIn('"S_in_Sub1"',code)
+            else:
+                area=next(row['area'] for row in d._surface_catalog['endcaps'] if row['id']=='Inlet_s1')
+                self.assertIn(f'"S_in_Sub1",{area:.16e}',code)
+            # Required reference parameters must not remain behind an if(false).
+            prefix=code[:code.index('createParam(sim, gpm, null, "Re_in"')]
+            self.assertTrue(prefix.rstrip().endswith('if (true) {'))
+
     def test_manual_periodic_flow_remains_manual(self):
         d=self.dialog();d.boundary_selection_mode.setCurrentIndex(1)
         d.surface_a.setCurrentIndex(d.surface_a.findData('Inlet_s1'));d.surface_b.setCurrentIndex(d.surface_b.findData('Outlet_s1'))
