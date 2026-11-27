@@ -40,6 +40,8 @@ def install(d):
     d.tdc_paths_table.setToolTip('Знак каждой мощности — наружу из указанного подканала. На каждый контрольный объём допускается один неизвестный перенос: целевой.')
     d.tdc_reconstruction=QCheckBox('Для реконструкции: подтверждаю скалярное замыкание диффузии и проверку баланса')
     d.tdc_reconstruction.setToolTip('Используется EffectiveConductivity·grad(T), не Boundary Heat Flux на сечении. Это постобработочная реконструкция, а не точный численный поток по граням.');pl.addWidget(d.tdc_reconstruction)
+    d.tdc_components=QCheckBox('Молекулярный и полный адвективный перенос через целевой зазор');d.tdc_components.setChecked(True)
+    d.tdc_components.setToolTip('Молекулярный: −λ∫grad(T)·n dS. Адвективный: ρCp∫(T−T_init)u_n dS, включая разрешённые пульсации. Его среднее не равно переносу средним течением. Остаток после вычитания молекулярного переноса не объявляется чисто турбулентным.');pl.addWidget(d.tdc_components)
     method,ml=box('Определение и усреднение');body.addWidget(method);mf=QFormLayout();ml.addLayout(mf)
     mf.addRow(label_help('Температурная разность','На шаге: T_b=∫ρu_zT/∫ρu_z, затем трапецеидальное усреднение по длине и среднее по времени. Более высокий q не гарантирует, что A горячее: проверь фактическую ΔT после разгона.'),QLabel('ΔT = T_A − T_B; потоковые, средние по длине'))
     d.tdc_sections_hint=QLabel();mf.addRow('Сечения',d.tdc_sections_hint)
@@ -124,13 +126,13 @@ def install(d):
         view.highlight(selected);d.preview_selection.setText('Целевой обмен TDC: '+', '.join(selected))
     def read():
         stash_paths()
-        return validate_tdc(dict(TDC_DEFAULTS,a=d.tdc_a.currentData(),b=d.tdc_b.currentData(),target=d._tdc_target_id,path_methods=deepcopy(d._tdc_methods),path_reports=deepcopy(d._tdc_reports),scalar_diffusion_confirmed=d.tdc_reconstruction.isChecked(),sections=d.spin_sub_n_planes.value(),blocks=d.tdc_blocks.isChecked(),min_delta_t=d.tmc_fields['min_delta_t'].value(),balance_tolerance=d.tdc_balance_tol.value()))
+        return validate_tdc(dict(TDC_DEFAULTS,target_components=d.tdc_components.isChecked(),a=d.tdc_a.currentData(),b=d.tdc_b.currentData(),target=d._tdc_target_id,path_methods=deepcopy(d._tdc_methods),path_reports=deepcopy(d._tdc_reports),scalar_diffusion_confirmed=d.tdc_reconstruction.isChecked(),sections=d.spin_sub_n_planes.value(),blocks=d.tdc_blocks.isChecked(),min_delta_t=d.tmc_fields['min_delta_t'].value(),balance_tolerance=d.tdc_balance_tol.value()))
     def apply(v):
         v=validate_tdc(v);d._tdc_busy=True
         try:
             d._tdc_rows=[];d._tdc_methods=deepcopy(v['path_methods']);d._tdc_reports=deepcopy(v['path_reports']);d._tdc_target_id=v['target'] or (v['gaps'][0] if v['gaps'] else '')
             for key,c in (('a',d.tdc_a),('b',d.tdc_b)):c.setCurrentIndex(c.findData(v[key]))
-            d.tdc_reconstruction.setChecked(v['scalar_diffusion_confirmed']);d.tdc_blocks.setChecked(v['blocks']);d.tdc_balance_tol.setValue(v['balance_tolerance']);d.tmc_fields['min_delta_t'].setValue(v['min_delta_t'])
+            d.tdc_components.setChecked(v['target_components']);d.tdc_reconstruction.setChecked(v['scalar_diffusion_confirmed']);d.tdc_blocks.setChecked(v['blocks']);d.tdc_balance_tol.setValue(v['balance_tolerance']);d.tmc_fields['min_delta_t'].setValue(v['min_delta_t'])
             if d.tdc_enabled.isChecked():d.spin_sub_n_planes.setValue(v['sections'])
         finally:d._tdc_busy=False
         refresh()

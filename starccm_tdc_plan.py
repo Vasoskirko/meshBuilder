@@ -7,7 +7,7 @@ from starccm_surface_catalog import surface_catalog, validate_pairs
 from starccm_flow_defaults import calculator_mass_flow
 from starccm_time_schedule import schedule
 
-TDC_DEFAULTS=dict(target='',path_methods={},path_reports={},scalar_diffusion_confirmed=False,a=1,b=2,gaps=[],equivalent=False,min_delta_t=.01,balance_tolerance=.05,
+TDC_DEFAULTS=dict(target_components=True,target='',path_methods={},path_reports={},scalar_diffusion_confirmed=False,a=1,b=2,gaps=[],equivalent=False,min_delta_t=.01,balance_tolerance=.05,
                   sections=11,blocks=True,conduction=False,compensating_source=True)
 
 def validate_tdc(data):
@@ -53,7 +53,7 @@ def build_plan(result,model,options,fluid,yplus=None):
         if set(r['sources'])&{a,b} and assigned.get(r['id'],'wall')!='wall':raise ValueError('Для TDC поверхности ТВЭЛ/НК/ИК должны оставаться стенками')
     target,paths,all_paths=account_paths(cat,w,v)
     exchanges=[dict(id=target['connection'],area=target['area'],periodic=target['kind']=='periodic',normal=target['normal'])]
-    if v['conduction']:raise ValueError('Молекулярная поправка пока недоступна: нужен проверенный полный диффузионный поток на всех зазорах')
+    if v['conduction']:raise ValueError('Турбулентная поправка пока недоступна: нужно отдельно определить перенос средним течением; молекулярный поток доступен как диагностика целевого зазора')
     if not v['compensating_source']:raise ValueError('Периодический нагреваемый TDC требует компенсационного объёмного стока')
     if not w['heat_enabled'] or not w['heat_values']:raise ValueError('Задайте нагрев во вкладке «Физика»')
     time=schedule(w,cat,fluid,yplus or {},result.params.z_len,options['time_step'])

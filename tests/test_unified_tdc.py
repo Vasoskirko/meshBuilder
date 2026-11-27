@@ -90,7 +90,7 @@ class UnifiedTdcTests(unittest.TestCase):
         from starccm_tdc_export import replace_method
         cmd,java=jt.compiler()
         if cmd is None:self.skipTest('JDK unavailable')
-        d=enable_tdc(self.dialog());code=render_controller(self.plan(d),d.read_options())
+        d=enable_tdc(self.dialog());d.tdc_components.setChecked(False);code=render_controller(self.plan(d),d.read_options())
         def method(name):
             marker='UNIQUE_MARKER';changed=replace_method(code,name,marker)
             start=changed.index(marker);suffix=changed[start+len(marker):]

@@ -5,6 +5,7 @@ import json, math, hashlib, tempfile
 from starccm_tdc_plan import build_plan
 from starccm_export_geometry import plane_label
 from starccm_tdc_flux import BOUNDARY_SUPPORT,emit_flux_reports
+from starccm_tdc_components import emit_target_components,DERIVED,KEYS
 
 ROOT=Path(__file__).parent
 
@@ -35,7 +36,7 @@ def render_controller(plan,options):
     cat=plan['catalog'];v=plan['settings'];height=plan['height'];dt=options['time_step'];w=options['workflow']
     source=(ROOT/'tmc'/'TMC_Hybrid.java').read_text().replace('TMC','TDC')
     source=source.replace('// STAR-CCM+ 2602 add-on for the two-subchannel reference mesh.','// STAR-CCM+ 2602 unified effective energy-balance TDC; see TDC_START.txt.')
-    source=source.replace('private static final String OWNER="meshBuilder.TDC.v1"','private static final String OWNER="meshBuilder.TDC.unified.v3"')
+    source=source.replace('private static final String OWNER="meshBuilder.TDC.v1"','private static final String OWNER="meshBuilder.TDC.unified.v4"')
     import re
     source=re.sub(r'    private static final String\[\] WALLS[12]=.*?;\n','',source)
     source=source.replace('    private NamedObject gap;','    private NamedObject gap;\n    private final List<Region> modelRegions=new ArrayList<>();')
@@ -57,7 +58,7 @@ def render_controller(plan,options):
             if n in row['sources']:pre.append(f'          rod.add((Boundary)required(modelRegions.get({ridx}).getBoundaryManager(),"{row["id"]}",Boundary.class));')
         pre.append('          walls.add(rod); }')
     pre.append('    }');source=replace_method(source,'preflightGeometry','\n'.join(pre))
-    defaults=dict(Action=(0,'dim()',''),Schema=(3,'dim()',''),Ready=(0,'dim()',''),Length=(height,'dim(0,1,0,0)','m'),
+    defaults=dict(Action=(0,'dim()',''),Schema=(4,'dim()',''),Ready=(0,'dim()',''),Length=(height,'dim(0,1,0,0)','m'),
       HydroDuration=(math.ceil(plan['time']['warmup']/dt-1e-12)*dt,'dim(0,0,1,0)','s'),
       BlockDuration=(math.ceil(plan['time']['block']/dt-1e-12)*dt if v['blocks'] else plan['time']['end']-math.ceil(plan['time']['warmup']/dt-1e-12)*dt,'dim(0,0,1,0)','s'),
       PlannedBlocks=(w['blocks_per_run'] if v['blocks'] else 1,'dim()',''),EndTime=(plan['time']['end'],'dim(0,0,1,0)','s'),BlocksToRun=(w['blocks_per_run'] if v['blocks'] else 1,'dim()',''),SeriesId=(0,'dim()',''),CompletedBlocks=(0,'dim()',''),AllowStatistics=(0,'dim()',''),
@@ -75,7 +76,7 @@ def render_controller(plan,options):
         for(String key:new String[]{"Rho","Mu","Cp","Lambda","Length","TimeStep","BlockDuration","MinDeltaT","BalanceTolerance"})positive(value(key),key);
     }''')
     source=source.replace('            requireSetup(); bindReports();', '            requireSetup(); bindReports();if((action==1||action==2||action==3||action==4) && !((Boolean)call(sim.getSolution(),"isInitialized")))throw new IllegalStateException("Initialize after TDC Action=0 before advancing time or starting statistics");')
-    source=source.replace('parameterOr("Schema",0)!=1','parameterOr("Schema",0)!=3')
+    source=source.replace('parameterOr("Schema",0)!=1','parameterOr("Schema",0)!=4')
     source=source.replace('region.getConditions().get(EnergyUserVolumeSourceOption.class).setSelected(EnergyUserVolumeSourceOption.Type.VOLUMETRIC_HEAT_SOURCE);','for(Region r:modelRegions) r.getConditions().get(EnergyUserVolumeSourceOption.class).setSelected(EnergyUserVolumeSourceOption.Type.VOLUMETRIC_HEAT_SOURCE);')
     source=replace_method(source,'configureSource','''    private void configureSource() {
         for(Region r:modelRegions) r.getValues().get(VolumetricHeatSourceProfile.class).getMethod(ConstantScalarProfileMethod.class).getQuantity().setDefinition(rr("qvSource"));
@@ -145,6 +146,7 @@ def render_controller(plan,options):
     lines.append('        expression("MassFluxRef","${rho} * ${U_b}",dim(1,-2,-1,0),true);')
     side_lines,pair_check=emit_flux_reports(plan,options['inter_fuse'])
     lines.extend(side_lines)
+    if v["target_components"]:lines.extend(emit_target_components(plan,options["inter_fuse"]))
     lines.append('        for(Object o:objects(sim.getReportManager())) if(o instanceof Report) { Report r=(Report)o;String name=r.getPresentationName();if(tagged(r,"meshBuilder.Managed") && !name.startsWith("Quality_") && name.matches(".*(MassFlow|Imbalance|PressureDrop|Reynolds|Darcy|BulkTemperature|WallTemperature|HeatPower|Heat_Flux|Energy_Flow|TotalEnthalpy|NormalVelocity|MassFluxMean|EnthalpyFlux).*"))sample(r); }')
     lines.append('        createMonitors();\n    }')
     source=replace_method(source,'configureReports','\n'.join(lines))
@@ -161,10 +163,13 @@ def render_controller(plan,options):
         r.put("OtherOut_A_W",otherA);r.put("OtherOut_B_W",otherB);r.put("SidePairRelative",pairRelative);
         r.put("Exchange_A_W",qa);r.put("Exchange_B_W",qb);r.put("BalanceMismatch_W",qa-qb);
         r.put("BalanceRelative",relative);r.put("ResultValid",valid?1.:0.);
+        {DERIVED if v["target_components"] else ""}
         if(valid)r.put("TDC_Effective",qa/({plan['area']:.17g}*value("Cp")*g*delta));
         return r;
     }}''')
     # Save invalid blocks and diagnostics; never replace a failed ratio by an accepted result.
+    component_keys=','.join(json.dumps(k) for k in KEYS) if v['target_components'] else ''
+
     source=source.replace('if(!exists)out.write("block,start_s,end_s,"+String.join(",",data.keySet())+"\\n");','if(!exists)out.write("block,start_s,end_s,"+String.join(",",derivedKeys())+"\\n");')
     source=source.replace('for(double v:data.values())out.write(","+v);out.newLine();','for(String key:derivedKeys())out.write(","+(data.containsKey(key)?data.get(key):""));out.newLine();')
     source=source.replace('    private void appendBlock(','''    private List<String> derivedKeys(){return Arrays.asList("Duration_s","DeltaTMean_K","MassFluxMean_kg_m2_s","Exchange_A_W","Exchange_B_W","OtherOut_A_W","OtherOut_B_W","SidePairRelative","BalanceMismatch_W","BalanceRelative","ResultValid","TDC_Effective");}
@@ -192,6 +197,7 @@ def render_controller(plan,options):
         }
     }
     private void exportSummary()''')
+    if component_keys:source=source.replace('"ResultValid","TDC_Effective");}', '"ResultValid","TDC_Effective",'+component_keys+');}')
     # Publish mean values with dimensions; unavailable TDC is deliberately not a stale report value.
     source=source.replace('for(Map.Entry<String,Double> entry:derived(w).entrySet()) {','''Map<String,Double> result=derived(w);
         Object previous=find(sim.getReportManager(),P+prefix+"TDC_Effective");
@@ -311,7 +317,10 @@ Boundary Conduction Heat Flux должен быть определён на де
 Все компоненты используют чувствительную энтальпию Cp*(T−T_init), а не смешение с TotalEnthalpy.
 Это эффективный обмен: включает молекулярную и среднюю конвективную составляющие.
 Проверьте средние Path_*_MassFlowOut: ненулевой направленный расход не является чистым перемешиванием; мощность зависит от T_init.
-Молекулярная поправка и оценка статистической погрешности не реализованы.
+Если включена диагностика: Target_*_Advective — полная адвекция с разрешёнными пульсациями; Target_*_Molecular — молекулярная λ·grad(T).
+Target_NonMolecular_* — остаток без молекулярного переноса, НЕ чисто турбулентный.
+Средняя конвекция требует интеграла произведения средних полей u_n и T за то же окно, а не произведения скалярных отчётов.
+Автоматическое выделение средней конвекции, турбулентного коэффициента и оценка погрешности ещё не реализованы.
 Не менять dt, физику, BC и не запускать шаги вне контроллера в активной серии.
 После изменения физики/геометрии — новый экспорт и новая симуляция.
 Нативный запуск и Siemens SDK должны быть проверены в STAR 2602; Python/Java-контракты их не заменяют.
