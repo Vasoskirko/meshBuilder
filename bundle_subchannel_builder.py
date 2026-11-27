@@ -98,6 +98,8 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
 
         self.setStyleSheet(SCIENTIFIC_QSS)
         self.init_ui()
+        from meshbuilder.geometry.ui import install as install_geometry_diagnostics
+        install_geometry_diagnostics(self)
         project_menu=self.menuBar().addMenu('Проект')
         for title,shortcut,callback in (
                 ('Сохранить проект','Ctrl+S',lambda:self.on_save_json()),
@@ -317,41 +319,16 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
                 self.rebuild_view()
                 return
 
-        # 2. Клик по кнопкам "+" кандидатов
-        candidates = self.model.get_candidate_neighbors()
-        for c_id in candidates:
-            sub = self.model.subchannels[c_id]
-            dist = np.linalg.norm(click_pt - np.array(sub.fluid_center))
-            if dist <= self.model.pitch * 0.45:
-                self.model.add_subchannel(c_id)
-                self.update_inspector()
-                self.rebuild_view()
-                return
-
-        # 3. Клик по кнопкам "−" уже выбранных подканалов
-        for s_id in self.model.selected_subchannels:
-            sub = self.model.subchannels[s_id]
-            dist = np.linalg.norm(click_pt - np.array(sub.fluid_center))
-            if dist <= self.model.pitch * 0.45:
-                self.model.remove_subchannel(s_id)
-                self.update_inspector()
-                self.rebuild_view()
-                return
-
-        # 4. Клик по любому свободному подканалу в зазоре
-        best_id = None
-        min_d = float("inf")
-        for s_id, sub in self.model.subchannels.items():
-            dist = np.linalg.norm(click_pt - np.array(sub.fluid_center))
-            if dist < min_d and dist <= self.model.pitch * 0.65:
-                min_d = dist
-                best_id = s_id
-
-        if best_id is not None:
-            self.model.select_subchannel(best_id)
-            self.update_inspector()
-            self.rebuild_view()
+        from meshbuilder.geometry.hit_test import hit_subchannels
+        hits=hit_subchannels(self.model,xdata,ydata)
+        if len(hits)>1:
+            self.model.deselect_rod();self.update_inspector();self.rebuild_view()
+            self.inspect_label.setText('Точка принадлежит нескольким подканалам: '+', '.join('S'+str(k) for k in hits)+'. Проверьте перекрытия геометрии.')
             return
+        if hits:
+            self.model.deselect_rod()
+            self.model.select_subchannel(hits[0])
+            self.update_inspector();self.rebuild_view();return
 
         # 5. Клик по пустому пространству -> снимает выбор со стержня
         if self.model.active_rod_coord is not None:
@@ -559,6 +536,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
         self.inspect_label.setText("Кликните на подканал (+) или на стержень для настройки.")
 
     def rebuild_view(self):
+        from meshbuilder.geometry.ui import label_point,refresh as refresh_geometry_diagnostics
         self.validate_mesh_inputs()
         if self._custom_limits is None and hasattr(self, "ax"):
             r_base = (self.model.s_flat / 2.0) / math.cos(math.radians(30)) * 1.08
@@ -622,8 +600,8 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
             )
             self.ax.add_patch(poly)
             self.ax.text(
-                sub.fluid_center[0],
-                sub.fluid_center[1],
+                label_point(self.model,sub.sub_id)[0],
+                label_point(self.model,sub.sub_id)[1],
                 "−",
                 ha="center",
                 va="center",
@@ -649,8 +627,8 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
             )
             self.ax.add_patch(poly)
             self.ax.text(
-                sub.fluid_center[0],
-                sub.fluid_center[1],
+                label_point(self.model,sub.sub_id)[0],
+                label_point(self.model,sub.sub_id)[1],
                 "+",
                 ha="center",
                 va="center",
@@ -682,8 +660,8 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
                     "corner": "Углов.",
                 }.get(sub.sub_type, "+")
                 self.ax.text(
-                    sub.fluid_center[0],
-                    sub.fluid_center[1],
+                    label_point(self.model,sub.sub_id)[0],
+                    label_point(self.model,sub.sub_id)[1],
                     lbl,
                     ha="center",
                     va="center",
@@ -738,14 +716,16 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
                 zorder=7,
             )
 
+        report=refresh_geometry_diagnostics(self)
+        coverage_name='ВСЕЙ сборки ТВС' if report is not None and report.status=='ok' else 'построенных подканалов (полнота сборки не подтверждена)'
         all_summary = self.model.get_total_assembly_summary()
         all_text = ""
         if all_summary:
             all_text = (
-                f"<br><b>Гидравлика ВСЕЙ сборки ТВС ({all_summary['total_subchannels']} подканалов):</b><br>"
-                f"&bull; <b>Полная площадь A:</b> {all_summary['total_a_fluid_mm2']:.2f} мм²<br>"
-                f"&bull; <b>Полный периметр P:</b> {all_summary['total_p_wet_mm']:.2f} мм<br>"
-                f"&bull; <b>D_h всей ТВС:</b> <b>{all_summary['total_d_h_mm']:.2f} мм</b>"
+                f"<br><b>Гидравлика {coverage_name} ({all_summary['total_subchannels']} подканалов):</b><br>"
+                f"&bull; <b>Суммарная площадь A:</b> {all_summary['total_a_fluid_mm2']:.2f} мм²<br>"
+                f"&bull; <b>Суммарный периметр P:</b> {all_summary['total_p_wet_mm']:.2f} мм<br>"
+                f"&bull; <b>D_h:</b> <b>{all_summary['total_d_h_mm']:.2f} мм</b>"
             )
 
         num_selected = len(self.model.selected_subchannels)
