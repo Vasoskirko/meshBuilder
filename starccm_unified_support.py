@@ -47,22 +47,24 @@ def flat_groups(source):
     return source.replace('"MeshQuality"','"Quality"').replace('"Coordinates"','"Geometry"').replace('"Transient"','"Time"')
 
 HEAT_SUPPORT = r'''
-    private void configureHeatInput(Simulation sim,String name,double value) {
-        GlobalParameterManager manager=sim.get(GlobalParameterManager.class);
-        ScalarGlobalParameter parameter=findOwned(sim,manager,name,ScalarGlobalParameter.class);
+    private UserFieldFunction configureHeatInput(Simulation sim,String name,double value) {
+        if(!Double.isFinite(value) || value<0)throw new IllegalArgumentException("Invalid heat flux "+name);
+        UserFieldFunction field=findOwned(sim,sim.getFieldFunctionManager(),name,UserFieldFunction.class);
         String inputTag="meshBuilder.HeatInput."+name+"."+Double.toHexString(value);
-        if(parameter==null) {
-            createParam(sim,manager,null,name,value,"W/m^2",Dimensions.Builder().mass(1).time(-3).build(),null);
-            parameter=findOwned(sim,manager,name,ScalarGlobalParameter.class);
+        if(field==null) {
+            field=sim.getFieldFunctionManager().createFieldFunction();
+            field.setPresentationName(name);own(sim,field);field.setFunctionName(name);
         }
-        if(parameter==null)throw new IllegalStateException("Missing heat parameter "+name);
-        // Identical macro reruns preserve in-STAR edits. A newly exported q
-        // explicitly changes the value, including a return to an earlier input.
-        if(!tagged(parameter,inputTag)) {
-            parameter.getQuantity().setValueAndUnits(value,sim.getUnitsManager().getObject("W/m^2"));
-            List<Tag> current=tags(parameter);
+        field.getTypeOption().setSelected(FieldFunctionTypeOption.Type.SCALAR);
+        // W/m^2 = kg/s^3; set physical dimensions, never look up a unit by text.
+        field.setDimensions(Dimensions.Builder().mass(1).time(-3).build());
+        // Keep manual STAR expressions on an identical macro rerun.
+        if(!tagged(field,inputTag)) {
+            field.setDefinition(Double.toString(value));
+            List<Tag> current=tags(field);
             current.removeIf(t->t.getPresentationName().startsWith("meshBuilder.HeatInput."+name+"."));
-            sim.get(TagManager.class).setTags(parameter,current);mark(sim,parameter,inputTag);
+            sim.get(TagManager.class).setTags(field,current);mark(sim,field,inputTag);
         }
+        return field;
     }
 '''

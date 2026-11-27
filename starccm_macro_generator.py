@@ -671,8 +671,7 @@ def generate_starccm_java_macro(xyz_filename, mesh_result, bundle_model, fluid_p
         c.append('        if (!physicalValuesConfigured && !reuse) throw new IllegalStateException("Heat setup requires configured physics");')
         for i,row in enumerate((r for r in catalog['rods'] if r['kind']=='fuel'),1):
             key=row['id'];value=workflow['heat_values'][key]
-            c.append(f'        configureHeatInput(sim,"q{i}",{value:.16e});')
-            c.append(f'        UserFieldFunction heatQ{i}=getOrCreateFF(sim,"HeatFlux_q{i}","${{q{i}}}");heatQ{i}.setDimensions(Dimensions.Builder().mass(1).time(-3).build());')
+            c.append(f'        UserFieldFunction heatQ{i}=configureHeatInput(sim,"q{i}",{value:.16e});')
             c.append(f'        int heated{i}=0; for(Boundary boundary:allRods) if(tagged(boundary,"meshBuilder.HeatGroup.{key}")) {{')
             c.append(f'            boundary.getConditions().get(WallThermalOption.class).setSelected(WallThermalOption.Type.HEAT_FLUX);HeatFluxProfile profile=boundary.getValues().get(HeatFluxProfile.class);profile.setMethod(FunctionScalarProfileMethod.class);profile.getMethod(FunctionScalarProfileMethod.class).setFieldFunction(heatQ{i});heated{i}++; }}')
             c.append(f'        if(heated{i}==0)throw new IllegalStateException("Missing heat group {key}");')

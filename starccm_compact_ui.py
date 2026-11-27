@@ -125,8 +125,8 @@ def install_compact(d):
     ll.addStretch();rl.addStretch()
     heat,hl=box('Тепловой поток на ТВЭЛ');physics.addWidget(heat)
     d.heat_enabled=QCheckBox('Задать тепловой поток');hl.addWidget(d.heat_enabled)
-    d.heat_table=QTableWidget(0,3);d.heat_table.setHorizontalHeaderLabels(['Параметр','Группа стенок','q, Вт/м²']);d.heat_table.horizontalHeader().setSectionResizeMode(1,QHeaderView.Stretch);d.heat_table.setMaximumHeight(240);hl.addWidget(d.heat_table)
-    hl.addWidget(label_help('Соответствие q и стенок','Список следует группировке на вкладке «Сетка». Создаются параметры qN и функции HeatFlux_qN. В нагрев входят только ТВЭЛ, НК и ИК исключены. Положительный q нагревает жидкость. Для TDC все сектора одного подканала должны иметь одинаковый q.'))
+    d.heat_table=QTableWidget(0,3);d.heat_table.setHorizontalHeaderLabels(['Функция поля','Группа стенок','q, Вт/м²']);d.heat_table.horizontalHeader().setSectionResizeMode(1,QHeaderView.Stretch);d.heat_table.setMaximumHeight(240);hl.addWidget(d.heat_table)
+    hl.addWidget(label_help('Соответствие q и стенок','Список следует группировке на вкладке «Сетка». Создаются скалярные функции поля qN с размерностью Вт/м² (кг/с³), без глобальных параметров qN. В нагрев входят только ТВЭЛ, НК и ИК исключены. Положительный q нагревает жидкость. Для TDC все сектора одного подканала должны иметь одинаковый q.'))
     d.heat_status=QLabel();d.heat_status.setWordWrap(True);hl.addWidget(d.heat_status)
     physics.addStretch()
     # Existing reference controls remain aliases for old profile imports, not a second input form.

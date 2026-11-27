@@ -91,6 +91,8 @@ class CompactExportTests(unittest.TestCase):
         code=self.macro(d)
         self.assertIn('configureHeatInput(sim,"q1",1.2345000000000000e+04)',code)
         self.assertIn('configureHeatInput(sim,"q2",2.4690000000000000e+04)',code)
+        self.assertNotIn('HeatFlux_q1',code);self.assertNotIn('getObject("W/m^2")',code)
+        self.assertNotIn('createParam(sim,manager,null,name,value,"W/m^2"',code)
         self.assertIn('meshBuilder.HeatGroup.rod_s1',code);self.assertIn('setFieldFunction(heatQ2)',code)
         other=deepcopy(self.model);other.rods[13].rod_type='guide'
         cat=surface_catalog(self.mesh,other,'monolithic')
@@ -172,7 +174,7 @@ class CompactExportTests(unittest.TestCase):
         with self.assertRaises(ValueError):generate_starccm_java_macro('mesh.xyz',self.mesh,self.model,d.read_fluid(),d.yplus_data,options)
         options=d.read_options();options['workflow']['disabled_internal_pairs']=['missing']
         with self.assertRaises(ValueError):generate_starccm_java_macro('mesh.xyz',self.mesh,self.model,d.read_fluid(),d.yplus_data,options)
-    def test_heat_parameter_updates_execute_without_erasing_same_macro_edits(self):
+    def test_heat_field_updates_execute_without_erasing_same_macro_edits(self):
         import shutil,subprocess
         from starccm_unified_support import HEAT_SUPPORT
         java=shutil.which('java') or os.environ.get('TMC_JAVA')

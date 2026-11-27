@@ -12,6 +12,7 @@ GROUP_SUPPORT = r'''
             return "FlowReference";
         }
         if (category.equals("FieldFunctions")) {
+            if (name.matches("q[1-9][0-9]*")) return "Thermal";
             if (name.startsWith("Bad") || Arrays.asList("CellQuality","FaceValidity","VolumeChange","SkewnessAngle").contains(name)) return "MeshQuality";
             if (Arrays.asList("One","X","Y","Z","ZFraction").contains(name)) return "Coordinates";
             if (name.contains("Mask")) return "SubchannelMasks";
