@@ -4,7 +4,8 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolb
 from matplotlib.figure import Figure
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFontDatabase
-from PySide6.QtWidgets import QMenu, QToolButton, QCheckBox, QPlainTextEdit, QComboBox, QDoubleSpinBox, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QPushButton, QScrollArea, QSplitter, QStackedWidget, QTableWidget, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QMenu, QToolButton, QCheckBox, QPlainTextEdit, QComboBox, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QPushButton, QScrollArea, QSplitter, QStackedWidget, QTableWidget, QTabWidget, QVBoxLayout, QWidget
+from decimal_spinbox import DecimalSpinBox
 from mesh_subchannel_subpanel import MeshSubpanel
 
 
@@ -88,7 +89,7 @@ class BundleBuilderUiMixin:
 
         row_diam = QHBoxLayout()
         row_diam.addWidget(QLabel("Диаметр, мм:"))
-        self.rod_diam_spin = QDoubleSpinBox()
+        self.rod_diam_spin = DecimalSpinBox()
         self.rod_diam_spin.setRange(2.0, 80.0)
         self.rod_diam_spin.setValue(9.1)
         self.rod_diam_spin.editingFinished.connect(self.apply_custom_rod_diameter)
@@ -243,7 +244,7 @@ class BundleBuilderUiMixin:
         for key,spec in METRICS.items():self.combo_mesh_diagnostic.addItem(spec['title'],key)
         diagnostics_bar.addWidget(self.combo_mesh_diagnostic)
         diagnostics_bar.addWidget(QLabel('Порог:',self))
-        self.spin_diagnostic_threshold=QDoubleSpinBox(self)
+        self.spin_diagnostic_threshold=DecimalSpinBox(self)
         self.spin_diagnostic_threshold.setDecimals(3)
         diagnostics_bar.addWidget(self.spin_diagnostic_threshold)
         self.btn_mesh_diagnostic=QPushButton('Найти ячейки',self)
@@ -361,7 +362,7 @@ class BundleBuilderUiMixin:
     def add_double_spin(self, layout, label, val, min_val, max_val, step):
         row = QHBoxLayout()
         row.addWidget(QLabel(label))
-        spin = QDoubleSpinBox()
+        spin = DecimalSpinBox()
         spin.setRange(min_val, max_val)
         spin.setSingleStep(step)
         spin.setValue(val)
