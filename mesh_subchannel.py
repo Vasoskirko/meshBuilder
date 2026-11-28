@@ -58,6 +58,7 @@ class SubchannelMeshResult:
     all_block_widths: list = field(default_factory=list)
     block_params: list = field(default_factory=list)
     intended_interfaces: tuple = ()
+    composite_interfaces: tuple = ()
 
 def _face_nodes(block, face):
     v = np.stack(block, axis=-1)
@@ -582,6 +583,8 @@ def build_mesh_from_bundle_model(bundle_model, base_params, template_overrides=N
 
 def fill_subchannel_core(layer_result, bundle_model, growth=1.1, max_size=100e-6, max_cells=5000, transition_ratio=1.0, core_mode="cfd_growth", core_layers=20, hermite_tfi=False, align_core=False, progress_callback=None, allow_nonconformal=False, core_overrides=None, _group=False):
     if layer_result.complete: return layer_result
+    if layer_result.composite_interfaces:
+        raise ValueError('Заполнение ядра с составными стыками пока не поддерживается; метаданные стыков нельзя отбрасывать.')
     if allow_nonconformal and not _group:
         from bundle_core_groups import fill_groups
         return fill_groups(layer_result,bundle_model,dict(growth=growth,max_size=max_size,max_cells=max_cells,

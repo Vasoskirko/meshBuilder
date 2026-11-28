@@ -42,6 +42,8 @@ def partition_interfaces(blocks,interfaces,tol,layer_only=False):
 
 
 def require_star_conformity(result):
+    if getattr(result,'composite_interfaces',()):
+        raise ValueError('STAR-CCM+: составные стыки проверены отдельно, но текущий экспорт ещё не поддерживает разделение граней. Экспорт заблокирован.')
     if getattr(result,'diagnostics',{}).get('interface_problems'):
         raise ValueError('STAR-CCM+: обнаружены несовместимые стыки блоков. Текущий экспорт не создаёт '
                          'неконформные интерфейсы внутри подканала. Согласуйте настройки блоков; '
