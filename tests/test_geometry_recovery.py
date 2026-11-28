@@ -82,3 +82,27 @@ class RecoveryGuiTests(unittest.TestCase):
         self.assertIn('Восстановленная',w.inspect_label.text());self.assertIn('восстановлено',w.geometry_status.text())
         with patch('bundle_subchannel_builder.QMessageBox.warning') as warning:w.switch_to_mesh_mode()
         warning.assert_called_once();self.assertEqual(w.left_stack.currentIndex(),0)
+    def test_gui_save_load_recovered_selection_then_restore_rods(self):
+        import tempfile
+        from pathlib import Path
+        from bundle_project import capture_project,save_project,load_project,geometry
+        from bundle_subchannel_builder import BundleBuilderWindow
+        w=BundleBuilderWindow();self.addCleanup(w.deleteLater)
+        w.model.active_rod_coord=(0,0);w.on_delete_rod_manually();w.handle_unified_click(0,0)
+        expected=geometry(w.model)
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'удалённый стержень.json'
+            save_project(capture_project(w),path)
+            other=BundleBuilderWindow();self.addCleanup(other.deleteLater)
+            other.apply_bundle_project(load_project(path))
+        self.assertEqual(geometry(other.model),expected)
+        self.assertFalse(other.can_export_mesh())
+        sid=next(iter(other.model.selected_subchannels))
+        self.assertEqual(other.model.subchannels[sid].sub_type,'recovered')
+        with patch('bundle_subchannel_builder.QMessageBox.warning') as warning:other.switch_to_mesh_mode()
+        warning.assert_called_once()
+        other.on_restore_deleted_rods()
+        self.assertEqual(len(other.model.rods),19)
+        self.assertFalse(other.model.selected_subchannels)
+        self.assertFalse(other.model.recovery_notes)
+        self.assertEqual(other.model.get_geometry_diagnostics().status,'ok')

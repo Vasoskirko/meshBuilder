@@ -67,6 +67,26 @@ class BundleMeshInvalidationTests(unittest.TestCase):
         self.build()
         self.exports(True)
 
+    def test_delete_restore_rods_never_revives_old_mesh_or_layer(self):
+        self.build(wall=True)
+        self.p.combo_core_mode.setCurrentIndex(self.p.combo_core_mode.findData('fixed_count'))
+        self.p.fields['core_layers'].setValue(3)
+        self.w.on_fill_core_clicked()
+        self.exports(True)
+        self.w.model.active_rod_coord=(0,0)
+        self.w.on_delete_rod_manually()
+        self.exports(False)
+        self.assertIsNone(self.w.current_layer_result)
+        self.w.on_restore_deleted_rods()
+        self.exports(False)
+        self.assertIsNone(self.w.current_layer_result)
+        sid=next(k for k,s in self.w.model.subchannels.items() if s.sub_type=='interior')
+        self.w.model.selected_subchannels={sid}
+        self.w.switch_to_mesh_mode()
+        self.build()
+        self.w.on_fill_core_clicked()
+        self.exports(True)
+
     def test_core_edit_preserves_layer_and_refill_restores_exports(self):
         self.build(wall=True)
         layer = self.w.current_layer_result
