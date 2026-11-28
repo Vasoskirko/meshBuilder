@@ -104,7 +104,10 @@ def peripheral_wall_metrics(model, sid, blocks):
     measured, never assumed, even when Hermite interpolation is enabled.
     """
     sub=model.subchannels[sid]
-    if len(blocks) not in (4,6):raise ValueError('Ожидалось четыре или шесть блоков прототипа.')
+    if len(blocks) not in (4,6,8,10):raise ValueError('Неверное число блоков прототипа.')
+    has_rod_layer=len(blocks) in (8,10)
+    has_shell_layer=len(blocks) in (6,10)
+    rod_start=len(blocks)-4 if has_rod_layer else 0
     observations={'rods':[], 'shell':[]}
     wa=np.asarray(model.hex_vertices[sub.wall_side])*1e-3
     wb=np.asarray(model.hex_vertices[(sub.wall_side+1)%6])*1e-3
@@ -114,14 +117,17 @@ def peripheral_wall_metrics(model, sid, blocks):
     if np.dot(shell_normal,np.array([rod.x,rod.y])*1e-3-wa)<0:shell_normal=-shell_normal
     for index,(x,y) in enumerate(blocks):
         nodes=np.stack((x,y),axis=-1)
-        if index<4:
-            rod=model.rods[sub.rod_ids[0 if index<2 else 1]]
+        edges=[]
+        if (not has_rod_layer and index<4) or (has_rod_layer and index>=rod_start):
+            rod_index=index-rod_start if has_rod_layer else index
+            rod=model.rods[sub.rod_ids[0 if rod_index<2 else 1]]
             radial=nodes[:,0]-np.array([rod.x,rod.y])*1e-3
             radial/=np.linalg.norm(radial,axis=1)[:,None]
             edges=[('rods',nodes[:,1]-nodes[:,0],radial)]
-            if len(blocks)==4 and index in (1,2):edges.append(('shell',nodes[:,-2]-nodes[:,-1],np.broadcast_to(shell_normal,radial.shape)))
-        else:
-            edges=[('shell',nodes[:,1]-nodes[:,0],np.broadcast_to(shell_normal,nodes[:,0].shape))]
+        if not has_shell_layer and index in (1,2):
+            edges.append(('shell',nodes[:,-2]-nodes[:,-1],np.broadcast_to(shell_normal,nodes[:,0].shape)))
+        if has_shell_layer and index in (4,5):
+            edges.append(('shell',nodes[:,1]-nodes[:,0],np.broadcast_to(shell_normal,nodes[:,0].shape)))
         for kind,edge,normal in edges:
             length=np.linalg.norm(edge,axis=1)
             projection=np.sum(edge*normal,axis=1)
@@ -134,3 +140,42 @@ def peripheral_wall_metrics(model, sid, blocks):
                       for i,name in enumerate(('edge_m','normal_m','angle_deg'))}
         result[kind]['median_angle_deg']=float(np.median(values[:,2]))
     return result
+
+
+def build_peripheral_layered_preview(model, sid, ni=17, nj=17, *, rod_thickness,
+                                     rod_cells=4, rod_growth=1.0, **core_options):
+    """Add independent circular rod layers around the four core patches.
+
+    Thickness is in metres. Core gap profiles refer to the layer front, not
+    the physical rod. Caller must split a neighbour's full profile explicitly.
+    The input model is never modified, including on a failed build.
+    """
+    from copy import deepcopy
+    if isinstance(rod_thickness,bool) or not isinstance(rod_thickness,(int,float)) or not math.isfinite(rod_thickness) or rod_thickness<=0:
+        raise ValueError('Толщина слоя стержня должна быть конечной и положительной, в метрах.')
+    if not isinstance(rod_cells,int) or isinstance(rod_cells,bool) or not 1<=rod_cells<=128:
+        raise ValueError('Требуется 1…128 ячеек слоя стержня.')
+    if isinstance(rod_growth,bool) or not isinstance(rod_growth,(int,float)) or not math.isfinite(rod_growth) or not 1<=rod_growth<=3:
+        raise ValueError('Рост слоя стержня должен быть от 1 до 3.')
+    sub=model.subchannels[sid]
+    if sub.sub_type!='peripheral' or len(sub.rod_ids)!=2:
+        raise ValueError('Слой поддерживает периферийный подканал с двумя стержнями.')
+    expanded=deepcopy(model)
+    for rid in sub.rod_ids:expanded.rods[rid].diameter+=2*rod_thickness*1e3
+    blocks=build_peripheral_preview(expanded,sid,ni,nj,**core_options)
+    widths=rod_growth**np.arange(rod_cells,dtype=float)
+    widths*=rod_thickness/widths.sum()
+    offsets=np.concatenate(([0.],np.cumsum(widths)));offsets[-1]=rod_thickness
+    for index,(x,y) in enumerate(blocks[:4]):
+        rod=model.rods[sub.rod_ids[0 if index<2 else 1]]
+        centre=np.array([rod.x,rod.y])*1e-3
+        front=np.stack((x[:,0],y[:,0]),axis=-1)
+        radial=front-centre
+        radial/=np.linalg.norm(radial,axis=1)[:,None]
+        nodes=centre+radial[:,None,:]*(rod.diameter*.5e-3+offsets)[None,:,None]
+        # Use the exact core boundary to avoid independent roundoff at the seam.
+        nodes[:,-1]=front
+        blocks.append((nodes[:,:,0],nodes[:,:,1]))
+    from mesh_subchannel import _check_quad_jacobians
+    _check_quad_jacobians(blocks)
+    return blocks
