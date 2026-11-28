@@ -59,6 +59,14 @@ class HydraulicsTableDialog(QDialog):
         btn_layout.addWidget(btn_close)
         layout.addLayout(btn_layout)
 
+        try:
+            from meshbuilder.geometry.ui import AUTO_DIAGNOSTIC_LIMIT
+            if len(model.subchannels)>AUTO_DIAGNOSTIC_LIMIT and getattr(model,'_diagnostics_cache',None) is None:
+                coverage='Проверка большой геометрии ещё не выполнена. Запустите её на основном экране; неподтверждённая сумма подканалов не является площадью всей жидкости.'
+            else:
+                report=model.get_geometry_diagnostics();coverage=report.text()
+        except ImportError:coverage='Диагностика недоступна: установите Shapely из requirements.txt.'
+        warning=QLabel(coverage);warning.setTextFormat(Qt.PlainText);warning.setWordWrap(True);s_layout.addWidget(warning)
         self.populate_data()
 
     def populate_data(self):
@@ -68,6 +76,7 @@ class HydraulicsTableDialog(QDialog):
             "instrument_sub": "С Инструментальным Каналом (ИК)",
             "peripheral": "Периферийные",
             "corner": "Угловые",
+            "recovered": "Восстановленные области",
         }
 
         all_summary = self.model.get_total_assembly_summary()
@@ -89,7 +98,7 @@ class HydraulicsTableDialog(QDialog):
                 )
 
             lines.append(
-                f"<tr style='background-color:#eaf2f8;'><td><b>ВСЯ СБОРКА ТВС (суммарно)</b></td>"
+                f"<tr style='background-color:#eaf2f8;'><td><b>ПОСТРОЕННЫЕ ПОДКАНАЛЫ (суммарно)</b></td>"
                 f"<td><b>{all_summary['total_subchannels']}</b></td>"
                 f"<td><b>{all_summary['total_a_fluid_mm2']:.2f}</b></td>"
                 f"<td><b>{all_summary['total_p_wet_mm']:.2f}</b></td>"
@@ -142,7 +151,10 @@ class HydraulicsTableDialog(QDialog):
                     "Выбран в расчет",
                 ])
                 for row in range(self.table.rowCount()):
-                    writer.writerow([self.table.item(row, col).text() for col in range(self.table.columnCount())])
+                    values=[self.table.item(row,col).text() for col in range(self.table.columnCount())]
+                    sub=self.model.subchannels[int(values[0].removeprefix('S'))]
+                    values[3:6]=[repr(float(v)) for v in (sub.a_fluid_mm2,sub.p_wet_mm,sub.d_h_mm)]
+                    writer.writerow(values)
             QMessageBox.information(self, "Экспорт завершён", f"Таблица успешно сохранена в:\n{path}")
         except Exception as exc:
             QMessageBox.warning(self, "Ошибка записи", f"Не удалось записать CSV: {exc}")

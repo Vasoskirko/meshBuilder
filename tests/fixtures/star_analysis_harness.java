@@ -60,7 +60,7 @@ class CheckAnalysis {
             };return p;
         }
     }
-    static class Parts { List<? extends NamedObject> parts;void setObjects(List<? extends NamedObject> p) { parts=p; } }
+    static class Parts { void setQuery(Object q) {} List<? extends NamedObject> parts;void setObjects(List<? extends NamedObject> p) { parts=p; } }
     static class Report extends NamedObject {
         Parts parts=new Parts(); FieldFunction field;Dimensions dims;String definition;
         Parts getParts() { return parts; } void setFieldFunction(FieldFunction f) { field=f; }

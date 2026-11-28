@@ -12,19 +12,28 @@ class CheckPhysics {
     static class MaterialPropertyMethod {}
     static class VariableWaterMethod extends MaterialPropertyMethod {}
     static class ConstantMaterialPropertyMethod extends MaterialPropertyMethod { Quantity quantity=new Quantity();Quantity getQuantity() { return quantity; } }
+    static class ConstantSpecificHeat extends MaterialPropertyMethod { Quantity quantity=new Quantity();Quantity getQuantity() { return quantity; } }
     static class MaterialProperty {
         MaterialPropertyMethod method=new ConstantMaterialPropertyMethod();int writes;
-        Quantity methodQuantity() { return ((ConstantMaterialPropertyMethod)method).quantity; }
-        void setMethod(Class<?> c) { writes++; } MaterialPropertyMethod getMethod() { return method; }
+        Quantity methodQuantity() { return method instanceof ConstantSpecificHeat ? ((ConstantSpecificHeat)method).quantity : ((ConstantMaterialPropertyMethod)method).quantity; }
+        void setMethod(Class<?> c) {
+            if(this instanceof SpecificHeatProperty && c!=ConstantSpecificHeat.class)
+                throw new IllegalArgumentException("MaterialPropertyMethod not found in SpecificHeatProperty");
+            try { method=(MaterialPropertyMethod)c.getDeclaredConstructor().newInstance();writes++; }
+            catch(Exception e) { throw new IllegalStateException(e); }
+        } MaterialPropertyMethod getMethod() { return method; }
     }
     static class ConstantDensityProperty extends MaterialProperty {}
     static class DynamicViscosityProperty extends MaterialProperty {}
-    static class SpecificHeatProperty extends MaterialProperty {}
+    static class SpecificHeatProperty extends MaterialProperty { SpecificHeatProperty() { method=new ConstantSpecificHeat(); } }
     static class ThermalConductivityProperty extends MaterialProperty {}
     static class Properties {
         Map<Class<?>,MaterialProperty> properties=new HashMap<>();
         MaterialProperty getMaterialProperty(Class<? extends MaterialProperty> c) {
-            return properties.computeIfAbsent(c,key->new MaterialProperty());
+            return properties.computeIfAbsent(c,key->{
+                try { return (MaterialProperty)key.getDeclaredConstructor().newInstance(); }
+                catch(Exception e) { throw new IllegalStateException(e); }
+            });
         }
     }
     static class Material { Properties properties=new Properties();Properties getMaterialProperties() { return properties; } }
@@ -73,8 +82,11 @@ class CheckPhysics {
     static void require(boolean b,String m) { if(!b) throw new AssertionError(m); }
     public static void main(String[] args) {
         CheckPhysics c=new CheckPhysics();Simulation s=new Simulation();
-        for(String name:List.of("rho","dynvis","Cp","lambda","P_ref","T_ref","P_init","T_init","U_init"))
+        for(String name:List.of("rho","dynvis","Cp","lambda","P_ref","T_ref","P_init","T_init","U_b"))
             s.parameters.parameters.put(name,new ScalarGlobalParameter());
+        SpecificHeatProperty cpContract=new SpecificHeatProperty();boolean rejected=false;
+        try { cpContract.setMethod(ConstantMaterialPropertyMethod.class); } catch(IllegalArgumentException expected) { rejected=true; }
+        require(rejected,"SpecificHeatProperty accepted the unsupported generic constant method");
         PhysicsContinuum physics=new PhysicsContinuum();Region region=new Region();
         require(c.configurePhysicalValues(s,physics,List.of(region),false,true),"configuration failed");
         require(region.physics==physics,"continuum not assigned");
@@ -83,14 +95,21 @@ class CheckPhysics {
         require(properties.getMaterialProperty(DynamicViscosityProperty.class).methodQuantity().definition.equals("${dynvis}"),"viscosity not linked");
         require(properties.getMaterialProperty(SpecificHeatProperty.class).methodQuantity().definition.equals("${Cp}"),"Cp not linked");
         require(properties.getMaterialProperty(ThermalConductivityProperty.class).methodQuantity().definition.equals("${lambda}"),"conductivity not linked");
+        require(properties.getMaterialProperty(SpecificHeatProperty.class).method instanceof ConstantSpecificHeat,"Cp must use ConstantSpecificHeat");
         require(physics.references.pressure.definition.equals("${P_ref}"),"absolute reference pressure");
         require(physics.initial.get(InitialPressureProfile.class).method.quantity.definition.equals("${P_init}"),"gauge initial pressure");
         require(physics.initial.get(StaticTemperatureProfile.class).method.quantity.definition.equals("${T_init}"),"initial temperature");
-        require(physics.initial.get(VelocityProfile.class).method.quantity.definition.equals("[0, 0, ${U_init}]"),"initial axial velocity");
+        require(physics.initial.get(VelocityProfile.class).method.quantity.definition.equals("[0, 0, ${U_b}]"),"initial axial velocity");
         c.initializeFirstSolution(s,false,true,true);require(s.solution.initializationCount==1,"first initialization");
         c.initializeFirstSolution(s,true,true,true);require(s.solution.initializationCount==1,"rerun reset solution");
         c.initializeFirstSolution(s,false,false,true);require(s.solution.initializationCount==1,"disabled initialization ran");
         c.initializeFirstSolution(s,false,true,false);require(s.solution.initializationCount==1,"initialized after setup failure");
+        PhysicsContinuum zero=new PhysicsContinuum();
+        require(c.configurePhysicalValues(s,zero,List.of(region),false,true,false,false,true),"zero initialization failed");
+        require(zero.initial.get(VelocityProfile.class).method.quantity.definition.equals("[0, 0, 0]"),"zero velocity must be literal, not overwrite U_b");
+        PhysicsContinuum isothermal=new PhysicsContinuum();
+        require(c.configurePhysicalValues(s,isothermal,List.of(region),false,false),"isothermal configuration failed");
+        require(isothermal.models.liquid.material.properties.getMaterialProperty(SpecificHeatProperty.class).writes==0,"isothermal setup changed Cp");
         PhysicsContinuum iapws=new PhysicsContinuum();
         Properties ip=iapws.models.liquid.material.properties;
         ip.getMaterialProperty(DynamicViscosityProperty.class).method=new VariableWaterMethod();
@@ -98,6 +117,7 @@ class CheckPhysics {
         require(c.configurePhysicalValues(s,iapws,List.of(region),true,true),"iapws initial values failed");
         require(ip.getMaterialProperty(DynamicViscosityProperty.class).writes==0,"IAPWS overwritten with constants");
         require(!c.configurePhysicalValues(s,new PhysicsContinuum(),List.of(region),true,true),"IAPWS accepted default constant transport");
+        require(ip.getMaterialProperty(SpecificHeatProperty.class).writes==0,"IAPWS EOS Cp was overwritten");
         s.parameters.parameters.remove("dynvis");
         require(!c.configurePhysicalValues(s,new PhysicsContinuum(),List.of(region),false,true),"missing dependency accepted");
         require(c.meshOnlyReport("Sub2_Volume") && c.meshOnlyReport("Quality_Min_CellQuality"),"geometry report deferred");

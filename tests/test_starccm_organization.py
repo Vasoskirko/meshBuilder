@@ -35,7 +35,7 @@ class OrganizationTests(unittest.TestCase):
     def test_static_report_monitors_are_not_created(self):
         code=self.macro()
         registry=code[code.index('    private void registerReport'):code.index('    private void createMassFlowReport')]
-        self.assertLess(registry.index('if (meshOnlyReport(report.getPresentationName())) return'),registry.index('report.createMonitor()'))
+        self.assertLess(registry.index('if (!reportNeedsMonitor(report.getPresentationName())) return'),registry.index('report.createMonitor()'))
         self.assertIn('counts[0]++',registry)
         self.assertIn('counts[1]++',registry)
         self.assertIn('"LegacyStatic"',code)

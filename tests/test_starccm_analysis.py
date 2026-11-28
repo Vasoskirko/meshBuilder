@@ -22,17 +22,18 @@ class AnalysisExportTests(unittest.TestCase):
     def macro(self, **options):
         from starccm_macro_generator import generate_starccm_java_macro
         return generate_starccm_java_macro('mesh.xyz',self.result,self.model,{}, {},options)
-    def test_controls_are_on_the_requested_six_tabs(self):
-        d=self.dialog();self.assertEqual(d.tabs.count(),6)
+    def test_controls_are_on_the_requested_eight_tabs(self):
+        d=self.dialog();self.assertEqual(d.tabs.count(),8)
         self.assertEqual(d.tabs.currentIndex(),0)
         def contained(index, control):
             self.assertIsInstance(d.tabs.widget(index), QScrollArea)
             self.assertTrue(d.tabs.widget(index).isAncestorOf(control))
         contained(0,d.chk_group_objects)
-        contained(2,d.chk_field_functions)
-        contained(2,d.chk_summary)
-        for control in (d.chk_scene,d.chk_histograms,d.chk_bad_cells,d.local_quality_text):contained(4,control)
-        for control in (*d.report_checkboxes.values(),d.mean_group):contained(5,control)
+        self.assertFalse(d.field_checkboxes['z_fraction'].isVisible())
+        contained(7,d.chk_summary)
+        for control in (d.chk_scene,d.chk_histograms,d.chk_bad_cells,d.local_quality_text):contained(5,control)
+        for control in d.report_checkboxes.values():contained(3,control)
+        contained(4,d.mean_group)
         self.assertFalse(d.mean_group.isEnabled())
         d.rb_turb_srh.setChecked(True);self.assertTrue(d.mean_group.isEnabled())
         d.rb_turb_rst.setChecked(True);self.assertFalse(d.mean_group.isEnabled())
@@ -41,7 +42,7 @@ class AnalysisExportTests(unittest.TestCase):
         for key,cb in d.field_checkboxes.items():cb.setChecked(key=='z_fraction')
         for cb in d.report_checkboxes.values():cb.setChecked(True)
         for cb in d.mean_checkboxes.values():cb.setChecked(True)
-        d.spin_mean_start.setValue(125)
+        d.mean_start_auto.setChecked(False);d.spin_mean_start.setValue(125)
         original=d.read_options()
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'profile.json';save_profile(original,path)
@@ -59,13 +60,13 @@ class AnalysisExportTests(unittest.TestCase):
         self.assertIn('min',text)
     def test_height_uses_dimensioned_parameter_and_field_selection(self):
         macro=self.macro(field_functions=['z_fraction'])
-        self.assertIn('"MB_ZFraction","${MB_Z} / ${ExportHeight}"',macro)
+        self.assertIn('"MB_ZFraction","$${Position}[2] / ${ExportHeight}"',macro)
         self.assertIn('height.getQuantity().setValueAndUnits(length,sim.getUnitsManager().getObject("m"))',macro)
         self.assertNotIn('" [m])"',macro)
         self.assertIn('Arrays.asList("z_fraction")',macro)
         self.assertNotIn('UserFieldFunction alias =',macro)
         self.assertNotIn('getOrCreateFF(sim,"MB_MassBalanceSigned"',macro)
-        self.assertIn('coordZFF.setDimensions(Dimensions.Builder().length(1).build())',macro)
+        self.assertIn('getFunction("Position").getComponentFunction(2)',macro)
         aliases=self.macro(field_functions=['quality'],create_quality_scene=False,create_quality_histograms=False,create_bad_cells=False)
         self.assertIn('UserFieldFunction alias = getOrCreateFF(sim,"MB_CellQuality"',aliases)
         self.assertNotIn('createQualityExtrema(sim, subchannelRegions',aliases)
@@ -125,7 +126,7 @@ class AnalysisExportTests(unittest.TestCase):
         d=self.dialog()
         for checkbox in d.sub_checkboxes:
             self.assertTrue(d.grp_sources.isAncestorOf(checkbox))
-            self.assertFalse(d.tabs.isAncestorOf(checkbox))
+            self.assertTrue(d.tabs.widget(2).isAncestorOf(checkbox))
         d.chk_g_n_planes.setChecked(False);self.assertFalse(d.spin_n_planes.isEnabled())
         d.chk_g_n_planes.setChecked(True);self.assertTrue(d.spin_n_planes.isEnabled())
         d.chk_sub_planes.setChecked(False);self.assertFalse(d.spin_sub_n_planes.isEnabled())
@@ -144,7 +145,7 @@ class AnalysisExportTests(unittest.TestCase):
         execute=macro[:macro.index('    private double[][] boundaryGeometry')]
         self.assertIn('cleanManagedDisplayNames(sim);',execute)
         self.assertIn('ff.setPresentationName(displayName(name))',macro)
-        self.assertIn('ff.setFunctionName(name)',macro)
-        self.assertIn('"MB_ZFraction","${MB_Z} / ${ExportHeight}"',macro)
+        self.assertIn('ff.setFunctionName(displayName(name))',macro)
+        self.assertIn('"MB_ZFraction","$${Position}[2] / ${ExportHeight}"',macro)
         self.assertNotIn('createMassFlowReport(sim, "MassFlow_In_Sub2"',execute)
         self.assertIn('createMassFlowReport(sim, "MassFlow_In_Sub1"',execute)

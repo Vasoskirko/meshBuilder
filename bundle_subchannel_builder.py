@@ -22,8 +22,8 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolb
 from matplotlib.collections import LineCollection
 from matplotlib.figure import Figure
 from matplotlib.patches import Circle, Polygon
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QBrush, QColor
+from PySide6.QtCore import Qt, QSignalBlocker
+from PySide6.QtGui import QBrush, QColor, QAction, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -60,14 +60,17 @@ from mesh_subchannel_subpanel import MeshSubpanel
 
 
 from bundle_builder_ui import BundleBuilderUiMixin
+from bundle_diagnostics_ui import BundleDiagnosticsMixin
 from bundle_mesh_jobs import BundleMeshJobsMixin, analyse_subchannel_result
 
 
-class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow):
+class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBuilderUiMixin, QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Конструктор сечения ТВС и генератор сетки подканалов (CFD)")
         self.resize(1440, 880)
+        self.project_path=None
+        self.star_export_options=None
         self.model = BundleModel(s_flat=65.0, pitch=12.75, d_fuel=9.1, d_guide=12.0, d_instrument=10.3)
 
         self._pan_start = None
@@ -80,6 +83,9 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
         self.base_params = mc.MeshParams(law="geometric", mode="first_count", h1=2.5e-6, nj=100)
         self.template_configs = {}
         self.block_custom_configs = {}
+        self._mesh_variant_a=None
+        self._mesh_diagnostic=None
+        self._selected_diagnostic=None
         self._mesh_drawn = False
         self.highlighted_block_id = None
         self.instances_lookup = {}
@@ -92,6 +98,17 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
 
         self.setStyleSheet(SCIENTIFIC_QSS)
         self.init_ui()
+        from meshbuilder.geometry.ui import install as install_geometry_diagnostics
+        install_geometry_diagnostics(self)
+        project_menu=self.menuBar().addMenu('Проект')
+        for title,shortcut,callback in (
+                ('Сохранить проект','Ctrl+S',lambda:self.on_save_json()),
+                ('Сохранить проект как…','Ctrl+Shift+S',lambda:self.on_save_json(save_as=True)),
+                ('Открыть проект…','Ctrl+O',self.on_load_json),
+                ('Экспортировать только сечение JSON…',None,self.on_export_cross_section_json)):
+            action=QAction(title,self)
+            if shortcut:action.setShortcut(QKeySequence(shortcut))
+            action.triggered.connect(callback);project_menu.addAction(action)
         self.on_rebuild_geometry(silent=True)
         for spin in self.geometry_controls():
             spin.valueChanged.connect(self.validate_mesh_inputs)
@@ -124,30 +141,40 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
     def mesh_inputs(self):
         """Snapshot build inputs, excluding selection/highlight of the editor target."""
         panel = self.mesh_subpanel
+        from bundle_local_core import wall_params,DEFAULTS
         layer = deepcopy((
             tuple(w.value() for w in self.geometry_controls()),
             (self.model.s_flat, self.model.pitch, self.model.d_fuel,
              self.model.d_guide, self.model.d_instrument),
             sorted((rid, r.x, r.y, r.diameter, r.rod_type)
                    for rid, r in self.model.rods.items()),
-            set(self.model.selected_subchannels), self.base_params,
-            self.template_configs, self.block_custom_configs,
+            set(self.model.selected_subchannels), wall_params(self.base_params),
+            [(gid,wall_params(self.block_custom_configs.get(gid,self.template_configs.get(inst.template_id,self.base_params)))) for gid,inst in sorted(self.instances_lookup.items())],
             panel.combo_center_method.currentData(),
             panel.combo_mesh_lines.currentData() if any(p.law != "wall_core" for p in [self.base_params,*self.template_configs.values(),*self.block_custom_configs.values()]) else False,
         ))
-        cmode=panel.combo_core_mode.currentData()
-        keys=('core_transition','core_layers') if cmode=='fixed_count' else (
-            'core_transition','core_growth','core_max_size','core_max_cells')
-        core=(cmode,tuple(panel.fields[k].value() for k in keys),
-              panel.combo_core_lines.currentData() if cmode=='fixed_count' else False)
+        from bundle_block_editor import core_state,pending_mixed_fields,CORE_WIDGETS
+        if not any(p.law=='wall_core' for p in [self.base_params,*self.template_configs.values(),*self.block_custom_configs.values()]):return layer,None
+        try:
+            visible=core_state(panel) if panel.current_law()=='wall_core' else None
+        except ValueError:
+            return layer,('invalid_core_draft',)
+        data=visible if panel.scope_mode=='all' and visible is not None else getattr(panel,'_global_core_state',visible)
+        if data is None:data=core_state(panel)
+        def active_core(d):
+            keys=('local_core_mode','local_core_transition','local_core_layers','local_core_hermite') if d['local_core_mode']=='fixed_count' else ('local_core_mode','local_core_transition','local_core_growth','local_core_size','local_core_limit')
+            return {k:d[k] for k in keys}
+        core=(active_core(data),[{k:active_core({n:getattr(v,n) for n in DEFAULTS}) for k,v in mapping.items() if v.local_core_mode!='inherit'} for mapping in (self.template_configs,self.block_custom_configs)]) if any(p.law=='wall_core' for p in [self.base_params,*self.template_configs.values(),*self.block_custom_configs.values()]) else None
+        if core is not None and panel.scope_mode!='all' and visible is not None and (active_core(visible)!=active_core(getattr(panel,'_display_core',visible)) or pending_mixed_fields(panel).intersection(CORE_WIDGETS[k] for k in active_core(visible) if k in CORE_WIDGETS)):
+            core=(core,'pending_local_core',active_core(visible))
         return layer, core
 
     def validate_mesh_inputs(self, *args):
         if self._layer_inputs is None and self._mesh_inputs is None:
             return
         try:
-            # Commit axial drafts even if focus/editingFinished has not fired.
-            self.mesh_subpanel.sync_global_axial(self.mesh_subpanel.read_params())
+            # Commit visible wall drafts before direct export/fill checks too.
+            self.mesh_subpanel.save_current_ui_to_active_scope()
             layer, core = self.mesh_inputs()
         except ValueError:
             layer, core = None, None
@@ -156,6 +183,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
             self._layer_inputs = None
         if self._mesh_inputs is not None and (layer, core) != self._mesh_inputs:
             self.current_mesh_result = None
+            self.clear_mesh_diagnostics()
             self.current_quality_report = None
             self._mesh_inputs = None
             panel = self.mesh_subpanel
@@ -273,6 +301,9 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
             self._pan_start = None
 
     def handle_unified_click(self, xdata, ydata):
+        if xdata is None or ydata is None or not math.isfinite(xdata) or not math.isfinite(ydata):return
+        if any(xdata*n[0]+ydata*n[1]>self.model.s_flat/2+1e-8 for n in self.model.normals):
+            self.on_deselect_rod();return
         click_pt = np.array([xdata, ydata])
 
         # 1. Проверяем попадание внутрь круглого стержня
@@ -288,41 +319,16 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
                 self.rebuild_view()
                 return
 
-        # 2. Клик по кнопкам "+" кандидатов
-        candidates = self.model.get_candidate_neighbors()
-        for c_id in candidates:
-            sub = self.model.subchannels[c_id]
-            dist = np.linalg.norm(click_pt - np.array(sub.fluid_center))
-            if dist <= self.model.pitch * 0.45:
-                self.model.add_subchannel(c_id)
-                self.update_inspector()
-                self.rebuild_view()
-                return
-
-        # 3. Клик по кнопкам "−" уже выбранных подканалов
-        for s_id in self.model.selected_subchannels:
-            sub = self.model.subchannels[s_id]
-            dist = np.linalg.norm(click_pt - np.array(sub.fluid_center))
-            if dist <= self.model.pitch * 0.45:
-                self.model.remove_subchannel(s_id)
-                self.update_inspector()
-                self.rebuild_view()
-                return
-
-        # 4. Клик по любому свободному подканалу в зазоре
-        best_id = None
-        min_d = float("inf")
-        for s_id, sub in self.model.subchannels.items():
-            dist = np.linalg.norm(click_pt - np.array(sub.fluid_center))
-            if dist < min_d and dist <= self.model.pitch * 0.65:
-                min_d = dist
-                best_id = s_id
-
-        if best_id is not None:
-            self.model.select_subchannel(best_id)
-            self.update_inspector()
-            self.rebuild_view()
+        from meshbuilder.geometry.hit_test import hit_subchannels
+        hits=hit_subchannels(self.model,xdata,ydata)
+        if len(hits)>1:
+            self.model.deselect_rod();self.update_inspector();self.rebuild_view()
+            self.inspect_label.setText('Точка принадлежит нескольким подканалам: '+', '.join('S'+str(k) for k in hits)+'. Проверьте перекрытия геометрии.')
             return
+        if hits:
+            self.model.deselect_rod()
+            self.model.select_subchannel(hits[0])
+            self.update_inspector();self.rebuild_view();return
 
         # 5. Клик по пустому пространству -> снимает выбор со стержня
         if self.model.active_rod_coord is not None:
@@ -337,15 +343,15 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
         self.rebuild_view()
 
     def on_rebuild_geometry(self, silent=False):
-        if not silent:
-            self.model.reset_custom_overrides()
-
-        self.model.s_flat = self.s_flat_spin.value()
-        self.model.pitch = self.pitch_spin.value()
-        self.model.d_fuel = self.d_fuel_spin.value()
-        self.model.d_guide = self.d_guide_spin.value()
-        self.model.d_instrument = self.d_inst_spin.value()
-        self.model.update_geometry()
+        candidate=deepcopy(self.model)
+        try:
+            if not silent:candidate.reset_custom_overrides()
+            for key,control in zip(('s_flat','pitch','d_fuel','d_guide','d_instrument'),self.geometry_controls()):
+                setattr(candidate,key,control.value())
+            candidate.update_geometry()
+        except ValueError as error:
+            QMessageBox.warning(self,'Геометрия сечения',str(error));return
+        self.model=candidate
 
         self.update_inspector()
         self.on_fit_view()
@@ -413,15 +419,18 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
             msg.exec()
 
             clicked = msg.clickedButton()
-            if clicked == btn_cancel:
+            if clicked is None or clicked == btn_cancel:
                 self.rod_type_combo.blockSignals(True)
                 self.rod_type_combo.setCurrentIndex(self.rod_type_combo.findData(rod.rod_type))
                 self.rod_type_combo.blockSignals(False)
+                self.update_inspector()
                 return
             elif clicked == btn_yes:
                 delete_clashes = True
 
-        self.model.apply_rod_change(coord, new_type, target_diam, delete_clashes=delete_clashes)
+        try:self.model.apply_rod_change(coord,new_type,target_diam,delete_clashes=delete_clashes)
+        except ValueError as error:
+            QMessageBox.warning(self,'Геометрия стержня',str(error));self.update_inspector();return
         self.update_inspector()
         self.rebuild_view()
 
@@ -455,7 +464,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
             msg.exec()
 
             clicked = msg.clickedButton()
-            if clicked == btn_cancel:
+            if clicked is None or clicked == btn_cancel:
                 self.rod_diam_spin.blockSignals(True)
                 self.rod_diam_spin.setValue(rod.diameter)
                 self.rod_diam_spin.blockSignals(False)
@@ -463,7 +472,9 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
             elif clicked == btn_yes:
                 delete_clashes = True
 
-        self.model.apply_rod_change(coord, rod.rod_type, new_val, delete_clashes=delete_clashes)
+        try:self.model.apply_rod_change(coord,rod.rod_type,new_val,delete_clashes=delete_clashes)
+        except ValueError as error:
+            QMessageBox.warning(self,'Геометрия стержня',str(error));self.update_inspector();return
         self.update_inspector()
         self.rebuild_view()
 
@@ -510,6 +521,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
                 "instrument_sub": "ИК (подканал у инструментального канала)",
                 "peripheral": "Периф (между стержнями и гранью)",
                 "corner": "Угловой (грань проходит в вершину угла)",
+                "recovered": "Восстановленная область (геометрия и гидравлика)",
             }
             rods_str = ", ".join(f"R{rid}" for rid in sub.rod_ids)
             self.inspect_label.setText(
@@ -525,6 +537,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
         self.inspect_label.setText("Кликните на подканал (+) или на стержень для настройки.")
 
     def rebuild_view(self):
+        from meshbuilder.geometry.ui import label_point,polygon_patch,refresh as refresh_geometry_diagnostics
         self.validate_mesh_inputs()
         if self._custom_limits is None and hasattr(self, "ax"):
             r_base = (self.model.s_flat / 2.0) / math.cos(math.radians(30)) * 1.08
@@ -561,6 +574,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
             "instrument_sub": "#1abc9c",
             "peripheral": "#3498db",
             "corner": "#9b59b6",
+            "recovered": "#607d8b",
         }
         edge_map = {
             "interior": "#27ae60",
@@ -568,6 +582,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
             "instrument_sub": "#16a085",
             "peripheral": "#2980b9",
             "corner": "#8e44ad",
+            "recovered": "#37474f",
         }
 
         bbox_style = dict(boxstyle="round,pad=0.25", facecolor="#ffffff", alpha=0.88, edgecolor="none")
@@ -577,9 +592,8 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
             c = color_map.get(sub.sub_type, "#2ecc71")
             ec = edge_map.get(sub.sub_type, "#27ae60")
 
-            poly = Polygon(
-                sub.polygon_points,
-                closed=True,
+            poly = polygon_patch(
+                sub,
                 facecolor=c,
                 edgecolor=ec,
                 alpha=0.45,
@@ -588,8 +602,8 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
             )
             self.ax.add_patch(poly)
             self.ax.text(
-                sub.fluid_center[0],
-                sub.fluid_center[1],
+                label_point(self.model,sub.sub_id)[0],
+                label_point(self.model,sub.sub_id)[1],
                 "−",
                 ha="center",
                 va="center",
@@ -603,9 +617,8 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
         candidates = self.model.get_candidate_neighbors()
         for sub_id in candidates:
             sub = self.model.subchannels[sub_id]
-            poly = Polygon(
-                sub.polygon_points,
-                closed=True,
+            poly = polygon_patch(
+                sub,
                 facecolor="#f1c40f",
                 edgecolor="#f39c12",
                 alpha=0.25,
@@ -615,8 +628,8 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
             )
             self.ax.add_patch(poly)
             self.ax.text(
-                sub.fluid_center[0],
-                sub.fluid_center[1],
+                label_point(self.model,sub.sub_id)[0],
+                label_point(self.model,sub.sub_id)[1],
                 "+",
                 ha="center",
                 va="center",
@@ -629,9 +642,8 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
 
         if not self.model.selected_subchannels:
             for sub in self.model.subchannels.values():
-                poly = Polygon(
-                    sub.polygon_points,
-                    closed=True,
+                poly = polygon_patch(
+                    sub,
                     facecolor="#f8f9fa",
                     edgecolor="#bdc3c7",
                     alpha=0.3,
@@ -646,10 +658,11 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
                     "instrument_sub": "ИК",
                     "peripheral": "Периф",
                     "corner": "Углов.",
+                    "recovered": "Восст.",
                 }.get(sub.sub_type, "+")
                 self.ax.text(
-                    sub.fluid_center[0],
-                    sub.fluid_center[1],
+                    label_point(self.model,sub.sub_id)[0],
+                    label_point(self.model,sub.sub_id)[1],
                     lbl,
                     ha="center",
                     va="center",
@@ -704,14 +717,16 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
                 zorder=7,
             )
 
+        report=refresh_geometry_diagnostics(self)
+        coverage_name='ВСЕЙ сборки ТВС' if report is not None and report.status=='ok' else 'построенных подканалов (полнота сборки не подтверждена)'
         all_summary = self.model.get_total_assembly_summary()
         all_text = ""
         if all_summary:
             all_text = (
-                f"<br><b>Гидравлика ВСЕЙ сборки ТВС ({all_summary['total_subchannels']} подканалов):</b><br>"
-                f"&bull; <b>Полная площадь A:</b> {all_summary['total_a_fluid_mm2']:.2f} мм²<br>"
-                f"&bull; <b>Полный периметр P:</b> {all_summary['total_p_wet_mm']:.2f} мм<br>"
-                f"&bull; <b>D_h всей ТВС:</b> <b>{all_summary['total_d_h_mm']:.2f} мм</b>"
+                f"<br><b>Гидравлика {coverage_name} ({all_summary['total_subchannels']} подканалов):</b><br>"
+                f"&bull; <b>Суммарная площадь A:</b> {all_summary['total_a_fluid_mm2']:.2f} мм²<br>"
+                f"&bull; <b>Суммарный периметр P:</b> {all_summary['total_p_wet_mm']:.2f} мм<br>"
+                f"&bull; <b>D_h:</b> <b>{all_summary['total_d_h_mm']:.2f} мм</b>"
             )
 
         num_selected = len(self.model.selected_subchannels)
@@ -747,54 +762,126 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
         dialog = HydraulicsTableDialog(self, self.model)
         dialog.exec()
 
-    def on_save_json(self):
+    def on_export_cross_section_json(self):
         name, _ = QFileDialog.getSaveFileName(self, "Сохранить конфигурацию сечения", "bundle_selection.json", "JSON (*.json)")
         if name:
             data = self.model.export_dict()
             Path(name).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
             QMessageBox.information(self, "Успех", f"Конфигурация сечения сохранена в:\n{name}")
 
+    def _project_busy(self):
+        if getattr(self,'_mesh_thread',None) is not None or getattr(self,'_export_job',None) is not None:
+            QMessageBox.warning(self,'Проект занят','Дождитесь завершения построения/экспорта или отмените операцию.')
+            return True
+        return False
+
+    def on_save_json(self, save_as=False):
+        if self._project_busy():return
+        from bundle_project import capture_project,save_project
+        try:project=capture_project(self)
+        except Exception as exc:
+            QMessageBox.warning(self,'Не удалось сохранить проект',str(exc));return
+        path=getattr(self,'project_path',None)
+        if save_as or path is None:
+            path,_=QFileDialog.getSaveFileName(self,'Сохранить полный проект конструктора',str(path or 'bundle_project.json'),'Проект meshBuilder (*.json)')
+        if not path:return
+        try:
+            save_project(project,path)
+            self.project_path=Path(path)
+            self.setWindowTitle(f'meshBuilder — {self.project_path.name}')
+            self.append_mesh_message(f'Проект сохранён: {path}')
+        except Exception as exc:
+            QMessageBox.critical(self,'Не удалось сохранить проект',str(exc))
+
     def on_load_json(self):
-        name, _ = QFileDialog.getOpenFileName(self, "Открыть конфигурацию сечения", "", "JSON (*.json)")
-        if name:
-            try:
-                data = json.loads(Path(name).read_text(encoding="utf-8"))
-                lat = data["lattice"]
-                self.s_flat_spin.setValue(lat["s_across_flats_mm"])
-                self.pitch_spin.setValue(lat["pitch_mm"])
-                self.d_fuel_spin.setValue(lat["default_d_fuel_mm"])
-                self.d_guide_spin.setValue(lat["default_d_guide_mm"])
-                self.d_inst_spin.setValue(lat.get("default_d_instrument_mm", 10.3))
+        if self._project_busy():return
+        path,_=QFileDialog.getOpenFileName(self,'Открыть проект или старый JSON сечения','','JSON (*.json)')
+        if not path:return
+        try:
+            from bundle_project import load_project
+            project=load_project(path)  # All schema/geometry checks precede GUI mutation.
+            self.apply_bundle_project(project)
+            self.project_path=None if project.legacy else Path(path)
+            self.setWindowTitle(f'meshBuilder — {Path(path).name}')
+            self.append_mesh_message(f'Открыт проект: {path}. Для экспорта перестройте сетку.')
+            if project.legacy:self.append_mesh_message('Импортирован старый JSON сечения: параметры сетки и экспорта в нём отсутствуют; установлены значения по умолчанию.')
+        except Exception as exc:
+            QMessageBox.warning(self,'Не удалось открыть проект',str(exc))
 
-                self.model.s_flat = lat["s_across_flats_mm"]
-                self.model.pitch = lat["pitch_mm"]
-                self.model.d_fuel = lat["default_d_fuel_mm"]
-                self.model.d_guide = lat["default_d_guide_mm"]
-                self.model.d_instrument = lat.get("default_d_instrument_mm", 10.3)
+    def apply_bundle_project(self, project):
+        from bundle_project import validate_project,BundleProjectError
+        from yplus_dialog import YPlusDialog
+        if getattr(self,'_mesh_thread',None) is not None or getattr(self,'_export_job',None) is not None:
+            raise BundleProjectError('Дождитесь завершения фоновой операции')
+        # Validate again for programmatic callers; corrupt files cannot partially apply.
+        project=validate_project(project.data)
+        p=self.mesh_subpanel;core=project.data['mesh']['core'];view=project.data['view']
+        widgets=[*self.geometry_controls(),*p.fields.values(),p.radio_all,p.radio_template,p.radio_block,p.combo_templates,p.combo_blocks,p.combo_core_mode,p.combo_mesh_lines,p.combo_core_lines,p.combo_center_method,p.cu,self.combo_detail]
+        blockers=[QSignalBlocker(widget) for widget in widgets]
+        p.updating=True
+        try:
+            self.model=project.model;self.base_params=project.base
+            self.template_configs=project.templates;self.block_custom_configs=project.blocks
+            self.current_mesh_result=None;self.current_layer_result=None;self.current_quality_report=None
+            self.clear_mesh_diagnostics()
+            self.clear_mesh_variant()
+            self._layer_inputs=None;self._mesh_inputs=None;self._mesh_drawn=False
+            self.highlighted_block_id=None;self.active_plot_block_idx=0
+            for widget,value in zip(self.geometry_controls(),view['geometry_inputs']):widget.setValue(value)
+            # Reset even inactive numeric drafts before changing display units.
+            for key,value in dict(z_len=project.base.z_len,ni=project.base.ni,nz=project.base.nz,
+                    layers=project.base.nj-1,h1=project.base.h1,hmax=project.base.hmax,
+                    layer_cells=project.base.wall_layers,layer_thickness=project.base.layer_thickness,
+                    layer_growth=project.base.layer_growth,growth_limit=project.base.shape if (project.base.law,project.base.mode)==('geometric','first_growth') else 1.02).items():p.fields[key].setValue(value)
+            p.apply_params(project.base)
+            p.updating=False;p.change_cell_unit(core['unit']);p.cu.setCurrentText(core['unit']);p.updating=True
+            for key in ('core_transition','core_growth','core_max_size','core_max_cells','core_layers'):p.fields[key].setValue(core[key])
+            p.combo_center_method.setCurrentIndex(p.combo_center_method.findData(core['center']))
+            p.combo_mesh_lines.setCurrentIndex(p.combo_mesh_lines.findData(core['mesh_lines']))
+            p.combo_core_mode.setCurrentIndex(p.combo_core_mode.findData(core['mode']))
+            p._fixed_core_line_index=int(core['core_lines']);p._last_core_line_mode=None
+            p.combo_core_lines.setCurrentIndex(p.combo_core_lines.findData(core['core_lines']))
+            from bundle_block_editor import core_state
+            p._global_core_state=core_state(p)
+            templates,instances=classify_subchannel_blocks(self.model,selected_sub_ids=sorted(self.model.selected_subchannels))
+            self.instances_lookup={i.global_block_id:i for i in instances}
+            p.populate_scope_and_tree(templates,instances)
+            p.combo_templates.setCurrentIndex(p.combo_templates.findData(view['template']))
+            p.combo_blocks.setCurrentIndex(p.combo_blocks.findData(view['block']))
+            p.scope_mode=view['scope'];getattr(p,'radio_'+p.scope_mode).setChecked(True)
+            p.load_active_scope_to_ui()
+            p.yplus_saved_state=deepcopy(project.data['calculator'])
+            self.star_export_options=deepcopy(project.data['export'])
+            self.combo_detail.setCurrentIndex(self.combo_detail.findData(view['detail']))
+        finally:
+            p.updating=False
+            del blockers
+        p.refresh_controls()
+        for button in (p.btn_export,p.btn_export_star,p.btn_quality,p.btn_fill_core):button.setEnabled(False)
+        self.clear_ruler();self.ax_mesh.clear();self.canvas_mesh.draw_idle()
+        self.ax_layers.clear();self.canvas_layers.draw_idle();self.table_blocks.setRowCount(0)
+        self._custom_limits=None;self.update_inspector();self.on_fit_view();self.rebuild_view()
+        self.tabs.setCurrentIndex(view['tab'])
+        self.left_stack.setCurrentIndex(1 if view['tab']>0 and self.model.selected_subchannels else 0)
+        p.current_fluid_props={};p.last_yplus_result={}
+        if p.yplus_saved_state:
+            # Recompute reference quantities from inputs, never trust serialized results.
+            summary=self.model.get_selection_summary() if self.model.selected_subchannels else self.model.get_total_assembly_summary()
+            dialog=YPlusDialog(p,d_hyd_mm=summary.get('total_d_h_mm',summary.get('total_dh_mm',14.0)),a_fluid_mm2=summary.get('total_a_fluid_mm2',100.0),state_dict=deepcopy(p.yplus_saved_state))
+            if getattr(dialog,'last_yplus_result',None):
+                p.current_fluid_props=deepcopy(getattr(dialog,'current_fluid_props',{}) or {})
+                p.last_yplus_result=deepcopy(dialog.last_yplus_result)
+            dialog.close();dialog.deleteLater()
+        if view['geometry_inputs']!=[self.model.s_flat,self.model.pitch,self.model.d_fuel,self.model.d_guide,self.model.d_instrument]:
+            self.append_mesh_message('В проекте есть неприменённые параметры геометрии. Для их применения используйте кнопку перестроения пучка; она сбрасывает ручные правки стержней.')
+        self.append_mesh_message('Параметры проекта восстановлены. Построенная сетка и результаты проверки не загружаются; требуется построение.')
 
-                self.model.user_rod_types.clear()
-                self.model.user_custom_diameters.clear()
-                self.model.user_deleted_coords = set(tuple(c) for c in data.get("user_deleted_coords", []))
-                self.model.auto_deleted_clash_coords = set()
-
-                for r_info in data.get("rods", []):
-                    coord = (r_info["q"], r_info["r"])
-                    rtype = r_info.get("type", "fuel")
-                    if rtype != "fuel":
-                        self.model.user_rod_types[coord] = rtype
-                    if r_info.get("custom_diameter"):
-                        self.model.user_custom_diameters[coord] = r_info["diameter_mm"]
-
-                self.model.update_geometry()
-                self.model.selected_subchannels = {s["subchannel_id"] for s in data.get("subchannels", [])}
-                self.update_inspector()
-                self.on_fit_view()
-                self.rebuild_view()
-                QMessageBox.information(self, "Успех", f"Конфигурация сечения загружена из:\n{name}")
-            except Exception as exc:
-                QMessageBox.warning(self, "Ошибка", f"Не удалось загрузить файл: {exc}")
 
     def switch_to_mesh_mode(self):
+        from meshbuilder.geometry.mesh_support import require_supported_mesh
+        try:require_supported_mesh(self.model,self.model.selected_subchannels)
+        except ValueError as error:
+            QMessageBox.warning(self,'Построение сетки',str(error));return
         if not self.model.selected_subchannels:
             QMessageBox.warning(self, "Предупреждение", "Сначала выберите хотя бы один подканал на сечении ТВС.")
             return
@@ -857,6 +944,8 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
                     auto_fill_core=False,
                     center_method=cm_method,
                     hermite_tfi=hermite_snapshot,
+                    progress_callback=lambda fraction,text:progress(5+int(48*fraction),text),
+                    allow_nonconformal=True,
                 )
                 rep = analyse_subchannel_result(res,progress)
                 progress(92,"Расчёт завершён")
@@ -864,6 +953,8 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
                 return res,rep
             def completed(payload):
                 res,rep=payload
+                if not self.confirm_interface_problems(res):return
+                self.clear_mesh_diagnostics()
                 self.current_mesh_result = res
                 self.accept_mesh_inputs(res)
                 self.current_quality_report = rep
@@ -895,14 +986,15 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
         if not self.model.selected_subchannels:
             return
         try:
-            self.mesh_subpanel.save_current_ui_to_active_scope()
+            from bundle_project import commit_active_inputs
+            commit_active_inputs(self)
         except ValueError as exc:
             self.validate_mesh_inputs()
             QMessageBox.warning(self, "Проверьте ввод", str(exc))
             return
         self.mesh_subpanel.update_tree_status()
         base_p = self.base_params
-        is_layer_mode = base_p.law == "wall_core"
+        is_layer_mode = any(p.law == "wall_core" for p in [base_p,*self.template_configs.values(),*self.block_custom_configs.values()])
 
         try:
             cm_method = (
@@ -914,6 +1006,8 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
             template_snapshot=deepcopy(self.template_configs)
             block_snapshot=deepcopy(self.block_custom_configs)
             hermite_snapshot=bool(self.mesh_subpanel.combo_mesh_lines.currentData())
+            from bundle_block_editor import core_build_options
+            core_options=core_build_options(self.mesh_subpanel) if is_layer_mode else None
             def compute(progress):
                 progress(5,"Расчёт геометрии и координат сетки")
                 res = ms.build_mesh_from_bundle_model(
@@ -924,19 +1018,32 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
                     auto_fill_core=False if is_layer_mode else True,
                     center_method=cm_method,
                     hermite_tfi=hermite_snapshot,
+                    progress_callback=lambda fraction,text:progress(5+int(25*fraction),text),
+                    allow_nonconformal=True,
                 )
+                layer_res=res if not res.complete else None
+                if layer_res is not None:
+                    from bundle_core_groups import fill_with_overrides
+                    progress(30,'Заполнение ядра полной сетки')
+                    res=fill_with_overrides(layer_res,model_snapshot,base_p,template_snapshot,block_snapshot,
+                        core_options,lambda fraction,text:progress(30+int(23*fraction),text))
                 rep = analyse_subchannel_result(res,progress)
                 progress(92,"Расчёт завершён")
 
-                return res,rep
+                return res,rep,layer_res
             def completed(payload):
-                res,rep=payload
+                res,rep,layer_res=payload
+                if not self.confirm_interface_problems(res):return
+                self.clear_mesh_diagnostics()
                 self.current_mesh_result = res
                 self.accept_mesh_inputs(res)
+                if layer_res is not None:
+                    self.current_layer_result=layer_res
+                    self._layer_inputs=self.mesh_inputs()[0]
                 self.current_quality_report = rep
                 self.mesh_subpanel.btn_quality.setEnabled(True)
-                self.mesh_subpanel.btn_export.setEnabled(res.complete)
-                self.mesh_subpanel.btn_export_star.setEnabled(res.complete)
+                self.mesh_subpanel.btn_export.setEnabled(res.complete and not any(i['kind']=='geometry_mismatch' for i in res.diagnostics.get('interface_problems',[])))
+                self.mesh_subpanel.btn_export_star.setEnabled(res.complete and not res.diagnostics.get('interface_problems'))
                 self.mesh_subpanel.btn_fill_core.setEnabled(self.current_layer_result is not None)
 
                 d = res.diagnostics
@@ -963,51 +1070,35 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
         if layer_src is None:
             return
         try:
-            f = self.mesh_subpanel.fields
-            growth = f["core_growth"].value()
-            maxsize = f["core_max_size"].value()
-            maxcells = f["core_max_cells"].value()
-
-            q_trans = f["core_transition"].value() if "core_transition" in f else 1.0
-            cmode = (
-                self.mesh_subpanel.combo_core_mode.currentData()
-                if hasattr(self.mesh_subpanel, "combo_core_mode")
-                else "controlled_growth"
-            )
-            clayers = f["core_layers"].value() if "core_layers" in f else 20
-            h_tfi = cmode == 'fixed_count' and bool(self.mesh_subpanel.combo_core_lines.currentData())
-            align_core = cmode == 'aspect_alignment'
+            from bundle_project import commit_active_inputs
+            commit_active_inputs(self)
+            if self.current_layer_result is not layer_src:raise ValueError('Параметры слоя изменены; перестройте пристеночный слой перед заполнением ядра')
             model_snapshot=deepcopy(self.model)
             template_snapshot=deepcopy(self.template_configs)
             block_snapshot=deepcopy(self.block_custom_configs)
+            base_snapshot=self.base_params
+            from bundle_block_editor import core_build_options
+            core_options=core_build_options(self.mesh_subpanel)
             def compute(progress):
+                from bundle_core_groups import fill_with_overrides
                 progress(5,"Расчёт геометрии и координат сетки")
-                full_res = ms.fill_subchannel_core(
-                    layer_src,
-                    model_snapshot,
-                    growth=growth,
-                    max_size=maxsize,
-                    max_cells=maxcells,
-                    transition_ratio=q_trans,
-                    core_mode=cmode,
-                    core_layers=clayers,
-                    hermite_tfi=h_tfi,
-                    align_core=align_core,
-                    progress_callback=lambda fraction,text:progress(15+int(35*fraction),text),
-                )
+                full_res=fill_with_overrides(layer_src,model_snapshot,base_snapshot,template_snapshot,
+                    block_snapshot,core_options,lambda fraction,text:progress(15+int(35*fraction),text))
                 rep = analyse_subchannel_result(full_res,progress)
                 progress(92,"Расчёт завершён")
 
                 return full_res,rep
             def completed(payload):
                 full_res,rep=payload
+                if not self.confirm_interface_problems(full_res):return
+                self.clear_mesh_diagnostics()
                 self.current_mesh_result = full_res
                 self.accept_mesh_inputs(full_res, filled=True)
                 self.mesh_subpanel.btn_quality.setEnabled(True)
                 self.current_quality_report = rep
                 self.mesh_subpanel.btn_fill_core.setEnabled(True)
-                self.mesh_subpanel.btn_export.setEnabled(True)
-                self.mesh_subpanel.btn_export_star.setEnabled(True)
+                self.mesh_subpanel.btn_export.setEnabled(not any(i['kind']=='geometry_mismatch' for i in full_res.diagnostics.get('interface_problems',[])))
+                self.mesh_subpanel.btn_export_star.setEnabled(not full_res.diagnostics.get('interface_problems'))
 
                 d = full_res.diagnostics
                 extra = ""
@@ -1248,6 +1339,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
         self.canvas_mesh.draw_idle()
 
     def redraw_mesh_views(self):
+        self.btn_mesh_diagnostic.setEnabled(self.current_mesh_result is not None)
         if self.current_mesh_result is None:
             return
         res = self.current_mesh_result
@@ -1262,8 +1354,9 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
             else 1
         )
 
-        total_points=sum(x.size for x,y in res.blocks)
+        total_points=sum(x.size for x,y in res.blocks)+self.comparison_point_count()
         render_stride=max(int(stride),int(np.ceil(np.sqrt(total_points/250000))))
+        self.draw_mesh_comparison(render_stride)
         self.combo_detail.setToolTip(f'Фактическое отображение 1:{render_stride}. Авторазрежение больших сеток влияет только на рисунок; экспорт полный.')
         for k, (bx, by) in enumerate(res.blocks):
             v = np.stack((bx * 1e3, by * 1e3), axis=-1)
@@ -1274,26 +1367,20 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
             self.ax_mesh.add_collection(LineCollection(lines, colors=c, linewidths=0.5, alpha=0.85))
 
             gid = k + 1
-            is_active = self.highlighted_block_id == gid
+            is_active = gid in self.mesh_subpanel.selected_block_ids() if self.mesh_subpanel.scope_mode=="block" else self.highlighted_block_id == gid
             is_custom = gid in self.block_custom_configs
             tid = self.get_template_for_block(gid)
             has_tmpl = tid in self.template_configs
 
-            if is_active:
-                border_col, border_lw = "red", 2.4
-            elif is_custom:
-                border_col, border_lw = "#e67e22", 2.0
-            elif has_tmpl:
-                border_col, border_lw = "#2980b9", 1.6
-            else:
-                border_col, border_lw = "black", 0.8
-
+            # Ownership/selection belongs to the block badge, not its physical
+            # boundary: otherwise rod walls look like faulty interfaces.
+            border_col, border_lw = '#555555', .7
             border = [v[0], v[-1], v[:, 0], v[:, -1]]
             self.ax_mesh.add_collection(LineCollection(border, colors=border_col, linewidths=border_lw))
 
             cx, cy = float(np.mean(bx * 1e3)), float(np.mean(by * 1e3))
             badge_lbl = f"Б{gid} ★" if is_custom else (f"Б{gid} [T{tid}]" if has_tmpl else f"Б{gid}")
-            badge_col = "#ffe0b2" if is_custom else ("#d4e6f1" if has_tmpl else "#ffffff")
+            badge_col = "#087ac1" if is_active else "#eeeeee" if is_custom else ("#d4e6f1" if has_tmpl else "#ffffff")
 
             self.ax_mesh.text(
                 cx,
@@ -1301,7 +1388,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
                 badge_lbl,
                 fontsize=7.5,
                 fontweight="bold",
-                color="#111",
+                color="white" if is_active else "#111",
                 ha="center",
                 va="center",
                 bbox=dict(boxstyle="round,pad=0.2", facecolor=badge_col, alpha=0.9, edgecolor=border_col, linewidth=0.8),
@@ -1318,8 +1405,42 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
         self.ax_mesh.set_xlabel("X (мм)")
         self.ax_mesh.set_ylabel("Y (мм)")
         self.ax_mesh.set_title(f"Сетка выбранной области: {len(res.blocks)} блоков")
+        from mesh_interface_overlay import draw_interface_overlay
+        draw_interface_overlay(self.ax_mesh,res,
+            selected=bool(self.mesh_subpanel.selected_block_ids()) if self.mesh_subpanel.scope_mode=='block' else self.highlighted_block_id is not None,
+            custom=bool(self.block_custom_configs))
+        self.draw_mesh_diagnostics()
         self.canvas_mesh.draw_idle()
         self.redraw_layer_plot_for_block(self.active_plot_block_idx)
+
+    def confirm_interface_problems(self,result):
+        issues=result.diagnostics.get('interface_problems',[])
+        if not issues:return True
+        nonconformal=sum(i['kind']=='nonconformal' for i in issues)
+        text=f'Неконформных стыков: {nonconformal}; несовпадений геометрии: {len(issues)-nonconformal}.\n'
+        for issue in issues[:12]:
+            text+=f"Б{issue['block_a']+1} {issue['face_a']} ↔ Б{issue['block_b']+1} {issue['face_b']}: {'разное разбиение' if issue['kind']=='nonconformal' else 'разная геометрия'}, узлы {issue['nodes_a']}/{issue['nodes_b']}\n"
+        if len(issues)>12:text+='Остальные стыки перечислены в отчёте качества.\n'
+        text+='Продолжить для просмотра? Проблемные стыки будут подсвечены. Текущий экспорт STAR-CCM+ для такой сетки недоступен.'
+        self.append_mesh_message(text)
+        return QMessageBox.question(self,'Проблемы стыков',text,QMessageBox.Yes|QMessageBox.No,QMessageBox.No)==QMessageBox.Yes
+
+    def on_select_mesh_block(self,event):
+        if event.inaxes is not self.ax_mesh or event.button!=1 or self.current_mesh_result is None:return
+        if self.btn_ruler.isChecked() or getattr(self.toolbar_mesh,'mode','') or getattr(self,'_mesh_diagnostic',None):return
+        from matplotlib.path import Path
+        from PySide6.QtCore import QSignalBlocker
+        for i,(x,y) in enumerate(self.current_mesh_result.blocks):
+            outline=np.column_stack((np.r_[x[0],x[1:,-1],x[-1,-2::-1],x[-2:0:-1,0]],np.r_[y[0],y[1:,-1],y[-1,-2::-1],y[-2:0:-1,0]]))*1e3
+            if Path(outline).contains_point((event.xdata,event.ydata)):
+                tree=self.mesh_subpanel.tree_blocks
+                with QSignalBlocker(tree):
+                    if 'control' not in str(event.key) and 'ctrl' not in str(event.key):tree.clearSelection()
+                    for item in tree.findItems('',Qt.MatchContains|Qt.MatchRecursive,0):
+                        if item.data(0,Qt.UserRole)==('block',i+1):item.setSelected(not item.isSelected())
+                from bundle_block_editor import selected
+                selected(self.mesh_subpanel)
+                break
 
     def highlight_mesh_block(self, global_block_id):
         self.highlighted_block_id = global_block_id
@@ -1355,6 +1476,11 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
             QMessageBox.critical(self, "Ошибка контроля качества", f"Не удалось открыть окно контроля качества:\n{exc}")
 
     def on_export_starccm_dialog(self):
+        from mesh_interface_diagnostics import require_star_conformity
+        if self.current_mesh_result is not None:
+            try:require_star_conformity(self.current_mesh_result)
+            except ValueError as exc:
+                QMessageBox.warning(self,'Экспорт недоступен',str(exc));return
         if not self.can_export_mesh():
             QMessageBox.warning(self, "Предупреждение", "Нет актуальной полной сетки. Перестройте сетку или заполните актуальный слой.")
             return
@@ -1370,6 +1496,9 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleBuilderUiMixin, QMainWindow
                 fluid_props=f_props,
                 yplus_data=yp_data,
             )
+            if self.star_export_options is not None:
+                try:dlg.apply_options(self.star_export_options)
+                except ValueError as exc:self.append_mesh_message(f'Сохранённые настройки экспорта не подходят новой сетке: {exc}. Окно открыто со значениями по умолчанию.')
             dlg.exec()
         except Exception as exc:
             QMessageBox.critical(self, "Ошибка", f"Не удалось открыть окно экспорта STAR-CCM+:\n{exc}")

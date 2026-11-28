@@ -43,7 +43,8 @@ class BundleMeshInvalidationTests(unittest.TestCase):
             self.w.base_params = replace(self.w.base_params, law='wall_core',
                 mode='layer_first_growth', wall_layers=4, h1=5e-6, layer_growth=1.1)
             self.p.apply_params(self.w.base_params)
-        self.w.on_build_multiblock_mesh()
+        if self.w.base_params.law=='wall_core':self.w.on_build_layer_only()
+        else:self.w.on_build_multiblock_mesh()
         self.critical.assert_not_called()
         self.assertIsNotNone(self.w.current_mesh_result)
 
@@ -64,6 +65,26 @@ class BundleMeshInvalidationTests(unittest.TestCase):
         self.assertIsNone(self.w.current_quality_report)
         self.exports(False)
         self.build()
+        self.exports(True)
+
+    def test_delete_restore_rods_never_revives_old_mesh_or_layer(self):
+        self.build(wall=True)
+        self.p.combo_core_mode.setCurrentIndex(self.p.combo_core_mode.findData('fixed_count'))
+        self.p.fields['core_layers'].setValue(3)
+        self.w.on_fill_core_clicked()
+        self.exports(True)
+        self.w.model.active_rod_coord=(0,0)
+        self.w.on_delete_rod_manually()
+        self.exports(False)
+        self.assertIsNone(self.w.current_layer_result)
+        self.w.on_restore_deleted_rods()
+        self.exports(False)
+        self.assertIsNone(self.w.current_layer_result)
+        sid=next(k for k,s in self.w.model.subchannels.items() if s.sub_type=='interior')
+        self.w.model.selected_subchannels={sid}
+        self.w.switch_to_mesh_mode()
+        self.build()
+        self.w.on_fill_core_clicked()
         self.exports(True)
 
     def test_core_edit_preserves_layer_and_refill_restores_exports(self):
@@ -138,7 +159,7 @@ class BundleMeshInvalidationTests(unittest.TestCase):
         self.p.on_reset_override()
         self.assertIs(self.w.current_mesh_result, result)
 
-    def test_core_controls_in_override_scope_keep_layer_without_creating_override(self):
+    def test_core_controls_in_override_scope_keep_layer_and_create_local_override(self):
         self.build(wall=True)
         layer = self.w.current_layer_result
         for radio in (self.p.radio_template, self.p.radio_block):
@@ -148,8 +169,8 @@ class BundleMeshInvalidationTests(unittest.TestCase):
             field.setText('1.2')
             field.edited.emit()
             self.assertIs(self.w.current_layer_result, layer)
-            self.assertEqual(self.w.template_configs, {})
-            self.assertEqual(self.w.block_custom_configs, {})
+            self.assertTrue(self.w.template_configs)
+        self.assertTrue(self.w.block_custom_configs)
 
     def test_numeric_wall_edit_signal_invalidates_layer(self):
         self.build(wall=True)

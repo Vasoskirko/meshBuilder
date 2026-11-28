@@ -206,7 +206,7 @@ class WorkflowGenerationTests(unittest.TestCase):
     def test_required_and_optional_field_functions(self):
         macro=self.macro(inter_fuse=True)
         self.assertIn('MB_SubchannelMask_1',macro)
-        for name in ('MB_One','MB_X','MB_Y','MB_Z','MB_ZFraction','MB_Speed','MB_MassFluxMagnitude','MB_MassBalanceSigned','MB_EnergyBalanceSigned'):
+        for name in ('MB_One','MB_ZFraction','MB_Speed','MB_MassFluxMagnitude','MB_MassBalanceSigned','MB_EnergyBalanceSigned'):
             self.assertIn(name,macro)
         self.assertIn('supportFunctions(sim,',macro)
         self.assertIn('"MB_CellQuality"',macro)

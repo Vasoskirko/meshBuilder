@@ -11,7 +11,7 @@ try:
         QSpinBox, QComboBox, QCheckBox, QPushButton, QLabel, QFileDialog,
         QMessageBox, QSplitter, QScrollArea, QPlainTextEdit, QTreeWidget,
         QTreeWidgetItem, QRadioButton, QButtonGroup, QDialog, QDoubleSpinBox,
-        QTabWidget
+        QTabWidget, QAbstractItemView
     )
     from PySide6.QtGui import QFontDatabase
     HAS_QT = True
@@ -90,7 +90,7 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         self.radio_template.toggled.connect(self.on_scope_changed)
         lay_scope_radios.addWidget(self.radio_template)
 
-        self.radio_block = QRadioButton("Для блока", self)
+        self.radio_block = QRadioButton("Для блоков", self)
         self.radio_block.toggled.connect(self.on_scope_changed)
         lay_scope_radios.addWidget(self.radio_block)
         b_scope.addLayout(lay_scope_radios)
@@ -102,6 +102,11 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         self.combo_blocks = QComboBox(self)
         self.combo_blocks.currentIndexChanged.connect(self.on_block_combo_changed)
         b_scope.addWidget(self.combo_blocks)
+        self.lbl_parameter_origin=QLabel(self)
+        self.lbl_parameter_origin.setWordWrap(True)
+        self.lbl_parameter_origin.setStyleSheet('padding: 5px; background: #edf5fc; color: #263b53;')
+        b_scope.addWidget(self.lbl_parameter_origin)
+
 
         row_reset = QHBoxLayout()
         self.btn_reset_override = QPushButton("Сбросить переопределения в «По умолчанию»", self)
@@ -117,7 +122,9 @@ class MeshSubpanel(QWidget if HAS_QT else object):
 
         self.tree_blocks = QTreeWidget(self)
         self.tree_blocks.setHeaderLabels(["Элемент сетки", "Статус назначения"])
+        self.tree_blocks.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.tree_blocks.itemClicked.connect(self.on_tree_item_clicked)
+        self.tree_blocks.itemSelectionChanged.connect(lambda: __import__('bundle_block_editor').selected(self))
         b_tree.addWidget(self.tree_blocks)
 
         layout.addWidget(grp_tree)
@@ -327,7 +334,11 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         # -------------------------------------------------------------
         # Кнопки действия и статус
         # -------------------------------------------------------------
+        self.btn_estimate_mesh=QPushButton('Оценить размер и память…',self)
+        self.btn_estimate_mesh.clicked.connect(self.parent_window.on_estimate_mesh)
+        layout.addWidget(self.btn_estimate_mesh)
         self.btn_build = QPushButton("Собрать полную 3D сетку", self)
+        self.btn_build.setToolTip("Строит всю выбранную сетку. Для независимого слоя выполняет оба этапа: пристеночный слой и ядро с общими/локальными настройками.")
         self.btn_build.setProperty("btnClass", "primary")
         self.btn_build.setMinimumHeight(32)
         self.btn_build.clicked.connect(self.parent_window.on_build_multiblock_mesh)
@@ -356,20 +367,25 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         self.lbl_status.setWordWrap(True)
         self.lbl_status.hide()  # Detailed status is displayed once, in the mesh journal.
 
+        self.law.activated.connect(self.on_field_changed)
+        self.goal.activated.connect(self.on_field_changed)
+        self.combo_core_mode.activated.connect(self.on_core_field_changed)
         layout.addStretch()
 
     def number(self, key, val, factor=1.0, minimum=0.0, maximum=1e12, onchange=None):
-        w = NumberField(val, factor, minimum, maximum)
+        from bundle_block_editor import MixedNumberField
+        w = MixedNumberField(val, factor, minimum, maximum)
         w.edited.connect(self.on_field_changed if onchange is None else onchange)
         self.fields[key] = w
         return w
 
     def integer(self, key, val, minimum=0, maximum=5000, onchange=None):
-        w = QSpinBox()
+        from bundle_block_editor import MixedSpinBox
+        w = MixedSpinBox()
         w.setRange(minimum, maximum)
         w.setValue(val)
         w.setKeyboardTracking(False)
-        w.valueChanged.connect(self.on_field_changed if onchange is None else onchange)
+        w.edited.connect(self.on_field_changed if onchange is None else onchange)
         self.fields[key] = w
         return w
 
@@ -448,6 +464,7 @@ class MeshSubpanel(QWidget if HAS_QT else object):
                 if cmode == 'fixed_count' else
                 'r — первый шаг ядра / последний шаг слоя; q — максимальный рост соседних шагов. Размер — строгий верхний предел. При несовместимых ограничениях построение остановится с пояснением.')
             self.update_core_preview()
+        self.update_parameter_origin()
         self.update_live_advisor_hint()
 
     def law_changed(self):
@@ -472,19 +489,29 @@ class MeshSubpanel(QWidget if HAS_QT else object):
     def on_core_field_changed(self):
         if self.updating:
             return
-        # Core controls are global; editing them must not create a wall override.
+        from bundle_block_editor import save_core,CORE_WIDGETS
+        sender=self.sender()
+        explicit={key for key,widget in CORE_WIDGETS.items() if self.fields[widget] is sender}
+        if sender is self.combo_core_mode:explicit.add('local_core_mode')
+        if sender is self.combo_core_lines:explicit.add('local_core_hermite')
+        try:save_core(self,explicit)
+        except ValueError as exc:
+            self.parent_window.validate_mesh_inputs()
+            self.lbl_status.setText(f'Проверьте ввод ядра: {exc}')
+            return
+        self.update_tree_status()
         self.parent_window.validate_mesh_inputs()
         self.update_core_preview()
 
     def update_core_preview(self):
         if not hasattr(self, "lbl_core_preview"): return
         try:
-            q_trans = self.fields["core_transition"].value()
-            q_core = self.fields["core_growth"].value()
-            h_target = self.fields["core_max_size"].value()
-            n_layers = self.fields["core_layers"].value()
-            max_cells = self.fields["core_max_cells"].value()
             cmode = self.combo_core_mode.currentData()
+            q_trans = self.fields["core_transition"].value()
+            q_core = self.fields["core_growth"].value() if cmode!='fixed_count' else 1.1
+            h_target = self.fields["core_max_size"].value() if cmode!='fixed_count' else .00012
+            n_layers = self.fields["core_layers"].value() if cmode=='fixed_count' else 20
+            max_cells = self.fields["core_max_cells"].value() if cmode!='fixed_count' else 5000
             if cmode == 'aspect_alignment':
                 self.lbl_core_preview.setStyleSheet('padding: 6px; background: #e8f5e9; color: #1b5e20;')
                 self.lbl_core_preview.setText('Подбирается общее число слоёв под местный поперечный шаг. Цель — пропорции около 1:1 во внешней половине ядра; пристеночный слой сохранён. Ограничения: r, q, максимальный размер и лимит слоёв. Используются прямые линии. Точный результат — после заполнения; 1:1 не гарантируется.')
@@ -586,7 +613,12 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         self.update_live_advisor_hint()
         self.update_core_preview()
         try:
-            self.save_current_ui_to_active_scope()
+            sender=self.sender()
+            mapping={'layers':'nj','layer_cells':'wall_layers','growth_limit':'shape'}
+            explicit={mapping.get(key,key) for key,widget in self.fields.items() if widget is sender}
+            if sender is self.law or sender is self.hyper_func:explicit.add('law')
+            if sender is self.goal:explicit.add('mode')
+            self.save_current_ui_to_active_scope(explicit)
         except ValueError as exc:
             self.parent_window.validate_mesh_inputs()
             self.lbl_status.setText(f"Проверьте ввод: {exc}")
@@ -691,12 +723,31 @@ class MeshSubpanel(QWidget if HAS_QT else object):
             pass
 
     def read_params(self):
+        from bundle_local_core import DEFAULTS
+        restore=[]
+        for name,value in getattr(self,'_mixed_anchors',{}).items():
+            w=self.fields[name];edit=w if hasattr(w,'model') else w.lineEdit()
+            if edit.text()=='Разные значения':
+                with QSignalBlocker(w):w.setValue(value)
+                restore.append((w,edit))
+        try:
+            p=self._read_wall_params()
+            source=getattr(self,'_loaded_params',self.parent_window.base_params)
+            return mc.replace(p,**{k:getattr(source,k) for k in DEFAULTS})
+        finally:
+            for w,edit in restore:
+                with QSignalBlocker(w):
+                    if hasattr(w,'setMixed'):w.setMixed()
+                    else:edit.setText('Разные значения')
+
+    def _read_wall_params(self):
         f = self.fields
-        if not f['nz'].hasAcceptableInput():
-            raise ValueError('nz: требуется положительное целое число осевых ячеек')
-        with QSignalBlocker(f['nz']):f['nz'].interpretText()
         law = self.current_law()
         mode = self.goal.currentData() or "first_count"
+        integers=['ni','nz']+(['layer_cells'] if law=='wall_core' else ['layers'] if mode in ('first_count','shape_count') else [])
+        for name in integers:
+            if not f[name].hasAcceptableInput():raise ValueError(f'{name}: проверьте целое число узлов/слоёв')
+            with QSignalBlocker(f[name]):f[name].interpretText()
 
         pitch_val = self.parent_window.model.pitch * 1e-3 if hasattr(self.parent_window, "model") else 0.01275
         dfuel_val = getattr(self.parent_window.model, "d_fuel", getattr(self.parent_window.model, "dfuel", 9.1)) * 1e-3 if hasattr(self.parent_window, "model") else 0.0091
@@ -769,27 +820,20 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         self.refresh_controls()
 
     def sync_global_axial(self, p):
-        # Z/nz describe one extrusion, never a template/block-local setting.
         owner=self.parent_window
-        owner.base_params=mc.replace(owner.base_params,z_len=p.z_len,nz=p.nz)
+        common=dict(z_len=p.z_len,nz=p.nz)
+        owner.base_params=mc.replace(owner.base_params,**common)
         for mapping in (owner.template_configs,owner.block_custom_configs):
             for key,value in list(mapping.items()):
-                if value.z_len != p.z_len or value.nz != p.nz:
-                    mapping[key]=mc.replace(value,z_len=p.z_len,nz=p.nz)
+                if (value.z_len,value.nz)!=(p.z_len,p.nz):mapping[key]=mc.replace(value,**common)
 
-    def save_current_ui_to_active_scope(self):
-        p = self.read_params()
-        self.sync_global_axial(p)
-        if self.scope_mode == "all":
-            self.parent_window.base_params = p
-        elif self.scope_mode == "template":
-            tid = self.combo_templates.currentData()
-            if tid is not None:
-                self.parent_window.template_configs[tid] = p
-        elif self.scope_mode == "block":
-            gid = self.combo_blocks.currentData()
-            if gid is not None:
-                self.parent_window.block_custom_configs[gid] = p
+    def selected_block_ids(self):
+        from bundle_block_editor import targets
+        return targets(self)
+
+    def save_current_ui_to_active_scope(self,explicit=()):
+        from bundle_block_editor import save
+        save(self,explicit)
 
     def load_active_scope_to_ui(self):
         if self.scope_mode == "all":
@@ -806,7 +850,14 @@ class MeshSubpanel(QWidget if HAS_QT else object):
             p = self.parent_window.base_params
 
         p=mc.replace(p,z_len=self.parent_window.base_params.z_len,nz=self.parent_window.base_params.nz)
+        self._mixed_anchors={}
+        self._loaded_params=p
         self.apply_params(p)
+        from bundle_block_editor import load_core
+        load_core(self,p)
+        self._display_params=self.read_params()
+        self.refresh_controls()
+        self.update_parameter_origin()
 
     def on_scope_changed(self):
         if self.radio_all.isChecked():
@@ -825,16 +876,22 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         if self.radio_block.isChecked():
             gid = self.combo_blocks.currentData()
             if gid is not None:
+                with QSignalBlocker(self.tree_blocks):
+                    self.tree_blocks.clearSelection()
+                    for item in self.tree_blocks.findItems('',Qt.MatchContains|Qt.MatchRecursive,0):
+                        if item.data(0,Qt.UserRole)==('block',gid):item.setSelected(True)
                 self.load_active_scope_to_ui()
                 self.parent_window.highlight_mesh_block(gid)
 
     def on_reset_override(self):
-        if self.scope_mode == "template":
+        if self.scope_mode == "all":
+            self.parent_window.template_configs.clear()
+            self.parent_window.block_custom_configs.clear()
+        elif self.scope_mode == "template":
             tid = self.combo_templates.currentData()
             self.parent_window.template_configs.pop(tid, None)
         elif self.scope_mode == "block":
-            gid = self.combo_blocks.currentData()
-            self.parent_window.block_custom_configs.pop(gid, None)
+            for gid in self.selected_block_ids():self.parent_window.block_custom_configs.pop(gid, None)
         self.load_active_scope_to_ui()
         self.parent_window.validate_mesh_inputs()
         self.update_tree_status()
@@ -876,7 +933,30 @@ class MeshSubpanel(QWidget if HAS_QT else object):
         self.update_tree_status()
         self.update_live_advisor_hint()
 
+    def update_parameter_origin(self):
+        if not hasattr(self,'lbl_parameter_origin'):return
+        owner=self.parent_window
+        if self.scope_mode=='all':text='Источник: общие параметры для блоков без переопределений.'
+        elif self.scope_mode=='template':
+            tid=self.combo_templates.currentData()
+            text=f'Шаблон T{tid}: '+('собственные параметры.' if tid in owner.template_configs else 'наследует общие параметры; редактирование создаст переопределение шаблона.')
+        else:
+            gid=self.combo_blocks.currentData();tid=owner.get_template_for_block(gid)
+            source='собственное переопределение' if gid in owner.block_custom_configs else (f'шаблон T{tid}' if tid in owner.template_configs else 'общие параметры')
+            text=f'Блок {gid}: источник — {source}. Редактирование создаёт/обновляет индивидуальное переопределение.'
+        from bundle_block_editor import mixed_description
+        self.lbl_parameter_origin.setText(text+'\nZ и nz общие. ni, нормаль и ядро можно менять локально.\nВыбор нескольких: Ctrl/Shift в дереве; Ctrl на рисунке.\n'+mixed_description(self))
+        self.fields['ni'].setEnabled(True)
+        from bundle_block_editor import show_mixed_fields
+        show_mixed_fields(self)
+        self.btn_reset_override.setText({
+            'all':'Сбросить все переопределения шаблонов и блоков',
+            'template':'Сбросить переопределение выбранного шаблона',
+            'block':'Сбросить переопределения выбранных блоков',
+        }[self.scope_mode])
+
     def update_tree_status(self):
+        self.update_parameter_origin()
         for i in range(self.tree_blocks.topLevelItemCount()):
             t_item = self.tree_blocks.topLevelItem(i)
             tid = t_item.data(0, Qt.UserRole)[1]
@@ -908,8 +988,4 @@ class MeshSubpanel(QWidget if HAS_QT else object):
             if idx >= 0:
                 self.combo_templates.setCurrentIndex(idx)
         elif kind == "block":
-            self.radio_block.setChecked(True)
-            idx = self.combo_blocks.findData(id_val)
-            if idx >= 0:
-                self.combo_blocks.setCurrentIndex(idx)
-            self.parent_window.highlight_mesh_block(id_val)
+            return  # itemSelectionChanged handles single and Ctrl/Shift selection
