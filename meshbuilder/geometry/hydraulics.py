@@ -4,6 +4,10 @@ import numpy as np
 
 def calc_hydraulics(self, sub):
     self._diagnostics_cache=None
+    if sub.sub_type=='recovered':
+        from .recovery import recovered_hydraulics
+        sub.a_poly_mm2,sub.a_fluid_mm2,sub.p_wet_mm,sub.d_h_mm=recovered_hydraulics(self,sub)
+        return
     pts = np.array(sub.polygon_points)
     n_pts = len(pts)
     a_poly = 0.5 * abs(sum(pts[i, 0] * pts[(i + 1) % n_pts, 1] -

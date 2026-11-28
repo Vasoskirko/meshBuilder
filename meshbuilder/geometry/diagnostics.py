@@ -21,6 +21,7 @@ class GeometryReport:
     overlap_subchannels: tuple
     gap_outlines: tuple
     overlap_outlines: tuple
+    recovery_notes: tuple
     label_points: tuple
 
     def __deepcopy__(self,memo):return self  # Immutable numeric/tuple report, no solver/model references.
@@ -34,6 +35,7 @@ class GeometryReport:
         if self.invalid_subchannels:lines.append('Некорректные полигоны: '+', '.join('S'+str(k) for k in self.invalid_subchannels))
         if self.hydraulic_mismatches:lines.append('Площадь гидравлики не соответствует жидкостной области: '+', '.join('S'+str(k) for k in self.hydraulic_mismatches))
         if self.overlap_subchannels:lines.append('Подканалы с перекрытиями: '+', '.join('S'+str(k) for k in self.overlap_subchannels))
+        lines.extend(self.recovery_notes)
         lines.append('Проверяется вся геометрия, не только выборка. Интервалы учитывают аппроксимацию окружностей. Это не оценка качества CFD-ячеек.')
         return '\n'.join(lines)
 
@@ -73,7 +75,7 @@ def diagnose(model,quad_segs=32,progress=None):
     ids=[];polys=[];invalid=[];mismatches=[];labels=[]
     for index,(sid,sub) in enumerate(model.subchannels.items()):
         if index%64==0:progress(20+int(45*index/max(len(model.subchannels),1)),'Проверка жидкостных областей')
-        try:poly=Polygon(sub.polygon_points)
+        try:poly=Polygon(sub.polygon_points,getattr(sub,'polygon_holes',()))
         except (ValueError,TypeError):invalid.append(sid);continue
         if not poly.is_valid or poly.area<=tol:
             invalid.append(sid);continue
@@ -109,4 +111,4 @@ def diagnose(model,quad_segs=32,progress=None):
     return GeometryReport('error' if definite else 'uncertain' if uncertain else 'ok',tol,
         float(gap_min.area),float(gap_max.area),float(overlap_min.area),float(overlap_max.area),
         tuple(sorted(collisions)),tuple(sorted(wall_collisions)),tuple(sorted(set(invalid))),tuple(sorted(mismatches)),tuple(sorted(overlap_ids)),
-        outlines(gap_max),outlines(overlap_max),tuple(labels))
+        outlines(gap_max),outlines(overlap_max),tuple(getattr(model,'recovery_notes',())),tuple(labels))

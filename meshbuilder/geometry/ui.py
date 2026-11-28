@@ -50,6 +50,7 @@ def refresh(owner):
     lines=report.text().splitlines()[:3]
     if report.collisions or report.wall_collisions or report.invalid_subchannels or report.hydraulic_mismatches:
         lines.append(f'Пересечений стержней: {len(report.collisions)}; с оболочкой: {len(report.wall_collisions)}; проблемных площадей: {len(report.hydraulic_mismatches)}; полигонов: {len(report.invalid_subchannels)}. См. подробности.')
+    if report.recovery_notes:lines.extend(report.recovery_notes)
     owner.geometry_status.setText('\n'.join(lines))
     if owner.geometry_show_problems.isChecked():
         for rings,color in ((report.gap_outlines,'#c62828'),(report.overlap_outlines,'#ef6c00')):
@@ -67,3 +68,16 @@ def label_point(model,sid):
             model._label_point_report=report;model._label_point_lookup=dict(report.label_points)
         return model._label_point_lookup.get(sid,model.subchannels[sid].fluid_center)
     except ImportError:return model.subchannels[sid].fluid_center
+
+
+def polygon_patch(sub,**style):
+    from matplotlib.patches import PathPatch,Polygon
+    from matplotlib.path import Path
+    if not getattr(sub,'polygon_holes',()):return Polygon(sub.polygon_points,closed=True,**style)
+    vertices=[];codes=[]
+    for i,ring in enumerate([sub.polygon_points,*sub.polygon_holes]):
+        points=list(ring)
+        area=sum(x*points[(j+1)%len(points)][1]-y*points[(j+1)%len(points)][0] for j,(x,y) in enumerate(points))
+        if (area>0)!=(i==0):points.reverse()
+        vertices.extend(points+[points[0]]);codes.extend([Path.MOVETO]+[Path.LINETO]*(len(points)-1)+[Path.CLOSEPOLY])
+    return PathPatch(Path(vertices,codes),**style)

@@ -521,6 +521,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
                 "instrument_sub": "ИК (подканал у инструментального канала)",
                 "peripheral": "Периф (между стержнями и гранью)",
                 "corner": "Угловой (грань проходит в вершину угла)",
+                "recovered": "Восстановленная область (геометрия и гидравлика)",
             }
             rods_str = ", ".join(f"R{rid}" for rid in sub.rod_ids)
             self.inspect_label.setText(
@@ -536,7 +537,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
         self.inspect_label.setText("Кликните на подканал (+) или на стержень для настройки.")
 
     def rebuild_view(self):
-        from meshbuilder.geometry.ui import label_point,refresh as refresh_geometry_diagnostics
+        from meshbuilder.geometry.ui import label_point,polygon_patch,refresh as refresh_geometry_diagnostics
         self.validate_mesh_inputs()
         if self._custom_limits is None and hasattr(self, "ax"):
             r_base = (self.model.s_flat / 2.0) / math.cos(math.radians(30)) * 1.08
@@ -573,6 +574,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
             "instrument_sub": "#1abc9c",
             "peripheral": "#3498db",
             "corner": "#9b59b6",
+            "recovered": "#607d8b",
         }
         edge_map = {
             "interior": "#27ae60",
@@ -580,6 +582,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
             "instrument_sub": "#16a085",
             "peripheral": "#2980b9",
             "corner": "#8e44ad",
+            "recovered": "#37474f",
         }
 
         bbox_style = dict(boxstyle="round,pad=0.25", facecolor="#ffffff", alpha=0.88, edgecolor="none")
@@ -589,9 +592,8 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
             c = color_map.get(sub.sub_type, "#2ecc71")
             ec = edge_map.get(sub.sub_type, "#27ae60")
 
-            poly = Polygon(
-                sub.polygon_points,
-                closed=True,
+            poly = polygon_patch(
+                sub,
                 facecolor=c,
                 edgecolor=ec,
                 alpha=0.45,
@@ -615,9 +617,8 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
         candidates = self.model.get_candidate_neighbors()
         for sub_id in candidates:
             sub = self.model.subchannels[sub_id]
-            poly = Polygon(
-                sub.polygon_points,
-                closed=True,
+            poly = polygon_patch(
+                sub,
                 facecolor="#f1c40f",
                 edgecolor="#f39c12",
                 alpha=0.25,
@@ -641,9 +642,8 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
 
         if not self.model.selected_subchannels:
             for sub in self.model.subchannels.values():
-                poly = Polygon(
-                    sub.polygon_points,
-                    closed=True,
+                poly = polygon_patch(
+                    sub,
                     facecolor="#f8f9fa",
                     edgecolor="#bdc3c7",
                     alpha=0.3,
@@ -658,6 +658,7 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
                     "instrument_sub": "ИК",
                     "peripheral": "Периф",
                     "corner": "Углов.",
+                    "recovered": "Восст.",
                 }.get(sub.sub_type, "+")
                 self.ax.text(
                     label_point(self.model,sub.sub_id)[0],
@@ -877,6 +878,10 @@ class BundleBuilderWindow(BundleMeshJobsMixin, BundleDiagnosticsMixin, BundleBui
 
 
     def switch_to_mesh_mode(self):
+        from meshbuilder.geometry.mesh_support import require_supported_mesh
+        try:require_supported_mesh(self.model,self.model.selected_subchannels)
+        except ValueError as error:
+            QMessageBox.warning(self,'Построение сетки',str(error));return
         if not self.model.selected_subchannels:
             QMessageBox.warning(self, "Предупреждение", "Сначала выберите хотя бы один подканал на сечении ТВС.")
             return

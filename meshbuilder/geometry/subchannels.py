@@ -6,6 +6,7 @@ from .types import Subchannel
 
 def generate_subchannels(self):
     self._diagnostics_cache=None
+    self.recovery_notes=()
     self.subchannels.clear()
     sub_counter = 0
 
@@ -207,3 +208,9 @@ def generate_subchannels(self):
     for ids in list(edge_index.values())+list(corner_index.values()):
         for a,b in combinations(ids,2):neighbors[a].add(b);neighbors[b].add(a)
     for sid,sub in self.subchannels.items():sub.neighbor_sub_ids=sorted(neighbors[sid])
+
+    if self.user_deleted_coords:
+        try:
+            from .recovery import recover_deleted_regions
+            recover_deleted_regions(self)
+        except ImportError:self.recovery_notes=('Для восстановления жидкости после удаления стержней установите Shapely.',)

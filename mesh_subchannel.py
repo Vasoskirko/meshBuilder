@@ -417,6 +417,8 @@ def build_mesh_from_bundle_model(bundle_model, base_params, template_overrides=N
     if block_custom_overrides is None: block_custom_overrides = {}
 
     sub_ids = sorted(bundle_model.selected_subchannels) if selected_sub_ids is None else list(selected_sub_ids)
+    from meshbuilder.geometry.mesh_support import require_supported_mesh
+    require_supported_mesh(bundle_model,sub_ids)
     templates, instances = classify_subchannel_blocks(bundle_model, selected_sub_ids=sub_ids)
     inst_lookup = {(inst.subchannel_id, inst.block_index): inst for inst in instances}
 

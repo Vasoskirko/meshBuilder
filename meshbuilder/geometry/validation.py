@@ -22,4 +22,8 @@ def validate_geometry(model):
 
 
 def sub_signature(model,sub):
-    return (tuple(sorted((model.rods[r].q,model.rods[r].r) for r in sub.rod_ids)),sub.wall_side,sub.corner_index)
+    base=(tuple(sorted((model.rods[r].q,model.rods[r].r) for r in sub.rod_ids)),sub.wall_side,sub.corner_index)
+    if sub.sub_type=='recovered':
+        rings=[sub.polygon_points]+sub.polygon_holes
+        return base+('recovered',tuple(sorted(tuple(sorted((round(x,10),round(y,10)) for x,y in ring)) for ring in rings)))
+    return base

@@ -14,7 +14,9 @@ class GeometryDiagnosticsTests(unittest.TestCase):
         for size in (40.,65.,80.,100.):
             m=BundleModel(s_flat=size);r=m.get_geometry_diagnostics();self.assertEqual(r.status,'ok',r.text())
             self.assertLess(r.gap_upper,r.tolerance);self.assertLess(r.overlap_upper,r.tolerance)
-        m=BundleModel();m.active_rod_coord=(0,0);m.delete_active_rod_manually();r=m.get_geometry_diagnostics()
+        m=BundleModel();m.active_rod_coord=(0,0)
+        with patch('meshbuilder.geometry.recovery.recover_deleted_regions'):m.delete_active_rod_manually()
+        r=m.get_geometry_diagnostics()
         self.assertEqual(r.status,'error');self.assertGreater(r.gap_lower,290);self.assertLess(r.gap_lower,r.gap_upper)
         self.assertTrue(r.gap_outlines)
     def test_gap_and_overlap_do_not_cancel(self):
@@ -39,9 +41,11 @@ class GeometryDiagnosticsTests(unittest.TestCase):
     def test_every_valid_label_point_picks_its_own_region(self):
         m=BundleModel()
         for sid,(x,y) in m.get_geometry_diagnostics().label_points:self.assertEqual(hit_subchannels(m,x,y),(sid,))
-        m.active_rod_coord=(0,0);m.delete_active_rod_manually();self.assertEqual(hit_subchannels(m,0,0),())
+        m.active_rod_coord=(0,0);m.delete_active_rod_manually();hits=hit_subchannels(m,0,0)
+        self.assertEqual(len(hits),1);self.assertEqual(m.subchannels[hits[0]].sub_type,'recovered')
     def test_circle_bounds_tighten_and_cover_physical_gap(self):
-        m=BundleModel();m.active_rod_coord=(0,0);m.delete_active_rod_manually()
+        m=BundleModel();m.active_rod_coord=(0,0)
+        with patch('meshbuilder.geometry.recovery.recover_deleted_regions'):m.delete_active_rod_manually()
         coarse=diagnose(m,8);fine=diagnose(m,64)
         self.assertLessEqual(coarse.gap_lower,fine.gap_lower+1e-8);self.assertGreaterEqual(coarse.gap_upper,fine.gap_upper-1e-8)
         self.assertLess(fine.gap_upper-fine.gap_lower,coarse.gap_upper-coarse.gap_lower)
@@ -61,7 +65,8 @@ class GeometryDiagnosticsGuiTests(unittest.TestCase):
         from bundle_subchannel_builder import BundleBuilderWindow
         w=BundleBuilderWindow();self.addCleanup(w.close);self.addCleanup(w.deleteLater);return w
     def test_missing_coverage_is_visible_and_pick_does_not_jump_across_gap(self):
-        w=self.window();w.model.active_rod_coord=(0,0);w.on_delete_rod_manually()
+        w=self.window();w.model.active_rod_coord=(0,0)
+        with patch('meshbuilder.geometry.recovery.recover_deleted_regions'):w.on_delete_rod_manually()
         self.assertIn('Есть проблемы',w.geometry_status.text());self.assertIn('не подтверждена',w.summary_text.text())
         w.geometry_show_problems.setChecked(True);self.assertTrue(w.ax.lines)
         w.handle_unified_click(0,0);self.assertFalse(w.model.selected_subchannels)

@@ -76,6 +76,7 @@ class HydraulicsTableDialog(QDialog):
             "instrument_sub": "С Инструментальным Каналом (ИК)",
             "peripheral": "Периферийные",
             "corner": "Угловые",
+            "recovered": "Восстановленные области",
         }
 
         all_summary = self.model.get_total_assembly_summary()

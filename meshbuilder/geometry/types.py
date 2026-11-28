@@ -31,3 +31,5 @@ class Subchannel:
     a_fluid_mm2: float = 0.0
     p_wet_mm: float = 0.0
     d_h_mm: float = 0.0
+
+    polygon_holes: list = field(default_factory=list)
